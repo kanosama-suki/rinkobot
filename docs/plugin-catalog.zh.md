@@ -2,7 +2,7 @@
 
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/banner-zh.png)](https://awesome-dsh-plugin.com/zh/)
 
-[English](README.md) | 中文
+[English](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/README.md) | 中文
 
 > [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）插件精选列表。
 
@@ -39,7 +39,7 @@ dsh plugin --profile web add dshmarket
 
 标准就这些。**本列表不给插件排名，也不评判优劣，我们也无意这么做。** 很多优秀的软件永远不会出现在这里，而出现在这里也仅说明它符合上述规则，不说明别的。这些规则只为一件事存在：让你挑中的插件能装上，并且确实做描述里写的那件事。
 
-收录也不是永久的：仓库消失、停止维护、或被发现有明显缺陷的条目会被移除。完整标准与评审清单见[收录如何评审](contributing.md#how-submissions-are-reviewed--收录如何评审)。
+收录也不是永久的：仓库消失、停止维护、或被发现有明显缺陷的条目会被移除。完整标准与评审清单见[收录如何评审](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md#how-submissions-are-reviewed--收录如何评审)。
 
 </details>
 
@@ -8825,7 +8825,7 @@ description:
 
 主题/皮肤类插件：放进**主题与外观**分类，会自动出现在 [dsh-market](https://github.com/dsh-market/dsh-market) 插件市场的**主题 Tab**，用户可一键安装、切换。
 
-完整规则、示例与截图格式见[贡献指南](contributing.md)。
+完整规则、示例与截图格式见[贡献指南](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md)。
 
 ## 徽章
 
