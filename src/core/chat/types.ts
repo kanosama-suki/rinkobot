@@ -12,6 +12,7 @@ import type {
   ModelCallPurpose,
 } from '../storage/index.ts'
 import type { MemoryExtractionSummary } from '../memory/index.ts'
+import type { StyleCheckResult } from './style.ts'
 
 export const CHAT_CONVERSATION_ID = 'main'
 export const CHAT_HISTORY_LIMIT = 40
@@ -125,6 +126,7 @@ export type ChatStreamEvent =
       modelCall: ModelCallView
       modelUsage: ChatModelUsageView
       memory: MemoryExtractionSummary | null
+      styleCheck: StyleCheckResult
     }
 
 export class ChatInputError extends Error {

@@ -144,6 +144,17 @@ h2 {
   white-space: nowrap;
 }
 
+.control-badge.control-running {
+  color: #3f6a4a;
+  border-color: color-mix(in srgb, #3f6a4a 34%, transparent);
+}
+
+.control-badge.control-stopped {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 42%, transparent);
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface-strong));
+}
+
 .quiet-link {
   color: var(--muted);
   text-decoration: none;
@@ -333,7 +344,7 @@ h2 {
 
 .panel-tabs {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 6px;
   padding: 5px;
   border: 1px solid var(--line);
@@ -383,6 +394,11 @@ h2 {
 }
 
 .memory-panel {
+  flex: 1;
+  overflow: hidden;
+}
+
+.audit-panel {
   flex: 1;
   overflow: hidden;
 }
@@ -604,6 +620,101 @@ h2 {
   border-top: 1px solid var(--line);
   color: var(--muted);
   font-size: 0.7rem;
+}
+
+.style-outcome {
+  margin: 6px 0 0;
+  color: #9a6a1e;
+  font-size: 0.7rem;
+}
+
+.control-card {
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--line));
+}
+
+.control-state {
+  margin: 14px 0 4px;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.control-note {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
+
+.danger-button {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 48%, transparent);
+  border-radius: 11px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.danger-button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.danger-button--resume {
+  color: #3f6a4a;
+  border-color: color-mix(in srgb, #3f6a4a 40%, transparent);
+  background: color-mix(in srgb, #3f6a4a 7%, transparent);
+}
+
+.audit-list {
+  min-height: 0;
+  margin-top: 14px;
+  padding-right: 4px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.audit-item {
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+}
+
+.audit-action {
+  margin: 0;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.audit-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.chip.audit-succeeded {
+  color: #3f6a4a;
+  border-color: color-mix(in srgb, #3f6a4a 35%, transparent);
+}
+
+.chip.audit-failed {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+.audit-target {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 0.67rem;
+  overflow-wrap: anywhere;
 }
 
 .memory-dialog {

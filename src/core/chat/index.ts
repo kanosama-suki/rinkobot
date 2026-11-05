@@ -7,6 +7,13 @@ export type { MagpieChatModelOptions } from './magpie-model.ts'
 export { MockChatModel, MOCK_MODEL_ID } from './mock-model.ts'
 export { KanobotChatService } from './service.ts'
 export type { ChatServiceOptions } from './service.ts'
+export { checkReplyStyle } from './style.ts'
+export type {
+  StyleCheckOptions,
+  StyleCheckResult,
+  StyleViolation,
+  StyleViolationCode,
+} from './style.ts'
 export {
   CHAT_CONVERSATION_ID,
   CHAT_HISTORY_LIMIT,

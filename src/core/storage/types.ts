@@ -131,6 +131,68 @@ export interface FinishModelCallInput {
   errorCode?: string | null
 }
 
+export interface ReplyStyleCheckRecord {
+  id: string
+  assistantMessageId: string
+  schemaVersion: 1
+  ok: boolean
+  violationCodes: string[]
+  checkedAt: string
+}
+
+export interface PutReplyStyleCheckInput {
+  assistantMessageId: string
+  ok: boolean
+  violationCodes: string[]
+  checkedAt?: string
+  id?: string
+}
+
+export type OwnerAuditAction =
+  | 'memory.create'
+  | 'memory.correct'
+  | 'memory.promote'
+  | 'memory.trash'
+  | 'memory.restore'
+  | 'memory.purge'
+  | 'emergency.stop'
+  | 'emergency.resume'
+
+export type OwnerAuditTargetType = 'memory' | 'system'
+export type OwnerAuditOutcome = 'succeeded' | 'failed'
+
+export interface OwnerAuditRecord {
+  id: string
+  occurredAt: string
+  action: OwnerAuditAction
+  targetType: OwnerAuditTargetType
+  targetId: string
+  outcome: OwnerAuditOutcome
+  detailCode: string | null
+}
+
+export interface RecordOwnerAuditInput {
+  action: OwnerAuditAction
+  targetType: OwnerAuditTargetType
+  targetId: string
+  outcome?: OwnerAuditOutcome
+  detailCode?: string | null
+  occurredAt?: string
+  id?: string
+}
+
+export interface EmergencyStateRecord {
+  stopped: boolean
+  updatedAt: string
+  reasonCode: string
+}
+
+export interface SetEmergencyStateInput {
+  stopped: boolean
+  reasonCode: string
+  updatedAt?: string
+}
+
 export type OutboxStatus = 'pending' | 'delivered' | 'failed' | 'cancelled'
 
 export interface OutboxRecord {

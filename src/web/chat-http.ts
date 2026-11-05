@@ -21,7 +21,12 @@ import {
   MemoryInputError,
   type KanobotMemoryService,
 } from '../core/memory/index.ts'
-import { StorageError } from '../core/storage/index.ts'
+import type { OwnerAuditService } from '../core/observability/index.ts'
+import type { KanobotEmergencyService } from '../core/policy/index.ts'
+import {
+  StorageError,
+  type OwnerAuditAction,
+} from '../core/storage/index.ts'
 
 export const CHAT_BASE_PATH = '/kanobot'
 
@@ -75,6 +80,8 @@ export interface ChatSurfaceOptions {
   connection: ChatConnection
   chat: KanobotChatService
   memory?: KanobotMemoryService
+  audit?: OwnerAuditService
+  emergency?: KanobotEmergencyService
   logger: ChatLogger
 }
 
@@ -201,6 +208,24 @@ async function handleRequest(
     return
   }
 
+  if (pathname === `${CHAT_BASE_PATH}/api/control`) {
+    await handleControlRequest(req, res, options)
+    return
+  }
+
+  if (
+    pathname === `${CHAT_BASE_PATH}/api/emergency/stop` ||
+    pathname === `${CHAT_BASE_PATH}/api/emergency/resume`
+  ) {
+    await handleEmergencyRequest(req, res, url, options)
+    return
+  }
+
+  if (pathname === `${CHAT_BASE_PATH}/api/audit`) {
+    await handleAuditRequest(req, res, url, options)
+    return
+  }
+
   writeError(res, 404, 'not_found', '接口不存在', api)
 }
 
@@ -227,7 +252,7 @@ async function handleMemoryRequest(
   const relative = url.pathname.slice(`${CHAT_BASE_PATH}/api/memories`.length)
   try {
     if (relative === '') {
-      await handleMemoryCollection(req, res, url, memory)
+      await handleMemoryCollection(req, res, url, memory, options)
       return
     }
     const parts = relative.split('/').filter(Boolean)
@@ -242,10 +267,10 @@ async function handleMemoryRequest(
     }
 
     if (parts.length === 1) {
-      await handleMemoryItem(req, res, memory, id)
+      await handleMemoryItem(req, res, memory, id, options)
       return
     }
-    await handleMemoryAction(req, res, memory, id, parts[1] ?? '')
+    await handleMemoryAction(req, res, memory, id, parts[1] ?? '', options)
   } catch (error) {
     handleMemoryError(res, options.logger, error)
   }
@@ -256,6 +281,7 @@ async function handleMemoryCollection(
   res: ServerResponse,
   url: URL,
   memory: KanobotMemoryService,
+  options: ChatSurfaceOptions,
 ): Promise<void> {
   if (req.method === 'GET') {
     const status = parseMemoryStatus(url.searchParams.get('status'))
@@ -295,6 +321,7 @@ async function handleMemoryCollection(
       importance: input.importance,
       sensitivity: input.sensitivity,
     })
+    recordOwnerAudit(options, 'memory.create', record.id)
     writeJson(res, 201, { memory: memory.view(record) })
     return
   }
@@ -307,6 +334,7 @@ async function handleMemoryItem(
   res: ServerResponse,
   memory: KanobotMemoryService,
   id: string,
+  options: ChatSurfaceOptions,
 ): Promise<void> {
   if (req.method === 'GET') {
     const view = memory.getView(id)
@@ -328,12 +356,14 @@ async function handleMemoryItem(
       importance: input.importance,
       sensitivity: input.sensitivity,
     })
+    recordOwnerAudit(options, 'memory.correct', record.id)
     writeJson(res, 200, { memory: memory.view(record) })
     return
   }
 
   if (req.method === 'DELETE') {
     const record = memory.trash(id)
+    recordOwnerAudit(options, 'memory.trash', id)
     writeJson(res, 200, { memory: memory.view(record) })
     return
   }
@@ -347,6 +377,7 @@ async function handleMemoryAction(
   memory: KanobotMemoryService,
   id: string,
   action: string,
+  options: ChatSurfaceOptions,
 ): Promise<void> {
   if (req.method !== 'POST') {
     writeMethodNotAllowed(res, ['POST'], true)
@@ -355,6 +386,7 @@ async function handleMemoryAction(
 
   if (action === 'promote') {
     const record = memory.promote(id)
+    recordOwnerAudit(options, 'memory.promote', id)
     writeJson(res, 200, {
       memory: memory.view(record),
       counts: memoryCounts(memory),
@@ -363,6 +395,7 @@ async function handleMemoryAction(
   }
   if (action === 'restore') {
     const record = memory.restore(id)
+    recordOwnerAudit(options, 'memory.restore', id)
     writeJson(res, 200, {
       memory: memory.view(record),
       counts: memoryCounts(memory),
@@ -388,6 +421,7 @@ async function handleMemoryAction(
       return
     }
     memory.purge(id)
+    recordOwnerAudit(options, 'memory.purge', id)
     writeJson(res, 200, { purged: true, id, counts: memoryCounts(memory) })
     return
   }
@@ -499,6 +533,107 @@ function handleMemoryError(
   }
   logger.error?.(`[kanobot] memory request failed: ${formatError(error)}`)
   writeError(res, 500, 'internal_error', '服务器内部错误', true)
+}
+
+async function handleControlRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options: ChatSurfaceOptions,
+): Promise<void> {
+  if (req.method !== 'GET') {
+    writeMethodNotAllowed(res, ['GET'], true)
+    return
+  }
+  if (options.emergency === undefined) {
+    writeError(res, 404, 'not_found', '控制接口未启用', true)
+    return
+  }
+  writeJson(res, 200, {
+    emergency: options.emergency.status(),
+  })
+}
+
+async function handleEmergencyRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  options: ChatSurfaceOptions,
+): Promise<void> {
+  if (req.method !== 'POST') {
+    writeMethodNotAllowed(res, ['POST'], true)
+    return
+  }
+  if (options.emergency === undefined) {
+    writeError(res, 404, 'not_found', '紧急停止接口未启用', true)
+    return
+  }
+  const body = await readJsonBody(req)
+  requireConfirmation(body)
+
+  const stopping = url.pathname.endsWith('/stop')
+  const emergency = stopping
+    ? options.emergency.stop('owner_stop')
+    : options.emergency.resume()
+  recordOwnerAudit(
+    options,
+    stopping ? 'emergency.stop' : 'emergency.resume',
+    'system',
+    'system',
+  )
+  writeJson(res, 200, { emergency })
+}
+
+async function handleAuditRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  options: ChatSurfaceOptions,
+): Promise<void> {
+  if (req.method !== 'GET') {
+    writeMethodNotAllowed(res, ['GET'], true)
+    return
+  }
+  if (options.audit === undefined) {
+    writeError(res, 404, 'not_found', '审计接口未启用', true)
+    return
+  }
+  const limit = parseAuditLimit(url.searchParams.get('limit'))
+  if (limit === null) {
+    writeError(res, 400, 'invalid_limit', 'limit 必须是 1 到 200 的整数', true)
+    return
+  }
+  writeJson(res, 200, {
+    events: options.audit.list(limit),
+  })
+}
+
+function recordOwnerAudit(
+  options: ChatSurfaceOptions,
+  action: OwnerAuditAction,
+  targetId: string,
+  targetType: 'memory' | 'system' = 'memory',
+): void {
+  options.audit?.record({
+    action,
+    targetType,
+    targetId,
+  })
+}
+
+function requireConfirmation(value: unknown): void {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.keys(value).length !== 1 ||
+    (value as Record<string, unknown>).confirm !== true
+  ) {
+    throw new RequestError(
+      400,
+      'confirmation_required',
+      '这次操作需要 { "confirm": true }',
+    )
+  }
 }
 
 async function handleChatStream(
@@ -697,6 +832,13 @@ function parseLimit(raw: string | null): number | undefined | null {
   if (!/^\d+$/.test(raw)) return null
   const value = Number(raw)
   return Number.isInteger(value) && value >= 1 && value <= MAX_LIMIT ? value : null
+}
+
+function parseAuditLimit(raw: string | null): number | undefined | null {
+  if (raw === null) return undefined
+  if (!/^\d+$/.test(raw)) return null
+  const value = Number(raw)
+  return Number.isInteger(value) && value >= 1 && value <= 200 ? value : null
 }
 
 function loadAssets(): UiAssets {

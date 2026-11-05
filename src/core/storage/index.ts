@@ -28,6 +28,7 @@ export {
 } from './errors.ts'
 export {
   createStorageOptions,
+  resolveDataPath,
   resolveStorageLayout,
 } from './paths.ts'
 export {
@@ -50,6 +51,7 @@ export type {
   ChatMessageRecord,
   ChatRole,
   ConversationRecord,
+  EmergencyStateRecord,
   FinishModelCallInput,
   MemoryListOptions,
   MemorySearchOptions,
@@ -61,8 +63,16 @@ export type {
   ModelUsageRecord,
   OutboxRecord,
   OutboxStatus,
+  OwnerAuditAction,
+  OwnerAuditOutcome,
+  OwnerAuditRecord,
+  OwnerAuditTargetType,
   PurgeResult,
   PurgeTarget,
+  PutReplyStyleCheckInput,
+  RecordOwnerAuditInput,
+  ReplyStyleCheckRecord,
+  SetEmergencyStateInput,
   SnapshotResult,
   StorageOptions,
 } from './types.ts'

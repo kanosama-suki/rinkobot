@@ -1,6 +1,6 @@
 # 项目文件结构
 
-以下路径相对于项目根目录 `a/`。当前仓库处于 M3.3 记忆闭环完成、完整 M3 进行中的状态：已有 DSH Host 插件、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、复用 DSH 登录态的网页聊天和 SSE、连接本地 Magpie 的精确模型网关和调用审计、长期记忆候选规则、纠正和 FTS5 双列中文检索，以及聊天前记忆召回注入、聊天后结构化记忆抽取和所有者记忆面板；Gemini 视觉、单一 JSON 信封输出、风格/场景测试和主动消息仍不存在。本文中的“目标结构”是后续实现的约束，不是已经存在的目录。
+以下路径相对于项目根目录 `a/`。当前仓库处于 M3.4 风格检查、场景规格、所有者审计和紧急停止完成、完整 M3 进行中的状态：已有 DSH Host 插件、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、复用 DSH 登录态的网页聊天和 SSE、连接本地 Magpie 的精确模型网关和调用审计、长期记忆候选规则、纠正和 FTS5 双列中文检索、聊天前记忆召回注入、聊天后结构化记忆抽取、所有者记忆面板、确定性回复风格检查、所有者操作审计和紧急停止；Gemini 视觉、单一 JSON 信封输出、真实模型场景比较和主动消息仍不存在。本文中的“目标结构”是后续实现的约束，不是已经存在的目录。
 
 ## 1. 当前结构
 
@@ -41,6 +41,7 @@ kanobot/a/
 │   │   │   ├── index.ts              聊天领域公开导出
 │   │   │   ├── types.ts              模型、SSE 事件和会话视图契约
 │   │   │   ├── service.ts            校验、持久化、模型流和互动事件
+│   │   │   ├── style.ts              确定性回复风格检查和违规代码
 │   │   │   ├── mock-model.ts         不联网的明确占位模型
 │   │   │   └── magpie-model.ts       Magpie OpenAI-compatible 流式网关
 │   │   ├── memory/
@@ -55,6 +56,12 @@ kanobot/a/
 │   │   │   ├── canonical.ts          确定性 JSON 和哈希
 │   │   │   ├── clock.ts              唯一真实时钟接口
 │   │   │   └── index.ts              状态模块公开导出
+│   │   ├── observability/
+│   │   │   ├── index.ts              可观测性模块公开导出
+│   │   │   └── owner-audit.ts        所有者操作审计的时间来源和接口
+│   │   ├── policy/
+│   │   │   ├── index.ts              策略模块公开导出
+│   │   │   └── emergency.ts          紧急停止数据库状态和 STOP 文件
 │   │   └── storage/
 │   │       ├── database.ts           打开、完整性、迁移和表 schema
 │   │       ├── store.ts              事务、回放、独立墓碑级联、清除、回收站和恢复
@@ -76,6 +83,7 @@ kanobot/a/
 ├── tests/
 │   ├── unit/                         配置和纯 reducer
 │   ├── integration/                  插件、聊天/SSE、记忆抽取/面板、存储、清除、备份、强杀和 fail-closed
+│   ├── scenarios/                    人格场景规格和脚本化管线验证
 │   ├── replay/                       同一事件流快照逐字节一致性
 │   ├── fixtures/                     崩溃写入子进程等测试夹具
 │   └── helpers/                      临时目录和固定事件工厂
@@ -88,6 +96,7 @@ kanobot/a/
     ├── m3.1-acceptance.md            M3.1 Magpie 网关、调用审计和资源熔断验收
     ├── m3.2-acceptance.md            M3.2 长期记忆、纠正和 FTS5 检索验收
     ├── m3.3-acceptance.md            M3.3 记忆召回、抽取和面板验收
+    ├── m3.4-acceptance.md            M3.4 风格检查、所有者审计和紧急停止验收
     ├── plugin-research.md            第三方插件源码调研与取舍
     ├── plugin-catalog.zh.md          第三方 DSH 插件汇总表（只读参考）
     ├── mods.md                       第三方插件与改动的记录模板
@@ -109,6 +118,7 @@ kanobot/a/
 - `docs/m3.1-acceptance.md` 记录 M3.1 的 Magpie 精确模型、流式解析、超时/重试、schema v3 调用审计、资源熔断和真实路由验收边界。
 - `docs/m3.2-acceptance.md` 记录 M3.2 的记忆候选规则、纠正、FTS5 双列中文检索、schema v4 迁移和清除边界。
 - `docs/m3.3-acceptance.md` 记录 M3.3 的记忆召回注入、结构化抽取、schema v5 `purpose` 审计、面板 API/UI 和真实路由验收边界。
+- `docs/m3.4-acceptance.md` 记录 M3.4 的确定性风格检查、7 个场景规格、schema v6 所有者审计/紧急状态、控制页面和真实 4100 验收边界。
 
 ## 2. 目标结构
 
@@ -163,11 +173,11 @@ F:\kanobot\dsh\                       本地 DSH 安装、测试脚本和证据�
 DSH 数据目录                          M2 之后：数据库、快照、日志和备份
 ```
 
-M2/M3.0/M3.1/M3.2/M3.3 的实际数据布局：
+M2/M3.0/M3.1/M3.2/M3.3/M3.4 的实际数据布局：
 
 ```text
 <dataDir>/
-├── kanobot.sqlite                    主库：事件、快照、正文、对话/消息、模型调用审计、记忆、FTS5 记忆索引、outbox、墓碑投影
+├── kanobot.sqlite                    主库：事件、快照、正文、对话/消息、模型调用审计、记忆、FTS5 记忆索引、风格检查、所有者审计、紧急状态、outbox、墓碑投影
 ├── tombstones.sqlite                 独立墓碑库，不进入主库备份
 └── backups/
     └── kanobot-backup-*.sqlite       最近 7 份主库一致性备份
@@ -180,6 +190,7 @@ M2/M3.0/M3.1/M3.2/M3.3 的实际数据布局：
 - 业务代码按 `src/<module>/` 放置；模块之间通过明确接口交互，不共享任意全局变量。
 - 一个小型 FSM 只能放在具体流程模块内，例如 `src/channels/` 的投递状态或 `src/evolution/` 的候选生命周期；不得新增“角色总状态机”。
 - 单元测试放 `tests/unit/`，跨模块和 DSH 生命周期测试放 `tests/integration/`，回放与迁移测试放 `tests/replay/`。
+- 人格场景规格放 `tests/scenarios/`；当前样例使用脚本化占位回复，不能把通过结果当成真实模型行为。
 - 运行时数据库、快照、日志、截图和下载放在 DSH 数据目录，不放进仓库，并设置保留期、权限和清理策略。这样复制源码或生成进化候选副本时，私人数据不会被一起复制。`.gitignore` 里的 `data/` 规则保留，作为兜底。
 - 临时诊断放 `tmp/`，不把一次性脚本或输出混入正式数据链。
 - 第三方调研记录写 `docs/plugin-research.md`；实际引入/替换插件时更新 `docs/mods.md`，说明版本、原因、许可证和回滚方式。

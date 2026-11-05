@@ -27,7 +27,7 @@ import {
   StorageIntegrityError,
 } from './errors.ts'
 
-export const STORAGE_SCHEMA_VERSION = 5
+export const STORAGE_SCHEMA_VERSION = 6
 export const TOMBSTONE_STORE_SCHEMA_VERSION = 1
 
 type DatabaseKind = 'main' | 'tombstones'
@@ -128,6 +128,28 @@ const MAIN_REQUIRED_COLUMNS_V4: Record<string, readonly string[]> = {
 const MAIN_REQUIRED_COLUMNS_V5: Record<string, readonly string[]> = {
   ...MAIN_REQUIRED_COLUMNS_V4,
   model_calls: [...MAIN_REQUIRED_COLUMNS_V4.model_calls, 'purpose'],
+}
+
+const MAIN_REQUIRED_COLUMNS_V6: Record<string, readonly string[]> = {
+  ...MAIN_REQUIRED_COLUMNS_V5,
+  reply_style_checks: [
+    'id',
+    'assistant_message_id',
+    'schema_version',
+    'ok',
+    'violation_codes_json',
+    'checked_at',
+  ],
+  owner_audit: [
+    'id',
+    'occurred_at',
+    'action',
+    'target_type',
+    'target_id',
+    'outcome',
+    'detail_code',
+  ],
+  emergency_state: ['id', 'stopped', 'updated_at', 'reason_code'],
 }
 
 const TOMBSTONE_REQUIRED_COLUMNS: Record<string, readonly string[]> = {
@@ -286,6 +308,53 @@ ALTER TABLE model_calls
 CREATE INDEX model_calls_purpose_index ON model_calls(purpose);
 `
 
+/**
+ * M3.4 的所有者控制与可观测性表。
+ *
+ * 风格检查只保存违规代码，不复制回复正文；审计只保存动作和对象 ID。
+ * emergency_state 是持久化的停止开关，STOP 文件只是外部触发方式。
+ */
+const CONTROL_SCHEMA_V6 = `
+CREATE TABLE reply_style_checks (
+  id TEXT PRIMARY KEY,
+  assistant_message_id TEXT NOT NULL UNIQUE
+    REFERENCES messages(id) ON DELETE CASCADE,
+  schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+  ok INTEGER NOT NULL CHECK (ok IN (0, 1)),
+  violation_codes_json TEXT NOT NULL,
+  checked_at TEXT NOT NULL
+) STRICT;
+CREATE INDEX reply_style_checks_checked_at_index
+  ON reply_style_checks(checked_at);
+
+CREATE TABLE owner_audit (
+  id TEXT PRIMARY KEY,
+  occurred_at TEXT NOT NULL,
+  action TEXT NOT NULL CHECK (action IN (
+    'memory.create',
+    'memory.correct',
+    'memory.promote',
+    'memory.trash',
+    'memory.restore',
+    'memory.purge',
+    'emergency.stop',
+    'emergency.resume'
+  )),
+  target_type TEXT NOT NULL CHECK (target_type IN ('memory', 'system')),
+  target_id TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('succeeded', 'failed')),
+  detail_code TEXT
+) STRICT;
+CREATE INDEX owner_audit_occurred_at_index ON owner_audit(occurred_at);
+
+CREATE TABLE emergency_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  stopped INTEGER NOT NULL CHECK (stopped IN (0, 1)),
+  updated_at TEXT NOT NULL,
+  reason_code TEXT NOT NULL
+) STRICT;
+`
+
 const TOMBSTONE_SCHEMA = `
 CREATE TABLE schema_migrations (
   version INTEGER PRIMARY KEY,
@@ -408,11 +477,17 @@ function initializeDatabase(
     kind === 'main' ? STORAGE_SCHEMA_VERSION : TOMBSTONE_STORE_SCHEMA_VERSION
   const schema =
     kind === 'main'
-      ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}\n${MODEL_CALLS_SCHEMA_V3}\n${MEMORY_SEARCH_SCHEMA_V4}\n${MODEL_CALL_PURPOSE_SCHEMA_V5}`
+      ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}\n${MODEL_CALLS_SCHEMA_V3}\n${MEMORY_SEARCH_SCHEMA_V4}\n${MODEL_CALL_PURPOSE_SCHEMA_V5}\n${CONTROL_SCHEMA_V6}`
       : TOMBSTONE_SCHEMA
   db.exec('BEGIN IMMEDIATE')
   try {
     db.exec(schema)
+    if (kind === 'main') {
+      db.prepare(
+        `INSERT INTO emergency_state (id, stopped, updated_at, reason_code)
+         VALUES (1, 0, ?, 'running')`,
+      ).run(nowIso)
+    }
     db.prepare(
       'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
     ).run(version, nowIso)
@@ -522,7 +597,7 @@ function assertSchemaCompatible(
   const versions = readSchemaVersions(db, path, kind)
   const latest = versions.at(-1)
   const supported =
-    kind === 'main' ? [1, 2, 3, 4, 5] : [TOMBSTONE_STORE_SCHEMA_VERSION]
+    kind === 'main' ? [1, 2, 3, 4, 5, 6] : [TOMBSTONE_STORE_SCHEMA_VERSION]
   if (
     latest === undefined ||
     !supported.includes(latest) ||
@@ -545,7 +620,9 @@ function assertSchemaCompatible(
             ? MAIN_REQUIRED_COLUMNS_V3
             : latest === 4
               ? MAIN_REQUIRED_COLUMNS_V4
-              : MAIN_REQUIRED_COLUMNS_V5
+              : latest === 5
+                ? MAIN_REQUIRED_COLUMNS_V5
+                : MAIN_REQUIRED_COLUMNS_V6
   for (const [table, columns] of Object.entries(required)) {
     const tableRows = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -623,6 +700,22 @@ function migrateDatabaseIfNeeded(
       db.prepare(
         'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
       ).run(5, nowIso)
+    }
+    if (
+      latest === 1 ||
+      latest === 2 ||
+      latest === 3 ||
+      latest === 4 ||
+      latest === 5
+    ) {
+      db.exec(CONTROL_SCHEMA_V6)
+      db.prepare(
+        `INSERT INTO emergency_state (id, stopped, updated_at, reason_code)
+         VALUES (1, 0, ?, 'running')`,
+      ).run(nowIso)
+      db.prepare(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+      ).run(6, nowIso)
     }
     db.exec(`PRAGMA user_version = ${STORAGE_SCHEMA_VERSION}`)
     db.exec('COMMIT')

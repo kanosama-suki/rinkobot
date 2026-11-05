@@ -21,6 +21,8 @@ import {
   KanobotMemoryService,
   MemoryExtractionService,
 } from '../core/memory/index.ts'
+import { OwnerAuditService } from '../core/observability/index.ts'
+import { KanobotEmergencyService } from '../core/policy/index.ts'
 import type { LoadedConfig } from '../core/config/index.ts'
 import {
   KanobotStorage,
@@ -82,6 +84,14 @@ export async function apply(
     // 备份失败也应阻止“看似启动成功”：日备份是 M2 的数据安全边界。
     storage.maybeCreateDailyBackup()
     const memory = new KanobotMemoryService(storage)
+    const audit = new OwnerAuditService(storage)
+    const emergency = new KanobotEmergencyService(
+      storage,
+      storage.dataDir,
+      loaded.policy.emergency.stopFile,
+    )
+    // 启动时把 STOP 文件同步进数据库；删除文件不会自动恢复。
+    const emergencyStatus = emergency.status()
     // 记忆抽取与聊天共用同一路由，但审计 purpose 独立，费用不会混在一起。
     const memoryExtraction = new MemoryExtractionService(storage, memory, model, {
       maxDailyCalls: loaded.system.resources.dailyModelCallLimit,
@@ -98,6 +108,8 @@ export async function apply(
       connection: ctx.connection,
       chat,
       memory,
+      audit,
+      emergency,
       logger: ctx.logger,
     })
     lifecycle = createPluginLifecycle({
@@ -141,6 +153,9 @@ export async function apply(
         dailyModelCallLimit: loaded.system.resources.dailyModelCallLimit,
         memoryCount: memory.listViews('all').length,
         memoryCandidateCount: memory.listViews('candidate').length,
+        ownerAuditCount: audit.count(),
+        emergencyStopped: emergencyStatus.stopped,
+        stopFilePresent: emergencyStatus.stopFilePresent,
         identity: loaded.identity.mode,
       })
     }
@@ -150,7 +165,8 @@ export async function apply(
         `config=${configDir}; database=${storage.databasePath}; ` +
         `chat=${CHAT_BASE_PATH}/; modelMode=${modelMode}; ` +
         `provider=${chat.identity().provider}; ` +
-        `model=${chat.identity().id}; identity=${loaded.identity.mode}`,
+        `model=${chat.identity().id}; identity=${loaded.identity.mode}; ` +
+        `emergencyStopped=${emergencyStatus.stopped}`,
     )
 
     // DSH 卸载插件时会调用这个 disposer，所有需要释放的资源都从这里收口。

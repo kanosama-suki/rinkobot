@@ -38,12 +38,22 @@ import {
   type ModelCallView,
   type ModelMessage,
 } from './types.ts'
+import { checkReplyStyle } from './style.ts'
 
 const PLACEHOLDER_SYSTEM_PROMPT =
-  '你是 Kanobot 的 M3.3 测试占位人格。模型可能由本地 Magpie 路由或 mock 提供，' +
+  '你是 Kanobot 的 M3.4 测试占位人格。模型可能由本地 Magpie 路由或 mock 提供，' +
   '但仍不是燐子的正式人格。只做虚构测试，不要读取或猜测用户的私人资料。' +
   '系统会在本轮提供相关长期记忆，并在回复后整理值得保存的内容；' +
   '你可以自然地说“记住了”，不要声称系统完全没有长期记忆能力。'
+
+const STYLE_PROMPT = `
+
+## 回复风格（自动检查）
+- 不出现“作为一个人工智能”“作为AI”“你应该”这类说法。
+- 一两句的回复不超过 3 行。
+- 超过 200 字的长回复，感叹号最多 1 个，不出现 www。
+- 长回复每个段落至少有一句 4～8 字的短句。
+- 认真长谈时不使用“主人”；日常称呼用“你”，需要叫名字时用 kano。`
 
 export interface ChatServiceOptions {
   conversationId?: string
@@ -177,7 +187,10 @@ export class KanobotChatService {
       let replyLength = 0
       let result: ChatModelResult | null = null
       for await (const event of this.model.stream({
-        systemPrompt: withRecalledMemories(this.systemPrompt, recalled),
+        systemPrompt: withRecalledMemories(
+          `${this.systemPrompt}${STYLE_PROMPT}`,
+          recalled,
+        ),
         messages: toModelMessages(history),
         signal,
       })) {
@@ -235,6 +248,10 @@ export class KanobotChatService {
         throw new ChatInputError('model_output_invalid', 'model returned no text')
       }
 
+      const styleCheck = checkReplyStyle(reply, {
+        // 长回复按认真长谈处理；短句里的玩笑称呼不在硬规则里拦截。
+        serious: Array.from(reply.trim()).length > 200,
+      })
       const assistantMessage = this.storage.appendChatMessage({
         conversationId: this.conversationId,
         role: 'assistant',
@@ -249,6 +266,12 @@ export class KanobotChatService {
         estimatedCost: result.estimatedCost,
         pricing: result.pricing,
         responseId: result.responseId,
+      })
+      this.storage.putReplyStyleCheck({
+        assistantMessageId: assistantMessage.id,
+        ok: styleCheck.ok,
+        violationCodes: styleCheck.violations.map(violation => violation.code),
+        checkedAt: assistantMessage.createdAt,
       })
       auditAttempted = true
 
@@ -286,6 +309,7 @@ export class KanobotChatService {
         modelCall: modelCallView(completed),
         modelUsage: this.modelUsage(),
         memory,
+        styleCheck,
       }
     } catch (error) {
       const normalized = normalizeChatError(error)

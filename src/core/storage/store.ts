@@ -79,6 +79,7 @@ import type {
   ChatMessageInput,
   ChatMessageRecord,
   ConversationRecord,
+  EmergencyStateRecord,
   FinishModelCallInput,
   MemoryListOptions,
   MemorySearchOptions,
@@ -88,8 +89,15 @@ import type {
   ModelPricingRecord,
   ModelUsageRecord,
   OutboxRecord,
+  OwnerAuditAction,
+  OwnerAuditRecord,
+  OwnerAuditTargetType,
   PurgeResult,
   PurgeTarget,
+  PutReplyStyleCheckInput,
+  RecordOwnerAuditInput,
+  ReplyStyleCheckRecord,
+  SetEmergencyStateInput,
   SnapshotResult,
   StorageOptions,
 } from './types.ts'
@@ -108,6 +116,22 @@ const TOMBSTONE_TARGET_TYPES: readonly TombstoneTargetType[] = [
   'memory',
   'outbox',
   'event',
+]
+
+const OWNER_AUDIT_ACTIONS: readonly OwnerAuditAction[] = [
+  'memory.create',
+  'memory.correct',
+  'memory.promote',
+  'memory.trash',
+  'memory.restore',
+  'memory.purge',
+  'emergency.stop',
+  'emergency.resume',
+]
+
+const OWNER_AUDIT_TARGET_TYPES: readonly OwnerAuditTargetType[] = [
+  'memory',
+  'system',
 ]
 
 export class KanobotStorage {
@@ -728,6 +752,200 @@ export class KanobotStorage {
       'SELECT COUNT(*) AS count FROM model_calls WHERE local_day = ?',
     ).get(localDay) as Record<string, unknown> | undefined
     return Number(row?.count ?? 0)
+  }
+
+  /**
+   * 风格检查属于回复的审计元数据，不复制正文。一个助手消息最多一行，
+   * 因此重复写入同一消息会明确失败，而不是覆盖历史检查结果。
+   */
+  putReplyStyleCheck(input: PutReplyStyleCheckInput): ReplyStyleCheckRecord {
+    this.assertOpen()
+    const assistantMessageId = validateIdentifier(
+      input.assistantMessageId,
+      'replyStyleCheck.assistantMessageId',
+    )
+    const message = this.db.prepare(
+      'SELECT role FROM messages WHERE id = ?',
+    ).get(assistantMessageId) as Record<string, unknown> | undefined
+    if (message === undefined || message.role !== 'assistant') {
+      throw new StorageError(
+        'REFERENCE_MISSING',
+        `assistant message "${assistantMessageId}" does not exist`,
+      )
+    }
+    if (typeof input.ok !== 'boolean') {
+      invalid('replyStyleCheck.ok', 'expected a boolean')
+    }
+    const violationCodes = validateStyleViolationCodes(input.violationCodes)
+    if (input.ok !== (violationCodes.length === 0)) {
+      invalid(
+        'replyStyleCheck.ok',
+        'ok must be true exactly when there are no violations',
+      )
+    }
+    const checkedAt = validateInstant(
+      input.checkedAt ?? this.nowIso(),
+      'replyStyleCheck.checkedAt',
+    )
+    const id = validateIdentifier(
+      input.id ?? `style-${randomUUID()}`,
+      'replyStyleCheck.id',
+    )
+    try {
+      this.db.prepare(
+        `INSERT INTO reply_style_checks
+          (id, assistant_message_id, schema_version, ok,
+           violation_codes_json, checked_at)
+         VALUES (?, ?, 1, ?, ?, ?)`,
+      ).run(
+        id,
+        assistantMessageId,
+        input.ok ? 1 : 0,
+        canonicalJson(violationCodes),
+        checkedAt,
+      )
+    } catch (error) {
+      throw mapInsertError(error, 'reply style check', id)
+    }
+    const created = this.getReplyStyleCheck(assistantMessageId)
+    if (created === null) {
+      throw new StorageIntegrityError(
+        `reply style check "${id}" disappeared during creation`,
+        ':reply_style_checks:',
+      )
+    }
+    return created
+  }
+
+  getReplyStyleCheck(assistantMessageId: string): ReplyStyleCheckRecord | null {
+    this.assertOpen()
+    const messageId = validateIdentifier(
+      assistantMessageId,
+      'replyStyleCheck.assistantMessageId',
+    )
+    const row = this.db.prepare(
+      'SELECT * FROM reply_style_checks WHERE assistant_message_id = ?',
+    ).get(messageId) as Record<string, unknown> | undefined
+    return row === undefined ? null : replyStyleCheckFromRow(row)
+  }
+
+  /**
+   * 所有者审计只记录动作、对象 ID 和结果，不记录记忆正文。
+   * 审计表不随记忆彻底清除而删除，保留“谁在何时做过什么”的事实。
+   */
+  recordOwnerAudit(input: RecordOwnerAuditInput): OwnerAuditRecord {
+    this.assertOpen()
+    const action = validateOwnerAuditAction(input.action)
+    const targetType = validateOwnerAuditTargetType(input.targetType)
+    const targetId = validateIdentifier(input.targetId, 'ownerAudit.targetId')
+    const outcome = input.outcome ?? 'succeeded'
+    if (outcome !== 'succeeded' && outcome !== 'failed') {
+      invalid('ownerAudit.outcome', 'expected "succeeded" or "failed"')
+    }
+    const detailCode = input.detailCode === undefined || input.detailCode === null
+      ? null
+      : validateAuditDetailCode(input.detailCode)
+    const occurredAt = validateInstant(
+      input.occurredAt ?? this.nowIso(),
+      'ownerAudit.occurredAt',
+    )
+    const id = validateIdentifier(
+      input.id ?? `audit-${randomUUID()}`,
+      'ownerAudit.id',
+    )
+    try {
+      this.db.prepare(
+        `INSERT INTO owner_audit
+          (id, occurred_at, action, target_type, target_id, outcome, detail_code)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).run(id, occurredAt, action, targetType, targetId, outcome, detailCode)
+    } catch (error) {
+      throw mapInsertError(error, 'owner audit', id)
+    }
+    return {
+      id,
+      occurredAt,
+      action,
+      targetType,
+      targetId,
+      outcome,
+      detailCode,
+    }
+  }
+
+  listOwnerAudit(limit = 50): OwnerAuditRecord[] {
+    this.assertOpen()
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+      throw new StorageError(
+        'RECORD_INVALID',
+        'owner audit limit must be an integer between 1 and 200',
+      )
+    }
+    const rows = this.db.prepare(
+      `SELECT * FROM owner_audit
+       ORDER BY occurred_at DESC, id DESC
+       LIMIT ?`,
+    ).all(limit) as Array<Record<string, unknown>>
+    return rows.map(ownerAuditFromRow)
+  }
+
+  ownerAuditCount(): number {
+    this.assertOpen()
+    const row = this.db.prepare(
+      'SELECT COUNT(*) AS count FROM owner_audit',
+    ).get() as Record<string, unknown> | undefined
+    return Number(row?.count ?? 0)
+  }
+
+  getEmergencyState(): EmergencyStateRecord {
+    this.assertOpen()
+    const row = this.db.prepare(
+      'SELECT stopped, updated_at, reason_code FROM emergency_state WHERE id = 1',
+    ).get() as Record<string, unknown> | undefined
+    if (row === undefined) {
+      throw new StorageIntegrityError(
+        'emergency state row is missing',
+        ':emergency_state:',
+      )
+    }
+    if (row.stopped !== 0 && row.stopped !== 1) {
+      throw new StorageIntegrityError(
+        'emergency state stopped is not 0 or 1',
+        ':emergency_state:',
+      )
+    }
+    return {
+      stopped: row.stopped === 1,
+      updatedAt: validateInstant(
+        String(row.updated_at),
+        'emergency.updatedAt',
+      ),
+      reasonCode: validateReasonCode(row.reason_code, 'emergency.reasonCode'),
+    }
+  }
+
+  setEmergencyState(input: SetEmergencyStateInput): EmergencyStateRecord {
+    this.assertOpen()
+    if (typeof input.stopped !== 'boolean') {
+      invalid('emergency.stopped', 'expected a boolean')
+    }
+    const reasonCode = validateReasonCode(
+      input.reasonCode,
+      'emergency.reasonCode',
+    )
+    const updatedAt = validateInstant(
+      input.updatedAt ?? this.nowIso(),
+      'emergency.updatedAt',
+    )
+    this.db.prepare(
+      `INSERT INTO emergency_state (id, stopped, updated_at, reason_code)
+       VALUES (1, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         stopped = excluded.stopped,
+         updated_at = excluded.updated_at,
+         reason_code = excluded.reason_code`,
+    ).run(input.stopped ? 1 : 0, updatedAt, reasonCode)
+    return this.getEmergencyState()
   }
 
   purgeChatMessage(id: string, at: string = this.nowIso()): PurgeResult {
@@ -2166,6 +2384,93 @@ function outboxFromRow(row: Record<string, unknown>): OutboxRecord {
   return record
 }
 
+function replyStyleCheckFromRow(
+  row: Record<string, unknown>,
+): ReplyStyleCheckRecord {
+  if (
+    typeof row.id !== 'string' ||
+    typeof row.assistant_message_id !== 'string' ||
+    Number(row.schema_version) !== 1 ||
+    (row.ok !== 0 && row.ok !== 1) ||
+    typeof row.violation_codes_json !== 'string' ||
+    typeof row.checked_at !== 'string'
+  ) {
+    throw new StorageIntegrityError(
+      'reply style check row has invalid column types',
+      ':reply_style_checks:',
+    )
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(row.violation_codes_json)
+  } catch (error) {
+    throw new StorageIntegrityError(
+      'reply style check violation_codes_json is not valid JSON',
+      ':reply_style_checks:',
+      error,
+    )
+  }
+  const violationCodes = validateStyleViolationCodes(parsed)
+  if ((row.ok === 1) !== (violationCodes.length === 0)) {
+    throw new StorageIntegrityError(
+      'reply style check ok flag does not match violation codes',
+      ':reply_style_checks:',
+    )
+  }
+  if (canonicalJson(violationCodes) !== row.violation_codes_json) {
+    throw new StorageIntegrityError(
+      'reply style check violation_codes_json is not canonical JSON',
+      ':reply_style_checks:',
+    )
+  }
+  return {
+    id: validateIdentifier(row.id, 'replyStyleCheck.id'),
+    assistantMessageId: validateIdentifier(
+      row.assistant_message_id,
+      'replyStyleCheck.assistantMessageId',
+    ),
+    schemaVersion: 1,
+    ok: row.ok === 1,
+    violationCodes,
+    checkedAt: validateInstant(
+      row.checked_at,
+      'replyStyleCheck.checkedAt',
+    ),
+  }
+}
+
+function ownerAuditFromRow(row: Record<string, unknown>): OwnerAuditRecord {
+  if (
+    typeof row.id !== 'string' ||
+    typeof row.occurred_at !== 'string' ||
+    typeof row.target_id !== 'string' ||
+    (row.detail_code !== null && typeof row.detail_code !== 'string')
+  ) {
+    throw new StorageIntegrityError(
+      'owner audit row has invalid column types',
+      ':owner_audit:',
+    )
+  }
+  const outcome = row.outcome
+  if (outcome !== 'succeeded' && outcome !== 'failed') {
+    throw new StorageIntegrityError(
+      'owner audit outcome is invalid',
+      ':owner_audit:',
+    )
+  }
+  return {
+    id: validateIdentifier(row.id, 'ownerAudit.id'),
+    occurredAt: validateInstant(row.occurred_at, 'ownerAudit.occurredAt'),
+    action: validateOwnerAuditAction(row.action),
+    targetType: validateOwnerAuditTargetType(row.target_type),
+    targetId: validateIdentifier(row.target_id, 'ownerAudit.targetId'),
+    outcome,
+    detailCode: row.detail_code === null
+      ? null
+      : validateAuditDetailCode(row.detail_code),
+  }
+}
+
 function mapInsertError(error: unknown, kind: string, id: string): StorageError {
   if (messageOf(error).includes('UNIQUE constraint failed')) {
     return new StorageError('DUPLICATE_ID', `${kind} "${id}" already exists`, {
@@ -2194,6 +2499,71 @@ function validateModelLabel(value: unknown, field: string): string {
 function validateModelCallPurpose(value: unknown): ModelCallPurpose {
   if (value !== 'chat' && value !== 'memory_extraction') {
     invalid('modelCall.purpose', 'expected "chat" or "memory_extraction"')
+  }
+  return value
+}
+
+function validateStyleViolationCodes(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 64) {
+    invalid(
+      'replyStyleCheck.violationCodes',
+      'expected an array with at most 64 codes',
+    )
+  }
+  const codes: string[] = []
+  const seen = new Set<string>()
+  for (const item of value) {
+    if (
+      typeof item !== 'string' ||
+      !/^[a-z][a-z0-9_.-]{0,63}$/.test(item)
+    ) {
+      invalid(
+        'replyStyleCheck.violationCodes',
+        'every violation code must be a lowercase identifier',
+      )
+    }
+    if (seen.has(item)) {
+      invalid(
+        'replyStyleCheck.violationCodes',
+        'duplicate violation codes are not allowed',
+      )
+    }
+    seen.add(item)
+    codes.push(item)
+  }
+  return codes
+}
+
+function validateOwnerAuditAction(value: unknown): OwnerAuditAction {
+  if (!OWNER_AUDIT_ACTIONS.includes(value as OwnerAuditAction)) {
+    invalid('ownerAudit.action', 'unsupported owner audit action')
+  }
+  return value as OwnerAuditAction
+}
+
+function validateOwnerAuditTargetType(value: unknown): OwnerAuditTargetType {
+  if (!OWNER_AUDIT_TARGET_TYPES.includes(value as OwnerAuditTargetType)) {
+    invalid('ownerAudit.targetType', 'expected "memory" or "system"')
+  }
+  return value as OwnerAuditTargetType
+}
+
+function validateAuditDetailCode(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    !/^[a-z][a-z0-9_.-]{0,127}$/.test(value)
+  ) {
+    invalid('ownerAudit.detailCode', 'expected a lowercase detail code')
+  }
+  return value
+}
+
+function validateReasonCode(value: unknown, field: string): string {
+  if (
+    typeof value !== 'string' ||
+    !/^[a-z][a-z0-9_.-]{0,127}$/.test(value)
+  ) {
+    invalid(field, 'expected a lowercase reason code')
   }
   return value
 }

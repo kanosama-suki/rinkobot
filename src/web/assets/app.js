@@ -1,5 +1,5 @@
 /**
- * M3.3 聊天与所有者记忆面板。
+ * M3.4 聊天、记忆、审计与紧急停止面板。
  *
  * 所有来自服务器和模型的文本都通过 textContent 渲染；SSE 只接受本页面
  * 固定的聊天流格式。记忆操作必须经过 DSH 登录态，页面不保存任何凭据。
@@ -13,6 +13,7 @@ const elements = {
   input: document.querySelector('#message-input'),
   send: document.querySelector('#send-button'),
   modelBadge: document.querySelector('#model-badge'),
+  controlBadge: document.querySelector('#control-badge'),
   statusModel: document.querySelector('#status-model'),
   statusProvider: document.querySelector('#status-provider'),
   statusCalls: document.querySelector('#status-calls'),
@@ -25,6 +26,7 @@ const elements = {
   emptyNote: document.querySelector('#empty-note'),
   tabStatus: document.querySelector('#tab-status'),
   tabMemory: document.querySelector('#tab-memory'),
+  tabAudit: document.querySelector('#tab-audit'),
   tabButtons: Array.from(document.querySelectorAll('.tab-button')),
   memoryBadge: document.querySelector('#memory-badge'),
   memoryAdd: document.querySelector('#memory-add'),
@@ -47,6 +49,14 @@ const elements = {
   memoryKind: document.querySelector('#memory-kind'),
   memoryImportance: document.querySelector('#memory-importance'),
   memorySensitivity: document.querySelector('#memory-sensitivity'),
+  emergencyState: document.querySelector('#emergency-state'),
+  emergencyNote: document.querySelector('#emergency-note'),
+  emergencyButton: document.querySelector('#emergency-button'),
+  auditBadge: document.querySelector('#audit-badge'),
+  auditRefresh: document.querySelector('#audit-refresh'),
+  auditList: document.querySelector('#audit-list'),
+  auditEmpty: document.querySelector('#audit-empty'),
+  auditError: document.querySelector('#audit-error'),
 }
 
 const state = {
@@ -58,6 +68,8 @@ const state = {
   editingMemoryId: null,
   counts: { active: 0, candidate: 0, trash: 0 },
   memories: [],
+  emergency: null,
+  auditEvents: [],
 }
 
 void initialize()
@@ -74,6 +86,11 @@ async function initialize() {
     await loadMemories()
   } catch (error) {
     showMemoryError(errorMessage(error))
+  }
+  try {
+    await loadControl()
+  } catch (error) {
+    showNotice(errorMessage(error))
   }
 }
 
@@ -166,6 +183,7 @@ async function sendMessage() {
         applyState(event.state)
         applyUsage(event.modelUsage)
         appendMemoryOutcome(assistant, event.memory)
+        appendStyleOutcome(assistant, event.styleCheck)
         assistant = null
         void loadMemories().catch(error => showMemoryError(errorMessage(error)))
       } else if (event.type === 'error') {
@@ -303,6 +321,20 @@ function appendMemoryOutcome(article, memory) {
   article.append(note)
 }
 
+function appendStyleOutcome(article, styleCheck) {
+  if (!styleCheck || styleCheck.ok !== false) return
+  const messages = Array.isArray(styleCheck.violations)
+    ? styleCheck.violations
+        .map(violation => violation?.message)
+        .filter(message => typeof message === 'string' && message !== '')
+    : []
+  if (messages.length === 0) return
+  const note = document.createElement('p')
+  note.className = 'style-outcome'
+  note.textContent = `风格检查提示：${messages.join('；')}`
+  article.append(note)
+}
+
 function applyModel(model) {
   if (!model || typeof model.id !== 'string') return
   const isMock = model.mode === 'mock'
@@ -408,6 +440,184 @@ function formatDate(value) {
   }).format(date)
 }
 
+async function loadControl() {
+  const response = await fetch('/kanobot/api/control', {
+    credentials: 'same-origin',
+    headers: { accept: 'application/json' },
+  })
+  if (response.status === 404) {
+    elements.controlBadge.textContent = '控制未启用'
+    elements.emergencyState.textContent = '当前插件没有提供紧急控制接口。'
+    elements.emergencyNote.textContent = '请联系维护者检查插件版本。'
+    elements.emergencyButton.disabled = true
+    return
+  }
+  if (!response.ok) {
+    throw new Error(await responseMessage(response, '读取控制状态失败'))
+  }
+  const payload = await response.json()
+  applyControl(payload?.emergency)
+}
+
+function applyControl(emergency) {
+  if (!emergency || typeof emergency !== 'object') return
+  state.emergency = emergency
+  const stopped = emergency.stopped === true
+  elements.controlBadge.textContent = stopped ? '已停止' : '运行中'
+  elements.controlBadge.classList.toggle('control-stopped', stopped)
+  elements.controlBadge.classList.toggle('control-running', !stopped)
+  elements.emergencyState.textContent = stopped
+    ? `自主活动已停止（${emergency.reasonCode}）`
+    : '运行中：自主活动开关未触发'
+  elements.emergencyNote.textContent = stopped
+    ? '你主动发来的消息仍会得到回复；恢复必须由你手动操作。'
+    : '停止会阻止未来的自主活动；你主动发来的消息仍然可以回复。'
+  elements.emergencyButton.disabled = false
+  elements.emergencyButton.textContent = stopped ? '恢复运行' : '紧急停止'
+  elements.emergencyButton.classList.toggle('danger-button--resume', stopped)
+}
+
+async function toggleEmergency() {
+  const stopped = state.emergency?.stopped === true
+  const question = stopped
+    ? '恢复自主活动？请确认 STOP 文件或停止原因已经处理。'
+    : '紧急停止所有自主活动？你主动发来的聊天仍可继续。'
+  if (!window.confirm(question)) return
+
+  elements.emergencyButton.disabled = true
+  try {
+    const response = await fetch(
+      stopped
+        ? '/kanobot/api/emergency/resume'
+        : '/kanobot/api/emergency/stop',
+      {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ confirm: true }),
+      },
+    )
+    if (!response.ok) {
+      throw new Error(await responseMessage(response, '切换紧急停止失败'))
+    }
+    const payload = await response.json()
+    applyControl(payload?.emergency)
+    await loadAudit()
+  } finally {
+    elements.emergencyButton.disabled = false
+  }
+}
+
+async function loadAudit() {
+  const response = await fetch('/kanobot/api/audit?limit=100', {
+    credentials: 'same-origin',
+    headers: { accept: 'application/json' },
+  })
+  if (response.status === 404) {
+    elements.auditList.replaceChildren()
+    elements.auditEmpty.hidden = false
+    elements.auditEmpty.textContent = '当前插件没有提供审计接口。'
+    return
+  }
+  if (!response.ok) {
+    throw new Error(await responseMessage(response, '读取审计记录失败'))
+  }
+  const payload = await response.json()
+  state.auditEvents = Array.isArray(payload.events) ? payload.events : []
+  renderAudit()
+  hideAuditError()
+}
+
+function renderAudit() {
+  elements.auditList.replaceChildren()
+  elements.auditBadge.textContent = String(state.auditEvents.length)
+  if (state.auditEvents.length === 0) {
+    elements.auditEmpty.hidden = false
+    elements.auditEmpty.textContent = '还没有审计记录。'
+    return
+  }
+  elements.auditEmpty.hidden = true
+  for (const event of state.auditEvents) {
+    const article = document.createElement('article')
+    article.className = 'audit-item'
+
+    const heading = document.createElement('p')
+    heading.className = 'audit-action'
+    heading.textContent = auditActionLabel(event.action)
+    article.append(heading)
+
+    const meta = document.createElement('div')
+    meta.className = 'audit-meta'
+    meta.append(
+      chip(auditOutcomeLabel(event.outcome), `audit-${event.outcome}`),
+      chip(auditTargetLabel(event.targetType)),
+      chip(formatDateTime(event.occurredAt)),
+    )
+    article.append(meta)
+
+    const target = document.createElement('p')
+    target.className = 'audit-target'
+    target.textContent = `对象：${event.targetId}` +
+      (event.detailCode ? ` · ${event.detailCode}` : '')
+    article.append(target)
+    elements.auditList.append(article)
+  }
+}
+
+function auditActionLabel(value) {
+  switch (value) {
+    case 'memory.create':
+      return '新增记忆'
+    case 'memory.correct':
+      return '纠正记忆'
+    case 'memory.promote':
+      return '候选转正'
+    case 'memory.trash':
+      return '移入回收站'
+    case 'memory.restore':
+      return '恢复记忆'
+    case 'memory.purge':
+      return '彻底清除记忆'
+    case 'emergency.stop':
+      return '紧急停止'
+    case 'emergency.resume':
+      return '恢复运行'
+    default:
+      return String(value ?? '未知操作')
+  }
+}
+
+function auditTargetLabel(value) {
+  return value === 'system' ? '系统' : '记忆'
+}
+
+function auditOutcomeLabel(value) {
+  return value === 'failed' ? '失败' : '成功'
+}
+
+function formatDateTime(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
+function showAuditError(message) {
+  elements.auditError.textContent = message
+  elements.auditError.hidden = false
+}
+
+function hideAuditError() {
+  elements.auditError.hidden = true
+}
+
 function formatCount(value) {
   return typeof value === 'number' && Number.isSafeInteger(value)
     ? new Intl.NumberFormat('zh-CN').format(value)
@@ -459,7 +669,7 @@ for (const button of elements.tabButtons) {
 }
 
 function switchTab(tab) {
-  if (tab !== 'status' && tab !== 'memory') return
+  if (tab !== 'status' && tab !== 'memory' && tab !== 'audit') return
   state.activeTab = tab
   for (const button of elements.tabButtons) {
     const active = button.dataset.tab === tab
@@ -468,8 +678,11 @@ function switchTab(tab) {
   }
   elements.tabStatus.hidden = tab !== 'status'
   elements.tabMemory.hidden = tab !== 'memory'
+  elements.tabAudit.hidden = tab !== 'audit'
   if (tab === 'memory') {
     void loadMemories().catch(error => showMemoryError(errorMessage(error)))
+  } else if (tab === 'audit') {
+    void loadAudit().catch(error => showAuditError(errorMessage(error)))
   }
 }
 
@@ -498,6 +711,12 @@ elements.memorySearch.addEventListener('submit', event => {
 })
 
 elements.memoryAdd.addEventListener('click', () => openMemoryDialog())
+elements.auditRefresh.addEventListener('click', () => {
+  void loadAudit().catch(error => showAuditError(errorMessage(error)))
+})
+elements.emergencyButton.addEventListener('click', () => {
+  void toggleEmergency().catch(error => showNotice(errorMessage(error)))
+})
 elements.dialogClose.addEventListener('click', closeMemoryDialog)
 elements.dialogCancel.addEventListener('click', closeMemoryDialog)
 elements.dialog.addEventListener('click', event => {
