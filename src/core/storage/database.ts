@@ -27,7 +27,7 @@ import {
   StorageIntegrityError,
 } from './errors.ts'
 
-export const STORAGE_SCHEMA_VERSION = 4
+export const STORAGE_SCHEMA_VERSION = 5
 export const TOMBSTONE_STORE_SCHEMA_VERSION = 1
 
 type DatabaseKind = 'main' | 'tombstones'
@@ -123,6 +123,11 @@ const MAIN_REQUIRED_COLUMNS_V3: Record<string, readonly string[]> = {
 const MAIN_REQUIRED_COLUMNS_V4: Record<string, readonly string[]> = {
   ...MAIN_REQUIRED_COLUMNS_V3,
   memory_search: ['memory_id', 'word_text', 'char_text'],
+}
+
+const MAIN_REQUIRED_COLUMNS_V5: Record<string, readonly string[]> = {
+  ...MAIN_REQUIRED_COLUMNS_V4,
+  model_calls: [...MAIN_REQUIRED_COLUMNS_V4.model_calls, 'purpose'],
 }
 
 const TOMBSTONE_REQUIRED_COLUMNS: Record<string, readonly string[]> = {
@@ -270,6 +275,17 @@ CREATE VIRTUAL TABLE memory_search USING fts5(
 INSERT INTO memory_search(memory_search, rank) VALUES('secure-delete', 1);
 `
 
+/**
+ * 记忆抽取是独立的上游调用，必须有自己的费用和状态审计行。
+ * 旧行一律视为聊天调用，保持 v4 数据可解释。
+ */
+const MODEL_CALL_PURPOSE_SCHEMA_V5 = `
+ALTER TABLE model_calls
+  ADD COLUMN purpose TEXT NOT NULL DEFAULT 'chat'
+  CHECK (purpose IN ('chat', 'memory_extraction'));
+CREATE INDEX model_calls_purpose_index ON model_calls(purpose);
+`
+
 const TOMBSTONE_SCHEMA = `
 CREATE TABLE schema_migrations (
   version INTEGER PRIMARY KEY,
@@ -392,7 +408,7 @@ function initializeDatabase(
     kind === 'main' ? STORAGE_SCHEMA_VERSION : TOMBSTONE_STORE_SCHEMA_VERSION
   const schema =
     kind === 'main'
-      ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}\n${MODEL_CALLS_SCHEMA_V3}\n${MEMORY_SEARCH_SCHEMA_V4}`
+      ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}\n${MODEL_CALLS_SCHEMA_V3}\n${MEMORY_SEARCH_SCHEMA_V4}\n${MODEL_CALL_PURPOSE_SCHEMA_V5}`
       : TOMBSTONE_SCHEMA
   db.exec('BEGIN IMMEDIATE')
   try {
@@ -506,7 +522,7 @@ function assertSchemaCompatible(
   const versions = readSchemaVersions(db, path, kind)
   const latest = versions.at(-1)
   const supported =
-    kind === 'main' ? [1, 2, 3, 4] : [TOMBSTONE_STORE_SCHEMA_VERSION]
+    kind === 'main' ? [1, 2, 3, 4, 5] : [TOMBSTONE_STORE_SCHEMA_VERSION]
   if (
     latest === undefined ||
     !supported.includes(latest) ||
@@ -527,7 +543,9 @@ function assertSchemaCompatible(
           ? MAIN_REQUIRED_COLUMNS_V2
           : latest === 3
             ? MAIN_REQUIRED_COLUMNS_V3
-            : MAIN_REQUIRED_COLUMNS_V4
+            : latest === 4
+              ? MAIN_REQUIRED_COLUMNS_V4
+              : MAIN_REQUIRED_COLUMNS_V5
   for (const [table, columns] of Object.entries(required)) {
     const tableRows = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -599,6 +617,12 @@ function migrateDatabaseIfNeeded(
       db.prepare(
         'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
       ).run(4, nowIso)
+    }
+    if (latest === 1 || latest === 2 || latest === 3 || latest === 4) {
+      db.exec(MODEL_CALL_PURPOSE_SCHEMA_V5)
+      db.prepare(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+      ).run(5, nowIso)
     }
     db.exec(`PRAGMA user_version = ${STORAGE_SCHEMA_VERSION}`)
     db.exec('COMMIT')

@@ -17,6 +17,11 @@ import type {
   ConversationView,
   KanobotChatService,
 } from '../core/chat/index.ts'
+import {
+  MemoryInputError,
+  type KanobotMemoryService,
+} from '../core/memory/index.ts'
+import { StorageError } from '../core/storage/index.ts'
 
 export const CHAT_BASE_PATH = '/kanobot'
 
@@ -69,6 +74,7 @@ export interface ChatSurfaceOptions {
   webServer: ChatWebServer
   connection: ChatConnection
   chat: KanobotChatService
+  memory?: KanobotMemoryService
   logger: ChatLogger
 }
 
@@ -187,7 +193,312 @@ async function handleRequest(
     return
   }
 
+  if (
+    pathname === `${CHAT_BASE_PATH}/api/memories` ||
+    pathname.startsWith(`${CHAT_BASE_PATH}/api/memories/`)
+  ) {
+    await handleMemoryRequest(req, res, url, options)
+    return
+  }
+
   writeError(res, 404, 'not_found', '接口不存在', api)
+}
+
+const MEMORY_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+const MEMORY_STATUSES = ['active', 'candidate', 'trash', 'all'] as const
+type MemoryStatus = typeof MEMORY_STATUSES[number]
+
+/**
+ * 所有者记忆接口。认证已经在 handleRequest 统一完成；这里只做
+ * 请求形状、状态过滤和领域错误到 HTTP 状态的映射。
+ */
+async function handleMemoryRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  options: ChatSurfaceOptions,
+): Promise<void> {
+  const memory = options.memory
+  if (memory === undefined) {
+    writeError(res, 404, 'not_found', '记忆接口未启用', true)
+    return
+  }
+
+  const relative = url.pathname.slice(`${CHAT_BASE_PATH}/api/memories`.length)
+  try {
+    if (relative === '') {
+      await handleMemoryCollection(req, res, url, memory)
+      return
+    }
+    const parts = relative.split('/').filter(Boolean)
+    if (parts.length < 1 || parts.length > 2) {
+      writeError(res, 404, 'not_found', '接口不存在', true)
+      return
+    }
+    const id = parts[0] ?? ''
+    if (!MEMORY_ID.test(id)) {
+      writeError(res, 400, 'invalid_memory_id', '记忆 ID 不合法', true)
+      return
+    }
+
+    if (parts.length === 1) {
+      await handleMemoryItem(req, res, memory, id)
+      return
+    }
+    await handleMemoryAction(req, res, memory, id, parts[1] ?? '')
+  } catch (error) {
+    handleMemoryError(res, options.logger, error)
+  }
+}
+
+async function handleMemoryCollection(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  memory: KanobotMemoryService,
+): Promise<void> {
+  if (req.method === 'GET') {
+    const status = parseMemoryStatus(url.searchParams.get('status'))
+    if (status === null) {
+      writeError(
+        res,
+        400,
+        'invalid_status',
+        'status 只能是 active、candidate、trash 或 all',
+        true,
+      )
+      return
+    }
+    const query = url.searchParams.get('q')
+    if (query !== null && Array.from(query).length > 500) {
+      writeError(res, 400, 'invalid_query', '搜索词不能超过 500 字', true)
+      return
+    }
+    const memories = query === null || query.trim() === ''
+      ? memory.listViews(status).slice(0, 200)
+      : memory.search(query, { limit: 50, markRecalled: false })
+          .map(result => memory.view(result.memory))
+    writeJson(res, 200, {
+      memories,
+      counts: memoryCounts(memory),
+    })
+    return
+  }
+
+  if (req.method === 'POST') {
+    const body = await readJsonBody(req)
+    const input = parseOwnerMemoryInput(body)
+    const record = memory.addByOwner({
+      text: input.text,
+      quoteText: input.quoteText,
+      kind: input.kind,
+      importance: input.importance,
+      sensitivity: input.sensitivity,
+    })
+    writeJson(res, 201, { memory: memory.view(record) })
+    return
+  }
+
+  writeMethodNotAllowed(res, ['GET', 'POST'], true)
+}
+
+async function handleMemoryItem(
+  req: IncomingMessage,
+  res: ServerResponse,
+  memory: KanobotMemoryService,
+  id: string,
+): Promise<void> {
+  if (req.method === 'GET') {
+    const view = memory.getView(id)
+    if (view === null) {
+      writeError(res, 404, 'memory_not_found', '记忆不存在', true)
+      return
+    }
+    writeJson(res, 200, { memory: view })
+    return
+  }
+
+  if (req.method === 'PATCH') {
+    const body = await readJsonBody(req)
+    const input = parseOwnerMemoryInput(body)
+    const record = memory.correct(id, {
+      text: input.text,
+      quoteText: input.quoteText,
+      kind: input.kind,
+      importance: input.importance,
+      sensitivity: input.sensitivity,
+    })
+    writeJson(res, 200, { memory: memory.view(record) })
+    return
+  }
+
+  if (req.method === 'DELETE') {
+    const record = memory.trash(id)
+    writeJson(res, 200, { memory: memory.view(record) })
+    return
+  }
+
+  writeMethodNotAllowed(res, ['GET', 'PATCH', 'DELETE'], true)
+}
+
+async function handleMemoryAction(
+  req: IncomingMessage,
+  res: ServerResponse,
+  memory: KanobotMemoryService,
+  id: string,
+  action: string,
+): Promise<void> {
+  if (req.method !== 'POST') {
+    writeMethodNotAllowed(res, ['POST'], true)
+    return
+  }
+
+  if (action === 'promote') {
+    const record = memory.promote(id)
+    writeJson(res, 200, {
+      memory: memory.view(record),
+      counts: memoryCounts(memory),
+    })
+    return
+  }
+  if (action === 'restore') {
+    const record = memory.restore(id)
+    writeJson(res, 200, {
+      memory: memory.view(record),
+      counts: memoryCounts(memory),
+    })
+    return
+  }
+  if (action === 'purge') {
+    const body = await readJsonBody(req)
+    if (
+      typeof body !== 'object' ||
+      body === null ||
+      Array.isArray(body) ||
+      Object.keys(body).length !== 1 ||
+      (body as Record<string, unknown>).confirm !== true
+    ) {
+      writeError(
+        res,
+        400,
+        'confirmation_required',
+        '彻底清除需要 { "confirm": true }',
+        true,
+      )
+      return
+    }
+    memory.purge(id)
+    writeJson(res, 200, { purged: true, id, counts: memoryCounts(memory) })
+    return
+  }
+
+  writeError(res, 404, 'not_found', '接口不存在', true)
+}
+
+function parseMemoryStatus(raw: string | null): MemoryStatus | null {
+  if (raw === null) return 'active'
+  return MEMORY_STATUSES.includes(raw as MemoryStatus)
+    ? raw as MemoryStatus
+    : null
+}
+
+function memoryCounts(memory: KanobotMemoryService): {
+  active: number
+  candidate: number
+  trash: number
+} {
+  return {
+    active: memory.listViews('active').length,
+    candidate: memory.listViews('candidate').length,
+    trash: memory.listViews('trash').length,
+  }
+}
+
+interface ParsedOwnerMemoryInput {
+  text: string
+  quoteText: string | null
+  kind: string
+  importance: 'normal' | 'important' | 'permanent' | undefined
+  sensitivity: 'normal' | 'sensitive' | 'third_party' | undefined
+}
+
+function parseOwnerMemoryInput(value: unknown): ParsedOwnerMemoryInput {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new RequestError(400, 'invalid_body', '请求体必须是 JSON 对象')
+  }
+  const record = value as Record<string, unknown>
+  const allowed = ['text', 'quoteText', 'kind', 'importance', 'sensitivity']
+  for (const key of Object.keys(record)) {
+    if (!allowed.includes(key)) {
+      throw new RequestError(400, 'invalid_body', `不支持字段 ${key}`)
+    }
+  }
+  if (typeof record.text !== 'string') {
+    throw new RequestError(400, 'invalid_text', 'text 必须是字符串')
+  }
+  if (typeof record.kind !== 'string') {
+    throw new RequestError(400, 'invalid_kind', 'kind 必须是字符串')
+  }
+  if (record.quoteText !== undefined && typeof record.quoteText !== 'string') {
+    throw new RequestError(400, 'invalid_quote', 'quoteText 必须是字符串')
+  }
+  const importance = record.importance
+  if (
+    importance !== undefined &&
+    importance !== 'normal' &&
+    importance !== 'important' &&
+    importance !== 'permanent'
+  ) {
+    throw new RequestError(400, 'invalid_importance', 'importance 不合法')
+  }
+  const sensitivity = record.sensitivity
+  if (
+    sensitivity !== undefined &&
+    sensitivity !== 'normal' &&
+    sensitivity !== 'sensitive' &&
+    sensitivity !== 'third_party'
+  ) {
+    throw new RequestError(400, 'invalid_sensitivity', 'sensitivity 不合法')
+  }
+  return {
+    text: record.text,
+    quoteText: record.quoteText ?? null,
+    kind: record.kind,
+    importance,
+    sensitivity,
+  }
+}
+
+function handleMemoryError(
+  res: ServerResponse,
+  logger: ChatLogger,
+  error: unknown,
+): void {
+  if (res.headersSent) {
+    if (!res.destroyed) res.destroy()
+    return
+  }
+  if (error instanceof RequestError) {
+    writeError(res, error.status, error.code, error.message, true)
+    return
+  }
+  if (error instanceof MemoryInputError) {
+    writeError(res, 400, error.code, error.message, true)
+    return
+  }
+  if (error instanceof StorageError) {
+    const status = error.code === 'REFERENCE_MISSING' ? 404 : 409
+    writeError(
+      res,
+      status,
+      error.code.toLowerCase(),
+      status === 404 ? '记忆不存在' : '记忆状态不允许这个操作',
+      true,
+    )
+    return
+  }
+  logger.error?.(`[kanobot] memory request failed: ${formatError(error)}`)
+  writeError(res, 500, 'internal_error', '服务器内部错误', true)
 }
 
 async function handleChatStream(

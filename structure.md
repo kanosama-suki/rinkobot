@@ -1,6 +1,6 @@
 # 项目文件结构
 
-以下路径相对于项目根目录 `a/`。当前仓库处于 M3.2 长期记忆核心完成、完整 M3 进行中的状态：已有 DSH Host 插件、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、复用 DSH 登录态的网页聊天和 SSE、连接本地 Magpie 的精确模型网关和调用审计，以及长期记忆候选规则、纠正和 FTS5 双列中文检索；Gemini 视觉、聊天自动记忆、记忆面板和主动消息仍不存在。本文中的“目标结构”是后续实现的约束，不是已经存在的目录。
+以下路径相对于项目根目录 `a/`。当前仓库处于 M3.3 记忆闭环完成、完整 M3 进行中的状态：已有 DSH Host 插件、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、复用 DSH 登录态的网页聊天和 SSE、连接本地 Magpie 的精确模型网关和调用审计、长期记忆候选规则、纠正和 FTS5 双列中文检索，以及聊天前记忆召回注入、聊天后结构化记忆抽取和所有者记忆面板；Gemini 视觉、单一 JSON 信封输出、风格/场景测试和主动消息仍不存在。本文中的“目标结构”是后续实现的约束，不是已经存在的目录。
 
 ## 1. 当前结构
 
@@ -46,7 +46,8 @@ kanobot/a/
 │   │   ├── memory/
 │   │   │   ├── index.ts              长期记忆模块公开导出
 │   │   │   ├── types.ts              记忆写入、纠正和检索输入契约
-│   │   │   └── service.ts            候选规则、纠正、候选转正和检索服务
+│   │   │   ├── service.ts            候选规则、纠正、候选转正、检索和面板视图
+│   │   │   └── extraction.ts         聊天后严格 JSON 记忆抽取和独立调用审计
 │   │   ├── state/
 │   │   │   ├── types.ts              事件、快照、记忆和墓碑契约
 │   │   │   ├── events.ts             数据契约严格校验
@@ -67,14 +68,14 @@ kanobot/a/
 │   │       └── index.ts              存储模块公开导出
 │   └── web/
 │       ├── index.ts                  Web 适配层公开导出
-│       ├── chat-http.ts              DSH 鉴权、聊天 API、SSE 和静态资源路由
+│       ├── chat-http.ts              DSH 鉴权、聊天 API、SSE、记忆 API 和静态资源路由
 │       └── assets/
-│           ├── index.html            聊天页和最小所有者状态面板
-│           ├── app.js                SSE 消费、DOM 渲染和状态刷新
+│           ├── index.html            聊天页、状态/记忆双页签和记忆编辑对话框
+│           ├── app.js                SSE 消费、记忆 API、DOM 渲染和状态刷新
 │           └── app.css               响应式浅色/深色样式
 ├── tests/
 │   ├── unit/                         配置和纯 reducer
-│   ├── integration/                  插件、聊天/SSE、存储、清除、备份、强杀和 fail-closed
+│   ├── integration/                  插件、聊天/SSE、记忆抽取/面板、存储、清除、备份、强杀和 fail-closed
 │   ├── replay/                       同一事件流快照逐字节一致性
 │   ├── fixtures/                     崩溃写入子进程等测试夹具
 │   └── helpers/                      临时目录和固定事件工厂
@@ -86,6 +87,7 @@ kanobot/a/
     ├── m3-acceptance.md              M3.0 聊天骨架验收、证据和未完成项
     ├── m3.1-acceptance.md            M3.1 Magpie 网关、调用审计和资源熔断验收
     ├── m3.2-acceptance.md            M3.2 长期记忆、纠正和 FTS5 检索验收
+    ├── m3.3-acceptance.md            M3.3 记忆召回、抽取和面板验收
     ├── plugin-research.md            第三方插件源码调研与取舍
     ├── plugin-catalog.zh.md          第三方 DSH 插件汇总表（只读参考）
     ├── mods.md                       第三方插件与改动的记录模板
@@ -106,6 +108,7 @@ kanobot/a/
 - `docs/m3-acceptance.md` 记录 M3.0 的 DSH 鉴权、网页/SSE、mock 模型、schema v2 迁移、重启恢复和尚未实现的 M3 项。
 - `docs/m3.1-acceptance.md` 记录 M3.1 的 Magpie 精确模型、流式解析、超时/重试、schema v3 调用审计、资源熔断和真实路由验收边界。
 - `docs/m3.2-acceptance.md` 记录 M3.2 的记忆候选规则、纠正、FTS5 双列中文检索、schema v4 迁移和清除边界。
+- `docs/m3.3-acceptance.md` 记录 M3.3 的记忆召回注入、结构化抽取、schema v5 `purpose` 审计、面板 API/UI 和真实路由验收边界。
 
 ## 2. 目标结构
 
@@ -160,7 +163,7 @@ F:\kanobot\dsh\                       本地 DSH 安装、测试脚本和证据�
 DSH 数据目录                          M2 之后：数据库、快照、日志和备份
 ```
 
-M2/M3.0/M3.1/M3.2 的实际数据布局：
+M2/M3.0/M3.1/M3.2/M3.3 的实际数据布局：
 
 ```text
 <dataDir>/

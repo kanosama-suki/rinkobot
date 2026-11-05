@@ -1,7 +1,8 @@
 /**
- * M3.1 测试聊天页面。
+ * M3.3 聊天与所有者记忆面板。
  *
- * 所有消息都通过 textContent 渲染；SSE 仅接受本页面固定的聊天流格式。
+ * 所有来自服务器和模型的文本都通过 textContent 渲染；SSE 只接受本页面
+ * 固定的聊天流格式。记忆操作必须经过 DSH 登录态，页面不保存任何凭据。
  */
 
 const elements = {
@@ -22,11 +23,41 @@ const elements = {
   statusMessages: document.querySelector('#status-messages'),
   statusEvents: document.querySelector('#status-events'),
   emptyNote: document.querySelector('#empty-note'),
+  tabStatus: document.querySelector('#tab-status'),
+  tabMemory: document.querySelector('#tab-memory'),
+  tabButtons: Array.from(document.querySelectorAll('.tab-button')),
+  memoryBadge: document.querySelector('#memory-badge'),
+  memoryAdd: document.querySelector('#memory-add'),
+  memorySearch: document.querySelector('#memory-search'),
+  memorySearchInput: document.querySelector('#memory-search-input'),
+  memoryFilters: Array.from(document.querySelectorAll('.memory-filter')),
+  memoryList: document.querySelector('#memory-list'),
+  memoryEmpty: document.querySelector('#memory-empty'),
+  memoryError: document.querySelector('#memory-error'),
+  countActive: document.querySelector('#count-active'),
+  countCandidate: document.querySelector('#count-candidate'),
+  countTrash: document.querySelector('#count-trash'),
+  dialog: document.querySelector('#memory-dialog'),
+  dialogTitle: document.querySelector('#memory-dialog-title'),
+  dialogClose: document.querySelector('#memory-dialog-close'),
+  dialogCancel: document.querySelector('#memory-cancel'),
+  dialogForm: document.querySelector('#memory-form'),
+  dialogError: document.querySelector('#memory-form-error'),
+  memoryText: document.querySelector('#memory-text'),
+  memoryKind: document.querySelector('#memory-kind'),
+  memoryImportance: document.querySelector('#memory-importance'),
+  memorySensitivity: document.querySelector('#memory-sensitivity'),
 }
 
 const state = {
   sending: false,
   messageIds: new Set(),
+  activeTab: 'status',
+  memoryStatus: 'active',
+  memoryQuery: '',
+  editingMemoryId: null,
+  counts: { active: 0, candidate: 0, trash: 0 },
+  memories: [],
 }
 
 void initialize()
@@ -38,6 +69,11 @@ async function initialize() {
     focusComposer()
   } catch (error) {
     showNotice(error instanceof Error ? error.message : String(error))
+  }
+  try {
+    await loadMemories()
+  } catch (error) {
+    showMemoryError(errorMessage(error))
   }
 }
 
@@ -113,7 +149,7 @@ async function sendMessage() {
           event.userMessage.createdAt,
           event.userMessage.id,
         )
-        assistant = appendPendingAssistant()
+        assistant = appendPendingAssistant(event.recalledMemoryCount)
       } else if (event.type === 'delta') {
         if (assistant === null) throw new Error('聊天流顺序错误：缺少 ready 事件。')
         appendDelta(assistant, event.text)
@@ -127,9 +163,11 @@ async function sendMessage() {
           event.message.id,
           assistant,
         )
-        assistant = null
         applyState(event.state)
         applyUsage(event.modelUsage)
+        appendMemoryOutcome(assistant, event.memory)
+        assistant = null
+        void loadMemories().catch(error => showMemoryError(errorMessage(error)))
       } else if (event.type === 'error') {
         throw new Error(event.message || '聊天回复失败。')
       }
@@ -142,7 +180,7 @@ async function sendMessage() {
       assistant.classList.remove('pending')
       assistant.querySelector('.message-text').textContent ||= '回复中断。'
     }
-    showNotice(error instanceof Error ? error.message : String(error))
+    showNotice(errorMessage(error))
     try {
       renderConversation(await fetchConversation())
     } catch {
@@ -183,8 +221,7 @@ async function consumeEvents(stream, onEvent) {
 
 function appendMessage(role, text, createdAt, id, existingElement = null) {
   if (id && state.messageIds.has(id)) return existingElement
-  const article =
-    existingElement ?? document.createElement('article')
+  const article = existingElement ?? document.createElement('article')
   article.classList.add('message', role)
   if (id) {
     article.dataset.messageId = id
@@ -213,14 +250,16 @@ function appendMessage(role, text, createdAt, id, existingElement = null) {
   return article
 }
 
-function appendPendingAssistant() {
+function appendPendingAssistant(recalledMemoryCount) {
   const article = document.createElement('article')
   article.className = 'message assistant pending'
   const content = document.createElement('p')
   content.className = 'message-text'
   const meta = document.createElement('div')
   meta.className = 'message-meta'
-  meta.textContent = '正在生成…'
+  meta.textContent = recalledMemoryCount > 0
+    ? `正在生成… · 检索到 ${recalledMemoryCount} 条记忆`
+    : '正在生成…'
   article.append(content, meta)
   elements.messages.append(article)
   scrollToBottom()
@@ -238,6 +277,30 @@ function finishAssistant(article, message) {
   article.classList.remove('pending')
   article.querySelector('.message-text').textContent = message.text
   article.querySelector('.message-meta').textContent = formatTime(message.createdAt)
+}
+
+function appendMemoryOutcome(article, memory) {
+  if (!memory || typeof memory !== 'object') return
+  let text = ''
+  if (memory.status === 'succeeded') {
+    if (memory.createdCount > 0) {
+      text = `这轮记下了 ${memory.createdCount} 条` +
+        (memory.candidateCount > 0
+          ? `，其中 ${memory.candidateCount} 条待你确认`
+          : '')
+    } else {
+      text = '这轮没有新的长期记忆。'
+    }
+  } else if (memory.status === 'failed') {
+    text = '这轮记忆整理失败；回复已经保存。'
+  } else if (memory.status === 'skipped') {
+    text = '这轮记忆整理已跳过。'
+  }
+  if (text === '') return
+  const note = document.createElement('p')
+  note.className = 'memory-outcome'
+  note.textContent = text
+  article.append(note)
 }
 
 function applyModel(model) {
@@ -335,6 +398,16 @@ function formatTime(value) {
   }).format(date)
 }
 
+function formatDate(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date)
+}
+
 function formatCount(value) {
   return typeof value === 'number' && Number.isSafeInteger(value)
     ? new Intl.NumberFormat('zh-CN').format(value)
@@ -363,6 +436,10 @@ function statusLabel(value) {
   }
 }
 
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error)
+}
+
 async function responseMessage(response, fallback) {
   try {
     const payload = await response.json()
@@ -372,5 +449,370 @@ async function responseMessage(response, fallback) {
     return payload?.error?.message || fallback
   } catch {
     return `${fallback}（HTTP ${response.status}）`
+  }
+}
+
+/* ------------------------------ 所有者面板 ------------------------------ */
+
+for (const button of elements.tabButtons) {
+  button.addEventListener('click', () => switchTab(button.dataset.tab))
+}
+
+function switchTab(tab) {
+  if (tab !== 'status' && tab !== 'memory') return
+  state.activeTab = tab
+  for (const button of elements.tabButtons) {
+    const active = button.dataset.tab === tab
+    button.classList.toggle('active', active)
+    button.setAttribute('aria-selected', active ? 'true' : 'false')
+  }
+  elements.tabStatus.hidden = tab !== 'status'
+  elements.tabMemory.hidden = tab !== 'memory'
+  if (tab === 'memory') {
+    void loadMemories().catch(error => showMemoryError(errorMessage(error)))
+  }
+}
+
+for (const button of elements.memoryFilters) {
+  button.addEventListener('click', () => {
+    const status = button.dataset.status
+    if (status !== 'active' && status !== 'candidate' && status !== 'trash') return
+    state.memoryStatus = status
+    state.memoryQuery = ''
+    elements.memorySearchInput.value = ''
+    for (const item of elements.memoryFilters) {
+      item.classList.toggle('active', item === button)
+    }
+    void loadMemories().catch(error => showMemoryError(errorMessage(error)))
+  })
+}
+
+elements.memorySearch.addEventListener('submit', event => {
+  event.preventDefault()
+  state.memoryQuery = elements.memorySearchInput.value.trim()
+  state.memoryStatus = 'active'
+  for (const item of elements.memoryFilters) {
+    item.classList.toggle('active', item.dataset.status === 'active')
+  }
+  void loadMemories().catch(error => showMemoryError(errorMessage(error)))
+})
+
+elements.memoryAdd.addEventListener('click', () => openMemoryDialog())
+elements.dialogClose.addEventListener('click', closeMemoryDialog)
+elements.dialogCancel.addEventListener('click', closeMemoryDialog)
+elements.dialog.addEventListener('click', event => {
+  if (event.target === elements.dialog) closeMemoryDialog()
+})
+elements.dialogForm.addEventListener('submit', event => {
+  event.preventDefault()
+  void saveMemory()
+})
+elements.memoryList.addEventListener('click', event => {
+  const button = event.target.closest('button[data-action]')
+  if (!(button instanceof HTMLButtonElement)) return
+  const id = button.dataset.id
+  const action = button.dataset.action
+  if (!id || !action) return
+  void runMemoryAction(id, action).catch(error => showMemoryError(errorMessage(error)))
+})
+
+async function loadMemories() {
+  const params = new URLSearchParams({ status: state.memoryStatus })
+  if (state.memoryQuery !== '') params.set('q', state.memoryQuery)
+  const response = await fetch(`/kanobot/api/memories?${params}`, {
+    credentials: 'same-origin',
+    headers: { accept: 'application/json' },
+  })
+  if (!response.ok) {
+    throw new Error(await responseMessage(response, '读取记忆失败'))
+  }
+  const payload = await response.json()
+  state.memories = Array.isArray(payload.memories) ? payload.memories : []
+  if (payload.counts && typeof payload.counts === 'object') {
+    state.counts = {
+      active: Number(payload.counts.active) || 0,
+      candidate: Number(payload.counts.candidate) || 0,
+      trash: Number(payload.counts.trash) || 0,
+    }
+  }
+  renderMemoryCounts()
+  renderMemoryList()
+  hideMemoryError()
+}
+
+function renderMemoryCounts() {
+  elements.countActive.textContent = String(state.counts.active)
+  elements.countCandidate.textContent = String(state.counts.candidate)
+  elements.countTrash.textContent = String(state.counts.trash)
+  elements.memoryBadge.textContent = String(state.counts.candidate)
+}
+
+function renderMemoryList() {
+  elements.memoryList.replaceChildren()
+  if (state.memories.length === 0) {
+    elements.memoryEmpty.hidden = false
+    elements.memoryEmpty.textContent = state.memoryQuery !== ''
+      ? '没有搜到匹配的记忆。'
+      : '这里还没有记忆。'
+    return
+  }
+  elements.memoryEmpty.hidden = true
+  for (const memory of state.memories) {
+    elements.memoryList.append(renderMemoryCard(memory))
+  }
+}
+
+function renderMemoryCard(memory) {
+  const article = document.createElement('article')
+  article.className = `memory-item status-${memory.status}`
+
+  const text = document.createElement('p')
+  text.className = 'memory-text'
+  text.textContent = String(memory.text ?? '')
+  article.append(text)
+
+  const meta = document.createElement('div')
+  meta.className = 'memory-meta'
+  meta.append(
+    chip(kindLabel(memory.kind)),
+    chip(importanceLabel(memory.importance)),
+    chip(sensitivityLabel(memory.sensitivity), `sensitivity-${memory.sensitivity}`),
+    chip(sourceLabel(memory.source)),
+    chip(formatDate(memory.createdAt)),
+  )
+  article.append(meta)
+
+  if (
+    typeof memory.quoteText === 'string' &&
+    memory.quoteText !== '' &&
+    memory.quoteText !== memory.text
+  ) {
+    const details = document.createElement('details')
+    details.className = 'memory-quote'
+    const summary = document.createElement('summary')
+    summary.textContent = '原话'
+    const quote = document.createElement('p')
+    quote.textContent = memory.quoteText
+    details.append(summary, quote)
+    article.append(details)
+  }
+
+  if (memory.status === 'deleted' && memory.purgeAfter) {
+    const expiry = document.createElement('p')
+    expiry.className = 'memory-expiry'
+    expiry.textContent = `预计 ${formatDate(memory.purgeAfter)} 彻底清除`
+    article.append(expiry)
+  }
+
+  const actions = document.createElement('div')
+  actions.className = 'memory-actions'
+  if (memory.status === 'active') {
+    actions.append(
+      actionButton('编辑', 'edit', memory.id, false),
+      actionButton('删除', 'trash', memory.id, true),
+    )
+  } else if (memory.status === 'candidate') {
+    actions.append(
+      actionButton('转正', 'promote', memory.id, false),
+      actionButton('删除', 'trash', memory.id, true),
+    )
+  } else if (memory.status === 'deleted') {
+    actions.append(
+      actionButton('恢复', 'restore', memory.id, false),
+      actionButton('彻底清除', 'purge', memory.id, true),
+    )
+  }
+  article.append(actions)
+  return article
+}
+
+function chip(text, extraClass = '') {
+  const span = document.createElement('span')
+  span.className = `chip ${extraClass}`.trim()
+  span.textContent = text
+  return span
+}
+
+function actionButton(label, action, id, danger) {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = danger ? 'text-button danger' : 'text-button'
+  button.dataset.action = action
+  button.dataset.id = id
+  button.textContent = label
+  return button
+}
+
+async function runMemoryAction(id, action) {
+  if (action === 'edit') {
+    const memory = state.memories.find(item => item.id === id)
+    if (memory) openMemoryDialog(memory)
+    return
+  }
+  if (action === 'trash') {
+    if (!window.confirm('把这条记忆放进回收站？30 天内可以恢复。')) return
+    await memoryRequest(`/kanobot/api/memories/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
+  } else if (action === 'promote') {
+    await memoryRequest(
+      `/kanobot/api/memories/${encodeURIComponent(id)}/promote`,
+      { method: 'POST' },
+    )
+  } else if (action === 'restore') {
+    await memoryRequest(
+      `/kanobot/api/memories/${encodeURIComponent(id)}/restore`,
+      { method: 'POST' },
+    )
+  } else if (action === 'purge') {
+    if (!window.confirm('彻底清除后无法恢复，也会从检索索引中删除。继续？')) return
+    await memoryRequest(
+      `/kanobot/api/memories/${encodeURIComponent(id)}/purge`,
+      { method: 'POST', body: { confirm: true } },
+    )
+  } else {
+    return
+  }
+  await loadMemories()
+}
+
+function openMemoryDialog(memory = null) {
+  state.editingMemoryId = memory?.id ?? null
+  elements.dialogTitle.textContent = memory === null ? '新增记忆' : '编辑记忆'
+  elements.memoryText.value = memory?.text ?? ''
+  setSelectValue(elements.memoryKind, memory?.kind ?? 'preference')
+  setSelectValue(elements.memoryImportance, memory?.importance ?? 'normal')
+  setSelectValue(elements.memorySensitivity, memory?.sensitivity ?? 'normal')
+  elements.dialogError.hidden = true
+  elements.dialog.showModal()
+  elements.memoryText.focus()
+}
+
+function setSelectValue(select, value) {
+  if (!Array.from(select.options).some(option => option.value === value)) {
+    const option = document.createElement('option')
+    option.value = value
+    option.textContent = value
+    select.append(option)
+  }
+  select.value = value
+}
+
+function closeMemoryDialog() {
+  state.editingMemoryId = null
+  elements.dialog.close()
+}
+
+async function saveMemory() {
+  const text = elements.memoryText.value.trim()
+  if (text === '') {
+    showDialogError('记忆内容不能为空。')
+    return
+  }
+  const body = {
+    text,
+    kind: elements.memoryKind.value,
+    importance: elements.memoryImportance.value,
+    sensitivity: elements.memorySensitivity.value,
+  }
+  try {
+    if (state.editingMemoryId === null) {
+      await memoryRequest('/kanobot/api/memories', { method: 'POST', body })
+    } else {
+      await memoryRequest(
+        `/kanobot/api/memories/${encodeURIComponent(state.editingMemoryId)}`,
+        { method: 'PATCH', body },
+      )
+    }
+    closeMemoryDialog()
+    await loadMemories()
+  } catch (error) {
+    showDialogError(errorMessage(error))
+  }
+}
+
+async function memoryRequest(path, options = {}) {
+  const headers = { accept: 'application/json' }
+  const init = {
+    method: options.method ?? 'GET',
+    credentials: 'same-origin',
+    headers,
+  }
+  if (options.body !== undefined) {
+    headers['content-type'] = 'application/json'
+    init.body = JSON.stringify(options.body)
+  }
+  const response = await fetch(path, init)
+  if (!response.ok) {
+    throw new Error(await responseMessage(response, '记忆操作失败'))
+  }
+  return response.json()
+}
+
+function showMemoryError(message) {
+  elements.memoryError.textContent = message
+  elements.memoryError.hidden = false
+}
+
+function hideMemoryError() {
+  elements.memoryError.hidden = true
+}
+
+function showDialogError(message) {
+  elements.dialogError.textContent = message
+  elements.dialogError.hidden = false
+}
+
+function kindLabel(value) {
+  switch (value) {
+    case 'preference':
+      return '偏好'
+    case 'personal_fact':
+      return '事实'
+    case 'plan':
+      return '计划'
+    case 'shared_experience':
+      return '共同经历'
+    case 'relationship_event':
+      return '关系'
+    case 'note':
+      return '备注'
+    default:
+      return '记忆'
+  }
+}
+
+function importanceLabel(value) {
+  switch (value) {
+    case 'permanent':
+      return '永久'
+    case 'important':
+      return '重要'
+    default:
+      return '普通'
+  }
+}
+
+function sensitivityLabel(value) {
+  switch (value) {
+    case 'sensitive':
+      return '敏感'
+    case 'third_party':
+      return '第三人'
+    default:
+      return '正常'
+  }
+}
+
+function sourceLabel(value) {
+  switch (value) {
+    case 'user_stated':
+      return '你说过'
+    case 'rinko_inferred':
+      return '推断'
+    case 'external':
+      return '外部'
+    default:
+      return '来源未知'
   }
 }

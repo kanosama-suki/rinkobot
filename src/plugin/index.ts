@@ -17,6 +17,10 @@ import {
   MockChatModel,
   type ChatModel,
 } from '../core/chat/index.ts'
+import {
+  KanobotMemoryService,
+  MemoryExtractionService,
+} from '../core/memory/index.ts'
 import type { LoadedConfig } from '../core/config/index.ts'
 import {
   KanobotStorage,
@@ -77,15 +81,23 @@ export async function apply(
     storage = KanobotStorage.openFromConfig(loaded, dataDir)
     // 备份失败也应阻止“看似启动成功”：日备份是 M2 的数据安全边界。
     storage.maybeCreateDailyBackup()
+    const memory = new KanobotMemoryService(storage)
+    // 记忆抽取与聊天共用同一路由，但审计 purpose 独立，费用不会混在一起。
+    const memoryExtraction = new MemoryExtractionService(storage, memory, model, {
+      maxDailyCalls: loaded.system.resources.dailyModelCallLimit,
+    })
     const chat = new KanobotChatService(storage, model, {
       maxConcurrentModelCalls:
         loaded.system.resources.maxConcurrentModelCalls,
       dailyModelCallLimit: loaded.system.resources.dailyModelCallLimit,
+      memory,
+      memoryExtraction,
     })
     disposeChatSurface = registerChatSurface({
       webServer: ctx.webServer,
       connection: ctx.connection,
       chat,
+      memory,
       logger: ctx.logger,
     })
     lifecycle = createPluginLifecycle({
@@ -127,6 +139,8 @@ export async function apply(
         maxConcurrentModelCalls:
           loaded.system.resources.maxConcurrentModelCalls,
         dailyModelCallLimit: loaded.system.resources.dailyModelCallLimit,
+        memoryCount: memory.listViews('all').length,
+        memoryCandidateCount: memory.listViews('candidate').length,
         identity: loaded.identity.mode,
       })
     }

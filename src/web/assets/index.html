@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>Kanobot · M3.1 测试聊天</title>
+    <title>Kanobot · M3.3 聊天与记忆</title>
     <link rel="stylesheet" href="/kanobot/app.css">
   </head>
   <body>
@@ -13,8 +13,8 @@
         <div class="brand-block">
           <span class="brand-mark" aria-hidden="true">K</span>
           <div>
-            <p class="eyebrow">Kanobot / M3.1</p>
-            <h1>测试聊天</h1>
+            <p class="eyebrow">Kanobot / M3.3</p>
+            <h1>聊天与记忆</h1>
           </div>
         </div>
         <div class="topbar-actions">
@@ -44,69 +44,193 @@
             <button id="send-button" type="submit">发送</button>
           </form>
           <p class="composer-hint">
-            消息会保存到测试数据库；刷新或重启后仍可读取。
+            聊天会保存到测试数据库；相关长期记忆会作为只读参考进入模型上下文。
           </p>
         </section>
 
         <aside class="owner-panel" aria-label="所有者面板">
-          <section class="panel-card">
-            <p class="eyebrow">所有者面板</p>
-            <h2>运行状态</h2>
-            <dl class="status-list">
-              <div>
-                <dt>模型</dt>
-                <dd id="status-model">—</dd>
-              </div>
-              <div>
-                <dt>路由</dt>
-                <dd id="status-provider">—</dd>
-              </div>
-              <div>
-                <dt>今日调用</dt>
-                <dd id="status-calls">—</dd>
-              </div>
-              <div>
-                <dt>最近 Token</dt>
-                <dd id="status-tokens">—</dd>
-              </div>
-              <div>
-                <dt>缓存 / 推理</dt>
-                <dd id="status-cache">—</dd>
-              </div>
-              <div>
-                <dt>费用估算</dt>
-                <dd id="status-cost">—</dd>
-              </div>
-              <div>
-                <dt>最近调用</dt>
-                <dd id="status-last-call">—</dd>
-              </div>
-              <div>
-                <dt>消息数</dt>
-                <dd id="status-messages">—</dd>
-              </div>
-              <div>
-                <dt>事件序号</dt>
-                <dd id="status-events">—</dd>
-              </div>
-            </dl>
+          <div class="panel-tabs" role="tablist" aria-label="所有者面板页签">
+            <button
+              id="tab-button-status"
+              class="tab-button active"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              aria-controls="tab-status"
+              data-tab="status"
+            >状态</button>
+            <button
+              id="tab-button-memory"
+              class="tab-button"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="tab-memory"
+              data-tab="memory"
+            >记忆 <span id="memory-badge" class="tab-count">0</span></button>
+          </div>
+
+          <section id="tab-status" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-status">
+            <section class="panel-card">
+              <p class="eyebrow">所有者面板</p>
+              <h2>运行状态</h2>
+              <dl class="status-list">
+                <div>
+                  <dt>模型</dt>
+                  <dd id="status-model">—</dd>
+                </div>
+                <div>
+                  <dt>路由</dt>
+                  <dd id="status-provider">—</dd>
+                </div>
+                <div>
+                  <dt>今日调用</dt>
+                  <dd id="status-calls">—</dd>
+                </div>
+                <div>
+                  <dt>最近 Token</dt>
+                  <dd id="status-tokens">—</dd>
+                </div>
+                <div>
+                  <dt>缓存 / 推理</dt>
+                  <dd id="status-cache">—</dd>
+                </div>
+                <div>
+                  <dt>费用估算</dt>
+                  <dd id="status-cost">—</dd>
+                </div>
+                <div>
+                  <dt>最近调用</dt>
+                  <dd id="status-last-call">—</dd>
+                </div>
+                <div>
+                  <dt>消息数</dt>
+                  <dd id="status-messages">—</dd>
+                </div>
+                <div>
+                  <dt>事件序号</dt>
+                  <dd id="status-events">—</dd>
+                </div>
+              </dl>
+            </section>
+
+            <section class="panel-card subtle-card">
+              <p class="eyebrow">当前边界</p>
+              <h2>M3.3 记忆闭环</h2>
+              <ul class="boundary-list">
+                <li>复用 DSH 浏览器登录态</li>
+                <li>聊天前检索长期记忆并注入上下文</li>
+                <li>聊天后独立调用模型抽取候选</li>
+                <li>抽取调用单独审计 token 与费用</li>
+                <li>敏感和第三人内容先进入候选</li>
+                <li>正文只写入 <code>bodies</code></li>
+                <li>仍是占位人格；主动消息尚未接入</li>
+              </ul>
+            </section>
           </section>
 
-          <section class="panel-card subtle-card">
-            <p class="eyebrow">当前边界</p>
-            <h2>M3.1 模型网关</h2>
-            <ul class="boundary-list">
-              <li>复用 DSH 浏览器登录态</li>
-              <li>Magpie 本地路由 + 精确模型名</li>
-              <li>超时、有限重试和资源熔断</li>
-              <li>独立记录 token 与估算费用</li>
-              <li>正文只写入 <code>bodies</code></li>
-              <li>仍是占位人格；长期记忆尚未接入</li>
-            </ul>
+          <section
+            id="tab-memory"
+            class="tab-panel memory-panel"
+            role="tabpanel"
+            aria-labelledby="tab-button-memory"
+            hidden
+          >
+            <section class="panel-card memory-card">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">所有者操作</p>
+                  <h2>长期记忆</h2>
+                </div>
+                <button id="memory-add" class="small-button" type="button">新增</button>
+              </div>
+
+              <form id="memory-search" class="memory-search" role="search">
+                <label class="sr-only" for="memory-search-input">搜索记忆</label>
+                <input
+                  id="memory-search-input"
+                  type="search"
+                  maxlength="500"
+                  placeholder="搜咖啡、茶、仿真……"
+                  autocomplete="off"
+                >
+                <button type="submit">搜索</button>
+              </form>
+
+              <div class="memory-filters" role="group" aria-label="记忆筛选">
+                <button class="memory-filter active" type="button" data-status="active">
+                  长期 <span id="count-active">0</span>
+                </button>
+                <button class="memory-filter" type="button" data-status="candidate">
+                  候选 <span id="count-candidate">0</span>
+                </button>
+                <button class="memory-filter" type="button" data-status="trash">
+                  回收站 <span id="count-trash">0</span>
+                </button>
+              </div>
+
+              <p id="memory-error" class="inline-error" role="alert" hidden></p>
+              <div id="memory-list" class="memory-list"></div>
+              <p id="memory-empty" class="memory-empty">还没有记忆。</p>
+            </section>
           </section>
         </aside>
       </main>
     </div>
+
+    <dialog id="memory-dialog" class="memory-dialog">
+      <form id="memory-form">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">所有者确认</p>
+            <h2 id="memory-dialog-title">新增记忆</h2>
+          </div>
+          <button id="memory-dialog-close" class="icon-button" type="button" aria-label="关闭">×</button>
+        </div>
+
+        <label class="field">
+          <span>内容</span>
+          <textarea id="memory-text" rows="4" maxlength="4000" required></textarea>
+        </label>
+
+        <div class="field-row">
+          <label class="field">
+            <span>类型</span>
+            <select id="memory-kind">
+              <option value="preference">偏好</option>
+              <option value="personal_fact">个人事实</option>
+              <option value="plan">计划</option>
+              <option value="shared_experience">共同经历</option>
+              <option value="relationship_event">关系事件</option>
+              <option value="note">备注</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>重要程度</span>
+            <select id="memory-importance">
+              <option value="normal">普通</option>
+              <option value="important">重要</option>
+              <option value="permanent">永久</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>敏感级别</span>
+            <select id="memory-sensitivity">
+              <option value="normal">普通</option>
+              <option value="sensitive">敏感</option>
+              <option value="third_party">第三人</option>
+            </select>
+          </label>
+        </div>
+
+        <p id="memory-form-error" class="inline-error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button id="memory-cancel" class="secondary-button" type="button">取消</button>
+          <button id="memory-save" class="primary-button" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
     <script type="module" src="/kanobot/app.js"></script>
   </body>
 </html>

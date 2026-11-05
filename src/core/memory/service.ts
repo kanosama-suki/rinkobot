@@ -27,6 +27,8 @@ import {
   MemoryInputError,
   type CorrectMemoryInput,
   type MemorySearchOptions,
+  type MemoryView,
+  type OwnerMemoryInput,
   type RememberMemoryInput,
 } from './types.ts'
 
@@ -101,16 +103,19 @@ export class KanobotMemoryService {
 
   /**
    * 所有者纠正属于明确陈述，因此新记录直接 active，并原子替代旧记录。
-   * 敏感/第三人内容不能用 correction 绕过候选确认。
+   * 所有者纠正是显式确认；敏感/第三人内容也可以直接 active。
    */
   correct(previousId: string, input: CorrectMemoryInput): MemoryRecord {
+    const sensitivity = input.sensitivity === undefined
+      ? 'normal'
+      : requireSensitivity(input.sensitivity)
     const record = this.prepareRecord({
       text: input.text,
       quoteText: input.quoteText,
       kind: input.kind,
       source: 'user_stated',
       confidence: 1,
-      sensitivity: 'normal',
+      sensitivity,
       importance: input.importance ?? 'important',
       status: 'active',
       id: input.id,
@@ -119,8 +124,46 @@ export class KanobotMemoryService {
     return this.storage.replaceMemory(previousId, record)
   }
 
+  /**
+   * 所有者在面板里直接添加等同于“已确认”，因此敏感内容也可以直接
+   * active；模型抽取路径不能调用这个方法。
+   */
+  addByOwner(input: OwnerMemoryInput): MemoryRecord {
+    const sensitivity = input.sensitivity === undefined
+      ? 'normal'
+      : requireSensitivity(input.sensitivity)
+    const importance = input.importance === undefined
+      ? 'normal'
+      : requireImportance(input.importance)
+    const record = this.prepareRecord({
+      text: input.text,
+      quoteText: input.quoteText,
+      kind: input.kind,
+      source: 'user_stated',
+      confidence: 1,
+      sensitivity,
+      importance,
+      status: 'active',
+      id: input.id,
+      createdAt: input.createdAt,
+    })
+    return this.storage.putMemory(record)
+  }
+
   promote(id: string): MemoryRecord {
     return this.storage.promoteMemory(id)
+  }
+
+  trash(id: string): MemoryRecord {
+    return this.storage.trashMemory(id, this.clock.now().toISOString())
+  }
+
+  restore(id: string): MemoryRecord {
+    return this.storage.restoreMemory(id, this.clock.now().toISOString())
+  }
+
+  purge(id: string): void {
+    this.storage.purgeMemory(id, this.clock.now().toISOString())
   }
 
   search(
@@ -130,7 +173,107 @@ export class KanobotMemoryService {
     return this.storage.searchMemories(query, {
       limit: options.limit ?? 5,
       markRecalled: options.markRecalled ?? true,
+      matchMode: options.matchMode ?? 'all',
     })
+  }
+
+  /**
+   * 聊天上下文召回优先保证精确，再补一次宽松召回。
+   * 宽松模式只在精确结果不足时使用，避免常用字召回的记忆塞满提示词。
+   */
+  recall(query: string, limit = 5): MemorySearchResult[] {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 10) {
+      throw new MemoryInputError(
+        'invalid_limit',
+        'memory recall limit must be an integer between 1 and 10',
+      )
+    }
+    const bounded = Array.from(query).slice(0, 500).join('')
+    const precise = this.storage.searchMemories(bounded, {
+      limit,
+      markRecalled: false,
+      matchMode: 'all',
+    })
+    const broad = precise.length >= limit
+      ? []
+      : this.storage.searchMemories(bounded, {
+          limit,
+          markRecalled: false,
+          matchMode: 'any',
+        })
+
+    const merged: MemorySearchResult[] = []
+    const seen = new Set<string>()
+    for (const result of [...precise, ...broad]) {
+      if (seen.has(result.memory.id)) continue
+      seen.add(result.memory.id)
+      merged.push(result)
+      if (merged.length >= limit) break
+    }
+    if (merged.length > 0) {
+      this.storage.markMemoriesRecalled(merged.map(result => result.memory.id))
+    }
+    return merged
+  }
+
+  /**
+   * 抽取前做一次精确去重；个人规模的记忆量足够小，
+   * 这里宁可多读几条正文，也不让每轮聊天重复写入同一条事实。
+   */
+  hasEquivalentText(text: string): boolean {
+    const normalized = text.trim()
+    for (const memory of this.storage.listMemories()) {
+      if (memory.status !== 'active' && memory.status !== 'candidate') continue
+      const body = this.storage.getBody(memory.contentRef)
+      if (body !== null && body.content.trim() === normalized) return true
+    }
+    return false
+  }
+
+  view(memory: MemoryRecord): MemoryView {
+    const body = this.storage.getBody(memory.contentRef)
+    if (body === null) {
+      throw new MemoryInputError(
+        'content_missing',
+        `memory "${memory.id}" has no readable content body`,
+      )
+    }
+    const quote = memory.quoteRef === null
+      ? null
+      : this.storage.getBody(memory.quoteRef)
+    return {
+      ...memory,
+      text: body.content,
+      quoteText: quote?.content ?? null,
+    }
+  }
+
+  getView(id: string): MemoryView | null {
+    const memory = this.storage.getMemory(id)
+    return memory === null ? null : this.view(memory)
+  }
+
+  listViews(
+    status: 'active' | 'candidate' | 'trash' | 'all' = 'active',
+  ): MemoryView[] {
+    const records = status === 'trash'
+      ? this.storage.listMemories({ onlyDeleted: true })
+      : status === 'candidate'
+        ? this.storage.listMemories().filter(
+            memory => memory.status === 'candidate',
+          )
+        : status === 'all'
+          ? this.storage.listMemories().filter(
+              memory => memory.status !== 'replaced',
+            )
+          : this.storage.listMemories().filter(
+              memory => memory.status === 'active',
+            )
+    return records
+      .sort((left, right) =>
+        right.createdAt.localeCompare(left.createdAt) ||
+        right.id.localeCompare(left.id))
+      .map(memory => this.view(memory))
   }
 
   listCandidates(): MemoryRecord[] {

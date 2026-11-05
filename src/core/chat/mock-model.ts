@@ -24,6 +24,22 @@ export class MockChatModel implements ChatModel {
   async *stream(
     request: ChatModelRequest,
   ): AsyncIterable<ChatModelStreamEvent> {
+    // 记忆抽取使用同一模型的第二个调用；mock 明确返回空列表，
+    // 让本地演示看到“成功的无候选”，而不是每轮都报 JSON 解析失败。
+    if (request.systemPrompt.includes('记忆抽取器')) {
+      yield { type: 'text', text: '{"memories":[]}' }
+      yield {
+        type: 'result',
+        result: {
+          attempts: 1,
+          usage: null,
+          estimatedCost: null,
+          pricing: null,
+          responseId: null,
+        },
+      }
+      return
+    }
     const latest = [...request.messages]
       .reverse()
       .find(message => message.role === 'user')

@@ -13,6 +13,17 @@
 const WORD_SEGMENTER = new Intl.Segmenter('zh-CN', { granularity: 'word' })
 const MAX_SEARCH_QUERY_CHARS = 500
 const MAX_SEARCH_TOKENS = 20
+const STOPWORDS = new Set([
+  '我', '你', '您', '他', '她', '它', '我们', '你们', '他们',
+  '的', '了', '着', '过', '是', '在', '有', '和', '与', '也', '就',
+  '都', '很', '太', '不', '没', '没有', '吗', '呢', '吧', '啊', '呀',
+  '哦', '嗯', '这', '那', '这个', '那个', '什么', '怎么', '为什么',
+  '一个', '一下', '一些', '今天', '明天', '昨天', '现在', '然后',
+  '但是', '因为', '所以', '如果', '可以', '能', '会', '要', '想',
+  '说', '给', '对', '把', '被', '让', '从', '到',
+])
+
+export type MemorySearchMode = 'all' | 'any'
 
 export interface MemorySearchColumns {
   wordText: string
@@ -31,7 +42,10 @@ export function buildMemorySearchColumns(text: string): MemorySearchColumns {
   }
 }
 
-export function buildMemorySearchMatch(query: string): string | null {
+export function buildMemorySearchMatch(
+  query: string,
+  mode: MemorySearchMode = 'all',
+): string | null {
   if (typeof query !== 'string') {
     throw new TypeError('memory search query must be text')
   }
@@ -42,23 +56,40 @@ export function buildMemorySearchMatch(query: string): string | null {
     )
   }
 
-  const tokens: string[] = []
+  const wordTokens: string[] = []
   const seen = new Set<string>()
   for (const part of WORD_SEGMENTER.segment(trimmed)) {
     if (!part.isWordLike) continue
     const token = part.segment.trim()
     const key = token.toLowerCase()
-    if (token === '' || seen.has(key)) continue
+    if (token === '' || STOPWORDS.has(key) || seen.has(key)) continue
     seen.add(key)
-    tokens.push(token)
-    if (tokens.length >= MAX_SEARCH_TOKENS) break
+    wordTokens.push(token)
+    if (wordTokens.length >= MAX_SEARCH_TOKENS) break
   }
-  if (tokens.length === 0) return null
+  if (wordTokens.length === 0) return null
+
+  // 宽松召回时把中文词拆成单字，解决 Segmenter 把“想喝”整体成词、
+  // 而记忆里只存了“喝”时完全匹配不上的问题。精确模式不拆，避免过宽。
+  const tokens = [...wordTokens]
+  if (mode === 'any') {
+    for (const token of wordTokens) {
+      if (!/^[\p{Script=Han}]+$/u.test(token)) continue
+      for (const char of Array.from(token)) {
+        const key = char.toLowerCase()
+        if (STOPWORDS.has(key) || seen.has(key)) continue
+        seen.add(key)
+        tokens.push(char)
+        if (tokens.length >= MAX_SEARCH_TOKENS) break
+      }
+      if (tokens.length >= MAX_SEARCH_TOKENS) break
+    }
+  }
 
   return tokens
     .map(token => {
       const quoted = `"${token.replace(/"/g, '""')}"`
       return `(word_text:${quoted} OR char_text:${quoted})`
     })
-    .join(' AND ')
+    .join(mode === 'any' ? ' OR ' : ' AND ')
 }

@@ -55,6 +55,7 @@ export type {
   MemorySearchOptions,
   MemorySearchResult,
   ModelCallRecord,
+  ModelCallPurpose,
   ModelCallStatus,
   ModelPricingRecord,
   ModelUsageRecord,

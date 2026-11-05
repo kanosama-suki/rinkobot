@@ -60,6 +60,7 @@ export interface ChatMessageInput {
 }
 
 export type ModelCallStatus = 'running' | 'succeeded' | 'failed' | 'aborted'
+export type ModelCallPurpose = 'chat' | 'memory_extraction'
 
 export interface ModelUsageRecord {
   inputTokens: number
@@ -88,6 +89,7 @@ export interface ModelCallRecord {
   conversationId: string
   userMessageId: string
   assistantMessageId: string | null
+  purpose: ModelCallPurpose
   provider: string
   model: string
   startedAt: string
@@ -110,6 +112,7 @@ export interface ModelCallRecord {
 export interface BeginModelCallInput {
   conversationId: string
   userMessageId: string
+  purpose?: ModelCallPurpose
   provider: string
   model: string
   id?: string
@@ -180,6 +183,7 @@ export interface MemoryListOptions {
 export interface MemorySearchOptions {
   limit?: number
   markRecalled?: boolean
+  matchMode?: 'all' | 'any'
 }
 
 export interface MemorySearchResult {

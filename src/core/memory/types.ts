@@ -7,6 +7,7 @@
 
 import type {
   Importance,
+  MemoryRecord,
   MemorySource,
   Sensitivity,
 } from '../state/index.ts'
@@ -28,6 +29,17 @@ export interface CorrectMemoryInput {
   quoteText?: string | null
   kind: string
   importance?: Importance
+  sensitivity?: Sensitivity
+  id?: string
+  createdAt?: string
+}
+
+export interface OwnerMemoryInput {
+  text: string
+  quoteText?: string | null
+  kind: string
+  importance?: Importance
+  sensitivity?: Sensitivity
   id?: string
   createdAt?: string
 }
@@ -35,6 +47,29 @@ export interface CorrectMemoryInput {
 export interface MemorySearchOptions {
   limit?: number
   markRecalled?: boolean
+  matchMode?: 'all' | 'any'
+}
+
+/**
+ * 面板和 SSE 完成事件共用的可读视图。
+ * 正文从 bodies 读取，记录结构本身仍只保存引用。
+ */
+export interface MemoryView extends MemoryRecord {
+  text: string
+  quoteText: string | null
+}
+
+export interface MemoryExtractionSummary {
+  status: 'succeeded' | 'failed' | 'skipped' | 'aborted'
+  createdCount: number
+  candidateCount: number
+  skippedCount: number
+  errorCode: string | null
+}
+
+export interface MemoryExtractionResult {
+  summary: MemoryExtractionSummary
+  memories: MemoryView[]
 }
 
 export class MemoryInputError extends Error {

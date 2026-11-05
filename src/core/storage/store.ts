@@ -84,6 +84,7 @@ import type {
   MemorySearchOptions,
   MemorySearchResult,
   ModelCallRecord,
+  ModelCallPurpose,
   ModelPricingRecord,
   ModelUsageRecord,
   OutboxRecord,
@@ -512,6 +513,7 @@ export class KanobotStorage {
     )
     const provider = validateModelLabel(input.provider, 'modelCall.provider')
     const model = validateModelLabel(input.model, 'modelCall.model')
+    const purpose = validateModelCallPurpose(input.purpose ?? 'chat')
     const id = validateIdentifier(
       input.id ?? `model-call-${randomUUID()}`,
       'modelCall.id',
@@ -530,13 +532,22 @@ export class KanobotStorage {
       this.db.prepare(
         `INSERT INTO model_calls
           (id, conversation_id, user_message_id, assistant_message_id,
-           provider, model, started_at, completed_at, local_day, status,
+           purpose, provider, model, started_at, completed_at, local_day, status,
            attempts, input_tokens, output_tokens, cache_read_tokens,
            cache_write_tokens, reasoning_tokens, total_tokens, estimated_cost,
            pricing_json, response_id, error_code)
-         VALUES (?, ?, ?, NULL, ?, ?, ?, NULL, ?, 'running',
+         VALUES (?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?, 'running',
                  0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)`,
-      ).run(id, conversationId, userMessageId, provider, model, startedAt, localDay)
+      ).run(
+        id,
+        conversationId,
+        userMessageId,
+        purpose,
+        provider,
+        model,
+        startedAt,
+        localDay,
+      )
     } catch (error) {
       throw mapInsertError(error, 'model call', id)
     }
@@ -588,10 +599,20 @@ export class KanobotStorage {
             input.assistantMessageId,
             'modelCall.assistantMessageId',
           )
-    if (input.status === 'succeeded' && assistantMessageId === null) {
+    if (
+      input.status === 'succeeded' &&
+      current.purpose === 'chat' &&
+      assistantMessageId === null
+    ) {
       throw new StorageError(
         'RECORD_INVALID',
         'a succeeded model call must reference its assistant message',
+      )
+    }
+    if (current.purpose === 'memory_extraction' && assistantMessageId !== null) {
+      throw new StorageError(
+        'RECORD_INVALID',
+        'a memory extraction call does not produce an assistant message',
       )
     }
     if (assistantMessageId !== null) {
@@ -676,15 +697,27 @@ export class KanobotStorage {
     return row === undefined ? null : modelCallFromRow(row)
   }
 
-  latestModelCall(conversationId = 'main'): ModelCallRecord | null {
+  latestModelCall(
+    conversationId = 'main',
+    purpose?: ModelCallPurpose,
+  ): ModelCallRecord | null {
     this.assertOpen()
     const id = validateIdentifier(conversationId, 'modelCall.conversationId')
-    const row = this.db.prepare(
-      `SELECT * FROM model_calls
-       WHERE conversation_id = ?
-       ORDER BY started_at DESC, id DESC
-       LIMIT 1`,
-    ).get(id) as Record<string, unknown> | undefined
+    const row = purpose === undefined
+      ? this.db.prepare(
+          `SELECT * FROM model_calls
+           WHERE conversation_id = ?
+           ORDER BY started_at DESC, id DESC
+           LIMIT 1`,
+        ).get(id) as Record<string, unknown> | undefined
+      : this.db.prepare(
+          `SELECT * FROM model_calls
+           WHERE conversation_id = ? AND purpose = ?
+           ORDER BY started_at DESC, id DESC
+           LIMIT 1`,
+        ).get(id, validateModelCallPurpose(purpose)) as
+          | Record<string, unknown>
+          | undefined
     return row === undefined ? null : modelCallFromRow(row)
   }
 
@@ -813,7 +846,7 @@ export class KanobotStorage {
     }
     let match: string | null
     try {
-      match = buildMemorySearchMatch(query)
+      match = buildMemorySearchMatch(query, options.matchMode ?? 'all')
     } catch (error) {
       throw new StorageError(
         'RECORD_INVALID',
@@ -1899,6 +1932,7 @@ function modelCallFromRow(row: Record<string, unknown>): ModelCallRecord {
     typeof row.user_message_id !== 'string' ||
     (row.assistant_message_id !== null &&
       typeof row.assistant_message_id !== 'string') ||
+    typeof row.purpose !== 'string' ||
     typeof row.provider !== 'string' ||
     typeof row.model !== 'string' ||
     typeof row.started_at !== 'string' ||
@@ -1920,6 +1954,7 @@ function modelCallFromRow(row: Record<string, unknown>): ModelCallRecord {
   if (row.assistant_message_id !== null) {
     validateIdentifier(row.assistant_message_id, 'modelCall.assistantMessageId')
   }
+  const purpose = validateModelCallPurpose(row.purpose)
   validateModelLabel(row.provider, 'modelCall.provider')
   validateModelLabel(row.model, 'modelCall.model')
   validateInstant(row.started_at, 'modelCall.startedAt')
@@ -1944,9 +1979,19 @@ function modelCallFromRow(row: Record<string, unknown>): ModelCallRecord {
       ':model_calls:',
     )
   }
-  if (status === 'succeeded' && row.assistant_message_id === null) {
+  if (
+    status === 'succeeded' &&
+    purpose === 'chat' &&
+    row.assistant_message_id === null
+  ) {
     throw new StorageIntegrityError(
       'a succeeded model call must have an assistant message',
+      ':model_calls:',
+    )
+  }
+  if (purpose === 'memory_extraction' && row.assistant_message_id !== null) {
+    throw new StorageIntegrityError(
+      'a memory extraction call must not reference an assistant message',
       ':model_calls:',
     )
   }
@@ -1977,6 +2022,7 @@ function modelCallFromRow(row: Record<string, unknown>): ModelCallRecord {
     conversationId: row.conversation_id,
     userMessageId: row.user_message_id,
     assistantMessageId: row.assistant_message_id,
+    purpose,
     provider: row.provider,
     model: row.model,
     startedAt: row.started_at,
@@ -2141,6 +2187,13 @@ function validateModelLabel(value: unknown, field: string): string {
     /[\u0000-\u001f\u007f]/.test(value)
   ) {
     invalid(field, 'expected 1..200 printable characters')
+  }
+  return value
+}
+
+function validateModelCallPurpose(value: unknown): ModelCallPurpose {
+  if (value !== 'chat' && value !== 'memory_extraction') {
+    invalid('modelCall.purpose', 'expected "chat" or "memory_extraction"')
   }
   return value
 }

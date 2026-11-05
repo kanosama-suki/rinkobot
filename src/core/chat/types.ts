@@ -9,7 +9,9 @@
 import type {
   ChatMessageRecord,
   ChatRole,
+  ModelCallPurpose,
 } from '../storage/index.ts'
+import type { MemoryExtractionSummary } from '../memory/index.ts'
 
 export const CHAT_CONVERSATION_ID = 'main'
 export const CHAT_HISTORY_LIMIT = 40
@@ -87,6 +89,7 @@ export interface ConversationView {
 export interface ModelCallView {
   id: string
   status: 'running' | 'succeeded' | 'failed' | 'aborted'
+  purpose: ModelCallPurpose
   provider: string
   model: string
   startedAt: string
@@ -109,6 +112,7 @@ export type ChatStreamEvent =
       conversationId: string
       model: ChatModelIdentity
       userMessage: ChatMessageRecord
+      recalledMemoryCount: number
     }
   | {
       type: 'delta'
@@ -120,6 +124,7 @@ export type ChatStreamEvent =
       state: ChatStateView
       modelCall: ModelCallView
       modelUsage: ChatModelUsageView
+      memory: MemoryExtractionSummary | null
     }
 
 export class ChatInputError extends Error {
