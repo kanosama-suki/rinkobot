@@ -20,3 +20,13 @@ max_retries = 2
 # 并发和每日调用额度用于成本与资源熔断。
 max_concurrent_model_calls = 2
 daily_model_call_limit = 2000
+
+[storage]
+# 所有路径都相对于插件的数据目录，不能使用绝对路径或 ..
+# 墓碑库必须与主库分开，避免恢复旧主库备份时把删除记录一起回滚。
+database = "kanobot.sqlite"
+tombstones = "tombstones.sqlite"
+backup_dir = "backups"
+snapshot_every_events = 100
+snapshot_interval_hours = 1
+backup_retention = 7

@@ -1,8 +1,9 @@
 /**
  * Kanobot 的 DSH Host 入口。
  *
- * 这一层只负责宿主适配：定位配置、校验配置、创建生命周期和报告启动结果。
- * 陪伴核心不依赖 DSH；后续业务模块由这里装配，而不是直接耦合宿主 API。
+ * 这一层只负责宿主适配：定位配置、校验配置、打开存储、创建生命周期和
+ * 报告启动结果。任何配置或数据库错误都发生在注册定时器之前；存储关闭
+ * 与定时器清理统一由 disposer 收口。
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -10,17 +11,23 @@ import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 
 import { loadConfigFromDirectory } from '../core/config/index.ts'
+import {
+  KanobotStorage,
+  StorageError,
+} from '../core/storage/index.ts'
 import { createPluginLifecycle } from './lifecycle.ts'
 import { PLUGIN_NAME, PLUGIN_VERSION } from './version.ts'
 
 export interface KanobotPluginConfig {
   configDir?: string
+  dataDir?: string
   heartbeatMs?: number
   startupReportPath?: string
 }
 
 interface PluginLogger {
   info(message: string): void
+  error?(message: string): void
 }
 
 interface PluginContext {
@@ -35,33 +42,78 @@ export function apply(
   // 配置错误必须在注册定时器之前暴露，否则插件会留下半初始化资源。
   const configDir = resolveConfigDir(config)
   const loaded = loadConfigFromDirectory(configDir)
-  const lifecycle = createPluginLifecycle({ heartbeatMs: config.heartbeatMs })
+  const dataDir = resolveDataDir(config)
+  let storage: KanobotStorage | undefined
+  let lifecycle: ReturnType<typeof createPluginLifecycle> | undefined
 
-  if (config.startupReportPath !== undefined) {
-    // 外部启动脚本用这份报告区分“插件真的激活了”和“宿主进程还在运行”。
-    writeStartupReport(config.startupReportPath, {
-      plugin: PLUGIN_NAME,
-      version: PLUGIN_VERSION,
-      startedAt: lifecycle.startedAt,
-      pid: process.pid,
-      configDir,
-      provider: loaded.system.model.provider,
-      model: loaded.system.model.name,
-      identity: loaded.identity.mode,
+  try {
+    // 数据库损坏、schema 不兼容或路径逃逸都会在这里阻止插件继续激活。
+    storage = KanobotStorage.openFromConfig(loaded, dataDir)
+    // 备份失败也应阻止“看似启动成功”：日备份是 M2 的数据安全边界。
+    storage.maybeCreateDailyBackup()
+    lifecycle = createPluginLifecycle({
+      heartbeatMs: config.heartbeatMs,
+      onHeartbeat: () => {
+        if (storage === undefined) return
+        try {
+          storage.maybeCreateDailyBackup()
+        } catch (error) {
+          // 后台备份失败不能静默；记录后保留下一次重试机会。
+          const message = `[kanobot] daily backup failed: ${formatError(error)}`
+          if (ctx.logger.error) {
+            ctx.logger.error(message)
+          } else {
+            ctx.logger.info(message)
+          }
+        }
+      },
     })
+
+    if (config.startupReportPath !== undefined) {
+      // 外部启动脚本用这份报告区分“插件真的激活了”和“宿主进程还在运行”。
+      writeStartupReport(config.startupReportPath, {
+        plugin: PLUGIN_NAME,
+        version: PLUGIN_VERSION,
+        startedAt: lifecycle.startedAt,
+        pid: process.pid,
+        configDir,
+        dataDir: storage.dataDir,
+        database: storage.databasePath,
+        tombstones: storage.tombstonePath,
+        backupDir: storage.backupDir,
+        provider: loaded.system.model.provider,
+        model: loaded.system.model.name,
+        identity: loaded.identity.mode,
+      })
+    }
+
+    ctx.logger.info(
+      `[kanobot] ${PLUGIN_NAME} ${PLUGIN_VERSION} loaded; ` +
+        `config=${configDir}; database=${storage.databasePath}; ` +
+        `provider=${loaded.system.model.provider}; ` +
+        `model=${loaded.system.model.name}; identity=${loaded.identity.mode}`,
+    )
+
+    // DSH 卸载插件时会调用这个 disposer，所有需要释放的资源都从这里收口。
+    ctx.effect(() => () => {
+      lifecycle?.dispose()
+      storage?.close()
+      ctx.logger.info(`[kanobot] ${PLUGIN_NAME} ${PLUGIN_VERSION} unloaded`)
+    })
+  } catch (error) {
+    // 初始化过程中任何一步失败都不能留下定时器或打开的数据库。
+    lifecycle?.dispose()
+    try {
+      storage?.close()
+    } catch (closeError) {
+      throw new StorageError(
+        'IO',
+        `${formatError(error)}; additionally failed to close storage: ${formatError(closeError)}`,
+        { cause: error },
+      )
+    }
+    throw error
   }
-
-  ctx.logger.info(
-    `[kanobot] ${PLUGIN_NAME} ${PLUGIN_VERSION} loaded; ` +
-      `config=${configDir}; provider=${loaded.system.model.provider}; ` +
-      `model=${loaded.system.model.name}; identity=${loaded.identity.mode}`,
-  )
-
-  // DSH 卸载插件时会调用这个 disposer，所有需要释放的资源都从这里收口。
-  ctx.effect(() => () => {
-    lifecycle.dispose()
-    ctx.logger.info(`[kanobot] ${PLUGIN_NAME} ${PLUGIN_VERSION} unloaded`)
-  })
 }
 
 function resolveConfigDir(config: KanobotPluginConfig): string {
@@ -78,11 +130,28 @@ function resolveConfigDir(config: KanobotPluginConfig): string {
   return resolve(dshHome, 'kanobot', 'config')
 }
 
+function resolveDataDir(config: KanobotPluginConfig): string {
+  // 数据目录单独配置，默认与配置目录同级，但这些目录不进入源码仓库。
+  if (config.dataDir !== undefined) {
+    if (config.dataDir.trim() === '') {
+      throw new Error('dataDir must not be empty')
+    }
+    return resolve(config.dataDir)
+  }
+  const configuredHome = process.env.DSH_HOME?.trim()
+  const dshHome = configuredHome ? configuredHome : resolve(homedir(), '.dsh')
+  return resolve(dshHome, 'kanobot', 'data')
+}
+
 function writeStartupReport(path: string, report: Record<string, unknown>): void {
   // 首次启动时报告目录可能尚不存在，先创建父目录。
   const target = resolve(path)
   mkdirSync(dirname(target), { recursive: true })
   writeFileSync(target, `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 export { PLUGIN_NAME, PLUGIN_VERSION }

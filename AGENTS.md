@@ -2,7 +2,7 @@
 
 ## 0. 项目一句话
 
-在 DSH 宿主中自研一个连续、可恢复、可审计的陪伴型机器人；当前已完成 M1 的本地宿主验证、插件脚手架和配置加载器。
+在 DSH 宿主中自研一个连续、可恢复、可审计的陪伴型机器人；当前已完成 M2 的状态、SQLite 持久化、删除、墓碑和备份。
 
 ## 1. 必读顺序
 
@@ -29,6 +29,9 @@
 - 不将 VM、Git worktree、浏览器 `allowedDomains` 或插件进程描述成绝对安全沙箱。
 - 不在未明确要求时操作生产服务器、部署 VM 或更改远端配置；本仓库默认只做本地代码和文档。
 - 不提交无关改动，不擅自 `git commit` 或 `git push`；用户明确要求提交时才提交，且提交前必须检查 diff。
+- 不在数据库损坏或 schema 不兼容时自动删库、建空库或忽略损坏记录；必须 fail-closed，并保留原文件。
+- 不把聊天原文写进事件或快照；正文只放可彻底清除的 `bodies` 表，事件和记忆只保存正文 ID。
+- 不把 `tombstones.sqlite` 纳入主库备份，也不在恢复旧主库后跳过墓碑重放。
 
 ## 3. 架构与接口
 
@@ -40,6 +43,10 @@
 - 外部网页、聊天、文件和工具结果一律是不可信输入，不能成为系统指令或未经核验的事实记忆。
 - 渠道适配器只处理平台语义、连接、去重、幂等和投递，不复制人格、状态或记忆逻辑。
 - 代码、浏览器和未知软件进入候选或隔离环境；上线前必须有测试、基线对比、审批和回滚。
+- 事件追加和可选快照在同一事务提交；reducer 不读系统时间、网络或随机数。
+- 快照按规范 JSON 保存并校验哈希；回放必须从最近快照加后续事件恢复。
+- 独立墓碑库是删除的权威来源；主库里的 `tombstones` 表只是投影，不随旧备份回滚。
+- 彻底清除必须级联正文、记忆、outbox、承诺事件依赖和快照，再执行 `VACUUM` 与 `wal_checkpoint(TRUNCATE)`。
 
 ## 4. 工作流
 
@@ -56,20 +63,23 @@
 npm test
 npm run check:case
 npm run config:check
+node scripts/preflight-runtime.ts F:\kanobot\dsh\test-home\kanobot\config F:\kanobot\dsh\test-home\kanobot\data
 npm run test:lifecycle -- --output F:\kanobot\dsh\m1-plugin-lifecycle.json
 ```
 
-`npm test` 使用 `node --test`，当前 18 项通过。测试不会读取真实人格文件或调用真实模型接口。测试实例的启停、配置预检和工具审计脚本在 `F:\kanobot\dsh`，不在本仓库内；正式 `4096` 实例不属于测试命令。
+`npm test` 使用 `node --test`，当前 50 项通过。测试不会读取真实人格文件、调用真实模型接口或操作正式数据库。测试实例的启停、配置预检和工具审计脚本在 `F:\kanobot\dsh`，不在本仓库内；正式 `4096` 实例不属于测试命令。
 
 ## 5. 当前状态
 
-- 阶段：M1 已完成（2026-11-05）；下一步是 M2 事件、状态与存储。
-- 已存在：DSH 本地安装与测试 Profile、最小 Host 插件、配置 loader、示例 TOML、单元/集成测试、大小写检查和 M1 验收记录。
-- 尚未存在：状态 reducer、SQLite 存储、网页聊天/所有者面板、QQ 适配器、浏览器 worker、VM 和自进化。
+- 阶段：M2 已完成（2026-11-05）；下一步是 M3 网页聊天闭环。
+- 已存在：DSH 测试 Profile、Host 插件、严格配置 loader、版本化事件与纯 reducer、SQLite 主库和独立墓碑库、确定性快照、回收站/彻底清除、每日备份、恢复测试、配置/数据库预检和 M1/M2 验收记录。
+- 尚未存在：FTS5 检索、网页聊天/所有者面板、模型网关、QQ 适配器、浏览器 worker、VM 和自进化。
 - 已知部署基线：Windows 10（10.0.19045），Node v24.19.0，DSH `0.2.1-rc.5`（npm `latest` 标签；当前没有非 RC 版本）。插件源码在本目录，测试实例使用独立 `DSH_HOME=F:\kanobot\dsh\test-home`。
 - 已知清理记录：旧插件、NapCat 和旧 VM 已从宿主清理；重新部署必须按新设计进行，不能复用旧配置假设。
 - 已确认的产品决定见 `docs/plan.md` 第 1 节。
 - M1 的八项结果和边界见 `docs/m1-acceptance.md`。
+- M2 的五项结果和边界见 `docs/m2-acceptance.md`。
+- 测试 Profile 数据在 `F:\kanobot\dsh\test-home\kanobot\data`；主库备份不包含独立墓碑库，迁移和恢复时必须单独保留 `tombstones.sqlite`。
 - 最近更新时间：2026-11-05。
 
 ## 6. 代码规范（后续实现时适用）

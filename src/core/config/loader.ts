@@ -1,10 +1,11 @@
 /**
- * system、identity、policy 的严格配置加载器。
+ * M2 配置的严格加载器。
  *
  * 设计原则：
  * - 未知字段、错误类型、越界值和非法路径都拒绝，不做静默兜底；
  * - 先收集所有文件和字段的问题，再统一抛出，避免每次只暴露一个错误；
- * - identity 的校验依赖 system.environment，因此跨文件规则在这里收口。
+ * - identity 的校验依赖 system.environment，因此跨文件规则在这里收口；
+ * - M2 新增文件是必需文件，缺失时不能悄悄用旧的一文件配置继续启动。
  */
 
 import { readFileSync, statSync } from 'node:fs'
@@ -15,7 +16,9 @@ import { ConfigError, ConfigFieldError } from './errors.ts'
 import type { ConfigIssue } from './errors.ts'
 import type {
   IdentityConfig,
+  LifeStateConfig,
   LoadedConfig,
+  MemoryConfig,
   PolicyConfig,
   SystemConfig,
 } from './types.ts'
@@ -31,6 +34,7 @@ import {
   requireTimezone,
   requiredBoolean,
   requiredInteger,
+  requiredNumber,
   requiredString,
   requiredStringArray,
   requiredTable,
@@ -41,6 +45,8 @@ import { CONFIG_SCHEMA_VERSION } from './types.ts'
 const CONFIG_FILES = {
   system: 'system.toml',
   identity: 'identity.toml',
+  lifeState: 'life-state.toml',
+  memory: 'memory.toml',
   policy: 'policy.toml',
 } as const
 
@@ -49,6 +55,8 @@ type ConfigKind = keyof typeof CONFIG_FILES
 interface ParsedFiles {
   system?: TomlTable
   identity?: TomlTable
+  lifeState?: TomlTable
+  memory?: TomlTable
   policy?: TomlTable
 }
 
@@ -108,6 +116,27 @@ export function loadConfigFromDirectory(configDir: string): LoadedConfig {
     }
   }
 
+  let lifeState: LifeStateConfig | undefined
+  if (parsed.lifeState) {
+    try {
+      lifeState = validateLifeState(
+        parsed.lifeState,
+        join(configDir, CONFIG_FILES.lifeState),
+      )
+    } catch (error) {
+      issues.push(toIssue(error, join(configDir, CONFIG_FILES.lifeState)))
+    }
+  }
+
+  let memory: MemoryConfig | undefined
+  if (parsed.memory) {
+    try {
+      memory = validateMemory(parsed.memory, join(configDir, CONFIG_FILES.memory))
+    } catch (error) {
+      issues.push(toIssue(error, join(configDir, CONFIG_FILES.memory)))
+    }
+  }
+
   let policy: PolicyConfig | undefined
   if (parsed.policy) {
     try {
@@ -118,11 +147,11 @@ export function loadConfigFromDirectory(configDir: string): LoadedConfig {
   }
 
   // 缺失文件和字段错误都会走这里；错误列表为空时才算加载成功。
-  if (issues.length > 0 || !system || !identity || !policy) {
+  if (issues.length > 0 || !system || !identity || !lifeState || !memory || !policy) {
     throw new ConfigError(issues)
   }
 
-  return { system, identity, policy }
+  return { system, identity, lifeState, memory, policy }
 }
 
 function readConfigFile(file: string): { table?: TomlTable; issue?: ConfigIssue } {
@@ -157,7 +186,11 @@ function readConfigFile(file: string): { table?: TomlTable; issue?: ConfigIssue 
 }
 
 function validateSystem(table: TomlTable, file: string): SystemConfig {
-  knownKeys(table, ['schema_version', 'environment', 'time', 'model', 'resources'], '')
+  knownKeys(
+    table,
+    ['schema_version', 'environment', 'time', 'model', 'resources', 'storage'],
+    '',
+  )
   requireSchemaVersion(table, CONFIG_SCHEMA_VERSION)
 
   const environment = requiredString(table, 'environment', 'environment', 1, 32)
@@ -234,6 +267,42 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
     1_000_000,
   )
 
+  const storage = requiredTable(table, 'storage', 'storage')
+  knownKeys(
+    storage,
+    [
+      'database',
+      'tombstones',
+      'backup_dir',
+      'snapshot_every_events',
+      'snapshot_interval_hours',
+      'backup_retention',
+    ],
+    'storage',
+  )
+  const database = requiredString(storage, 'database', 'storage.database', 1, 512)
+  const tombstones = requiredString(
+    storage,
+    'tombstones',
+    'storage.tombstones',
+    1,
+    512,
+  )
+  const backupDir = requiredString(
+    storage,
+    'backup_dir',
+    'storage.backup_dir',
+    1,
+    512,
+  )
+  requireSafeRelativePath(database, 'storage.database')
+  requireSafeRelativePath(tombstones, 'storage.tombstones')
+  requireSafeRelativePath(backupDir, 'storage.backup_dir')
+  // 主库和独立墓碑库必须分开；否则从旧主库备份恢复时会把墓碑一起回滚。
+  if (normalizePathForComparison(database) === normalizePathForComparison(tombstones)) {
+    fail('storage.tombstones', 'tombstone database must differ from the main database')
+  }
+
   return {
     schemaVersion: CONFIG_SCHEMA_VERSION,
     environment,
@@ -252,7 +321,197 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
       maxConcurrentModelCalls,
       dailyModelCallLimit,
     },
+    storage: {
+      database,
+      tombstones,
+      backupDir,
+      snapshotEveryEvents: requiredInteger(
+        storage,
+        'snapshot_every_events',
+        'storage.snapshot_every_events',
+        1,
+        1_000_000,
+      ),
+      snapshotIntervalHours: requiredInteger(
+        storage,
+        'snapshot_interval_hours',
+        'storage.snapshot_interval_hours',
+        1,
+        720,
+      ),
+      backupRetention: requiredInteger(
+        storage,
+        'backup_retention',
+        'storage.backup_retention',
+        1,
+        30,
+      ),
+    },
   }
+}
+
+function validateLifeState(table: TomlTable, file: string): LifeStateConfig {
+  knownKeys(
+    table,
+    ['schema_version', 'initial', 'decay_per_hour', 'limits'],
+    '',
+  )
+  requireSchemaVersion(table, CONFIG_SCHEMA_VERSION)
+
+  const initial = requiredTable(table, 'initial', 'initial')
+  knownKeys(
+    initial,
+    ['valence', 'arousal', 'energy', 'social_battery', 'closeness'],
+    'initial',
+  )
+  const initialValence = requiredNumber(initial, 'valence', 'initial.valence', -1, 1)
+  const initialArousal = requiredNumber(initial, 'arousal', 'initial.arousal', 0, 1)
+  const initialEnergy = requiredNumber(initial, 'energy', 'initial.energy', 0, 1)
+  const initialSocialBattery = requiredNumber(
+    initial,
+    'social_battery',
+    'initial.social_battery',
+    0,
+    1,
+  )
+  const initialCloseness = requiredNumber(
+    initial,
+    'closeness',
+    'initial.closeness',
+    0,
+    1,
+  )
+
+  const decay = requiredTable(table, 'decay_per_hour', 'decay_per_hour')
+  knownKeys(
+    decay,
+    [
+      'valence',
+      'arousal',
+      'energy_awake',
+      'energy_asleep_recovery',
+      'social_battery_awake',
+      'social_battery_asleep_recovery',
+    ],
+    'decay_per_hour',
+  )
+  const decayValence = requiredNumber(
+    decay,
+    'valence',
+    'decay_per_hour.valence',
+    0,
+    10,
+  )
+  const decayArousal = requiredNumber(
+    decay,
+    'arousal',
+    'decay_per_hour.arousal',
+    0,
+    10,
+  )
+  const energyAwake = requiredNumber(
+    decay,
+    'energy_awake',
+    'decay_per_hour.energy_awake',
+    0,
+    10,
+  )
+  const energyAsleepRecovery = requiredNumber(
+    decay,
+    'energy_asleep_recovery',
+    'decay_per_hour.energy_asleep_recovery',
+    0,
+    10,
+  )
+  const socialBatteryAwake = requiredNumber(
+    decay,
+    'social_battery_awake',
+    'decay_per_hour.social_battery_awake',
+    0,
+    10,
+  )
+  const socialBatteryAsleepRecovery = requiredNumber(
+    decay,
+    'social_battery_asleep_recovery',
+    'decay_per_hour.social_battery_asleep_recovery',
+    0,
+    10,
+  )
+
+  const limits = requiredTable(table, 'limits', 'limits')
+  knownKeys(
+    limits,
+    ['max_relationship_delta_per_event', 'max_commitments'],
+    'limits',
+  )
+  const maxRelationshipDelta = requiredNumber(
+    limits,
+    'max_relationship_delta_per_event',
+    'limits.max_relationship_delta_per_event',
+    0.001,
+    0.25,
+  )
+  const maxCommitments = requiredInteger(
+    limits,
+    'max_commitments',
+    'limits.max_commitments',
+    1,
+    256,
+  )
+
+  return {
+    schemaVersion: CONFIG_SCHEMA_VERSION,
+    initial: {
+      valence: initialValence,
+      arousal: initialArousal,
+      energy: initialEnergy,
+      socialBattery: initialSocialBattery,
+      closeness: initialCloseness,
+    },
+    decayPerHour: {
+      valence: decayValence,
+      arousal: decayArousal,
+      energyAwake,
+      energyAsleepRecovery,
+      socialBatteryAwake,
+      socialBatteryAsleepRecovery,
+    },
+    limits: {
+      maxRelationshipDeltaPerEvent: maxRelationshipDelta,
+      maxCommitments,
+    },
+  }
+}
+
+function validateMemory(table: TomlTable, file: string): MemoryConfig {
+  knownKeys(table, ['schema_version', 'trash'], '')
+  requireSchemaVersion(table, CONFIG_SCHEMA_VERSION)
+
+  const trash = requiredTable(table, 'trash', 'trash')
+  knownKeys(trash, ['retention_days'], 'trash')
+
+  return {
+    schemaVersion: CONFIG_SCHEMA_VERSION,
+    trash: {
+      retentionDays: requiredInteger(
+        trash,
+        'retention_days',
+        'trash.retention_days',
+        1,
+        3650,
+      ),
+    },
+  }
+}
+
+function normalizePathForComparison(value: string): string {
+  // 只用于发现明显的重复路径；真正的目录边界检查在存储层用 dataDir 做。
+  const normalized = value
+    .replace(/\\/g, '/')
+    .replace(/\/+/g, '/')
+    .replace(/^\.\//, '')
+  // Windows 路径大小写不敏感；Linux 迁移后不能把两个合法路径误判成同一个。
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
 }
 
 function validateIdentity(

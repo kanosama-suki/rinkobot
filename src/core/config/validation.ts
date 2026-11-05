@@ -76,6 +76,23 @@ export function requiredInteger(
   return value
 }
 
+export function requiredNumber(
+  parent: TomlTable,
+  key: string,
+  field: string,
+  min: number,
+  max: number,
+): number {
+  const value = parent[key]
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    fail(field, 'expected a finite number')
+  }
+  if (value < min || value > max) {
+    fail(field, `expected ${min}..${max}, got ${value}`)
+  }
+  return value
+}
+
 export function requiredBoolean(
   parent: TomlTable,
   key: string,

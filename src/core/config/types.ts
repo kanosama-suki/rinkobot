@@ -1,8 +1,9 @@
 /**
- * system、identity、policy 三个配置文件的运行时类型。
+ * M2 必需配置文件的运行时类型。
  *
  * TOML 的 snake_case 字段由 loader 转成 camelCase；进入这些类型的值
- * 必须已经通过 schema、范围和跨文件校验。
+ * 必须已经通过 schema、范围和跨文件校验。存储路径仍是相对数据目录的
+ * 文本路径，绝对路径解析和目录逃逸检查由存储层在拿到 dataDir 后再做。
  */
 
 export const CONFIG_SCHEMA_VERSION = 1
@@ -26,6 +27,14 @@ export interface SystemConfig {
   resources: {
     maxConcurrentModelCalls: number
     dailyModelCallLimit: number
+  }
+  storage: {
+    database: string
+    tombstones: string
+    backupDir: string
+    snapshotEveryEvents: number
+    snapshotIntervalHours: number
+    backupRetention: number
   }
 }
 
@@ -60,8 +69,40 @@ export interface PolicyConfig {
   }
 }
 
+export interface LifeStateConfig {
+  schemaVersion: 1
+  initial: {
+    valence: number
+    arousal: number
+    energy: number
+    socialBattery: number
+    closeness: number
+  }
+  decayPerHour: {
+    valence: number
+    arousal: number
+    energyAwake: number
+    energyAsleepRecovery: number
+    socialBatteryAwake: number
+    socialBatteryAsleepRecovery: number
+  }
+  limits: {
+    maxRelationshipDeltaPerEvent: number
+    maxCommitments: number
+  }
+}
+
+export interface MemoryConfig {
+  schemaVersion: 1
+  trash: {
+    retentionDays: number
+  }
+}
+
 export interface LoadedConfig {
   system: SystemConfig
   identity: IdentityConfig
+  lifeState: LifeStateConfig
+  memory: MemoryConfig
   policy: PolicyConfig
 }

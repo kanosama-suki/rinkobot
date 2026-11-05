@@ -11,7 +11,9 @@ export type {
   Environment,
   IdentityConfig,
   IdentityMode,
+  LifeStateConfig,
   LoadedConfig,
+  MemoryConfig,
   PolicyConfig,
   SystemConfig,
 } from './types.ts'

@@ -1,6 +1,6 @@
 {
   "name": "@kanobot/dsh-plugin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Kanobot companion runtime for the DSH host",
   "type": "module",
@@ -22,6 +22,7 @@
     "check:case": "node scripts/check-import-case.ts",
     "check": "npm run check:case && npm test",
     "config:check": "node scripts/validate-config.ts config/examples",
+    "preflight": "node scripts/preflight-runtime.ts",
     "test:lifecycle": "node scripts/m1-lifecycle.ts"
   },
   "dependencies": {

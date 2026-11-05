@@ -6,7 +6,12 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -64,26 +69,35 @@ function timeoutCount(): number {
 
 test('the real plugin apply/dispose cycle leaves no timer behind', async () => {
   const baseline = timeoutCount()
+  const dataDir = mkdtempSync(join(tmpdir(), 'kanobot-plugin-data-'))
 
-  for (let cycle = 0; cycle < 10; cycle += 1) {
-    const fake = createFakeContext()
-    apply(fake.ctx, { configDir: examplesDir, heartbeatMs: 60_000 })
+  try {
+    for (let cycle = 0; cycle < 10; cycle += 1) {
+      const fake = createFakeContext()
+      apply(fake.ctx, {
+        configDir: examplesDir,
+        dataDir,
+        heartbeatMs: 60_000,
+      })
 
-    assert.ok(
-      fake.logs.some(
-        line =>
-          line.includes(PLUGIN_NAME) &&
-          line.includes(PLUGIN_VERSION) &&
-          line.includes('loaded'),
-      ),
-    )
-    assert.ok(timeoutCount() >= baseline + 1)
+      assert.ok(
+        fake.logs.some(
+          line =>
+            line.includes(PLUGIN_NAME) &&
+            line.includes(PLUGIN_VERSION) &&
+            line.includes('loaded'),
+        ),
+      )
+      assert.ok(timeoutCount() >= baseline + 1)
 
-    fake.dispose()
-    await new Promise<void>(resolve => setImmediate(resolve))
+      fake.dispose()
+      await new Promise<void>(resolve => setImmediate(resolve))
 
-    assert.equal(timeoutCount(), baseline)
-    assert.ok(fake.logs.some(line => line.includes('unloaded')))
+      assert.equal(timeoutCount(), baseline)
+      assert.ok(fake.logs.some(line => line.includes('unloaded')))
+    }
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
   }
 })
 
@@ -107,11 +121,13 @@ test('plugin configuration failures happen before a timer is registered', () => 
 test('an explicit startup report proves successful activation', () => {
   const dir = mkdtempSync(join(tmpdir(), 'kanobot-startup-report-'))
   const reportPath = join(dir, 'startup.json')
+  const dataDir = join(dir, 'data')
   const fake = createFakeContext()
 
   try {
     apply(fake.ctx, {
       configDir: examplesDir,
+      dataDir,
       heartbeatMs: 60_000,
       startupReportPath: reportPath,
     })
@@ -127,7 +143,36 @@ test('an explicit startup report proves successful activation', () => {
     assert.equal(report.version, PLUGIN_VERSION)
     assert.equal(report.provider, 'deepseek-official')
     assert.equal(report.identity, 'placeholder')
+    assert.equal(report.database, join(dataDir, 'kanobot.sqlite'))
+    assert.equal(report.tombstones, join(dataDir, 'tombstones.sqlite'))
   } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a corrupt existing database blocks plugin activation before a timer exists', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kanobot-corrupt-data-'))
+  const databasePath = join(dir, 'kanobot.sqlite')
+  const corrupt = Buffer.alloc(1024, 0x41)
+  writeFileSync(databasePath, corrupt)
+  const baseline = timeoutCount()
+  const fake = createFakeContext()
+
+  try {
+    assert.throws(
+      () =>
+        apply(fake.ctx, {
+          configDir: examplesDir,
+          dataDir: dir,
+          heartbeatMs: 60_000,
+        }),
+      /invalid SQLite file header/,
+    )
+    assert.equal(timeoutCount(), baseline)
+    // fail-closed 的关键是原文件不被删除，更不能被自动换成空库。
+    assert.deepEqual(readFileSync(databasePath), corrupt)
+  } finally {
+    fake.dispose()
     rmSync(dir, { recursive: true, force: true })
   }
 })

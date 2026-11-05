@@ -1,0 +1,5 @@
+# 记忆删除先进入回收站；到期自动彻底清除要等主动调度功能实现。
+schema_version = 1
+
+[trash]
+retention_days = 30

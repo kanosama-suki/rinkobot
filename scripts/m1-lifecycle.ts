@@ -5,8 +5,14 @@
  * 对比加载前后的活动资源，确认定时器没有泄漏。
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { apply, PLUGIN_NAME, PLUGIN_VERSION } from '../src/plugin/index.ts'
@@ -63,15 +69,20 @@ async function main(): Promise<void> {
   const before = resources()
   let firstCycleDuring: string[] = []
   let logs: string[] = []
+  const dataDir = mkdtempSync(join(tmpdir(), 'kanobot-m1-lifecycle-'))
 
-  for (let cycle = 0; cycle < 10; cycle += 1) {
-    const fake = createFakeContext()
-    apply(fake.ctx, { configDir, heartbeatMs: 60_000 })
-    if (cycle === 0) firstCycleDuring = resources()
-    fake.dispose()
-    // 等一轮事件循环，让 clearInterval 后的资源句柄状态稳定下来。
-    await new Promise<void>(resolveTick => setImmediate(resolveTick))
-    if (cycle === 9) logs = fake.logs
+  try {
+    for (let cycle = 0; cycle < 10; cycle += 1) {
+      const fake = createFakeContext()
+      apply(fake.ctx, { configDir, dataDir, heartbeatMs: 60_000 })
+      if (cycle === 0) firstCycleDuring = resources()
+      fake.dispose()
+      // 等一轮事件循环，让 clearInterval 后的资源句柄状态稳定下来。
+      await new Promise<void>(resolveTick => setImmediate(resolveTick))
+      if (cycle === 9) logs = fake.logs
+    }
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
   }
 
   await new Promise<void>(resolveTick => setImmediate(resolveTick))
@@ -85,6 +96,7 @@ async function main(): Promise<void> {
     version: PLUGIN_VERSION,
     cycles: 10,
     configDir,
+    dataDir,
     generatedAt: new Date().toISOString(),
     before,
     firstCycleDuring,

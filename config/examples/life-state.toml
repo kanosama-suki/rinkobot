@@ -1,0 +1,23 @@
+# 第一版虚拟生活状态的初值、衰减速率和边界。
+# 数值是模拟状态，不是真实的生理或医疗数据。
+schema_version = 1
+
+[initial]
+valence = 0.1
+arousal = 0.3
+energy = 0.7
+social_battery = 0.7
+closeness = 0.6
+
+[decay_per_hour]
+valence = 0.08
+arousal = 0.15
+energy_awake = 0.02
+energy_asleep_recovery = 0.08
+social_battery_awake = 0.03
+social_battery_asleep_recovery = 0.05
+
+[limits]
+# 关系变化按长期互动设计，单次事件不能靠一个数值跳变关系。
+max_relationship_delta_per_event = 0.05
+max_commitments = 32
