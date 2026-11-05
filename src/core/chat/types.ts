@@ -13,7 +13,7 @@ import type {
 } from '../storage/index.ts'
 import type { MemoryExtractionSummary } from '../memory/index.ts'
 import type { VisionModelIdentity } from '../vision/types.ts'
-import type { StyleCheckResult } from './style.ts'
+import type { StyleCheckResult, StyleViolationCode } from './style.ts'
 
 export const CHAT_CONVERSATION_ID = 'main'
 export const CHAT_HISTORY_LIMIT = 40
@@ -145,6 +145,17 @@ export interface ChatEnvelopeView {
   commitmentsSkipped: number
 }
 
+/**
+ * 第一版回复因风格检查被丢弃时，保留足够信息供页面和重启后的审计解释，
+ * 不携带第一版正文。
+ */
+export interface ChatStyleRetryView {
+  attempted: boolean
+  reason: 'style_check' | 'daily_model_call_limit' | null
+  initialViolationCodes: StyleViolationCode[]
+  discardedModelCall: ModelCallView | null
+}
+
 export type ChatStreamEvent =
   | {
       type: 'ready'
@@ -164,6 +175,13 @@ export type ChatStreamEvent =
       text: string
     }
   | {
+      // 页面可以先清空临时气泡，再继续逐字显示第二版；数据库只保存最终版。
+      type: 'retry'
+      attempt: 2
+      reason: 'style_check'
+      initialViolationCodes: StyleViolationCode[]
+    }
+  | {
       type: 'done'
       message: ChatMessageRecord
       state: ChatStateView
@@ -171,6 +189,7 @@ export type ChatStreamEvent =
       modelUsage: ChatModelUsageView
       memory: MemoryExtractionSummary | null
       styleCheck: StyleCheckResult
+      styleRetry: ChatStyleRetryView
       envelope: ChatEnvelopeView
     }
 

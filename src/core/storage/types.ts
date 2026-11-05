@@ -139,6 +139,10 @@ export interface ReplyStyleCheckRecord {
   schemaVersion: 1
   ok: boolean
   violationCodes: string[]
+  // 一次自动重写最多发生一次；初始违规代码单独保留，便于在最终回复
+  // 通过检查后仍能审计第一版为什么被丢弃。
+  retryCount: 0 | 1
+  initialViolationCodes: string[]
   checkedAt: string
 }
 
@@ -146,8 +150,27 @@ export interface PutReplyStyleCheckInput {
   assistantMessageId: string
   ok: boolean
   violationCodes: string[]
+  retryCount?: 0 | 1
+  initialViolationCodes?: string[]
   checkedAt?: string
   id?: string
+}
+
+/**
+ * 统一审计使用的聊天回合摘要。
+ *
+ * 只包含消息/调用元数据，不读取 bodies，因此不会把正文或提示词带进
+ * 审计接口。
+ */
+export interface ChatTurnAuditRecord {
+  assistantMessageId: string
+  conversationId: string
+  createdAt: string
+  modelCallCount: number
+  succeededModelCallCount: number
+  styleOk: boolean | null
+  violationCodes: string[]
+  retryCount: number | null
 }
 
 export type OwnerAuditAction =

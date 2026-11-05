@@ -761,6 +761,37 @@ h2 {
   gap: 9px;
 }
 
+.audit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.audit-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.audit-filter select {
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+  font-size: 0.76rem;
+}
+
+.audit-note {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+
 .audit-item {
   padding: 10px 11px;
   border: 1px solid var(--line);
@@ -789,6 +820,22 @@ h2 {
 .chip.audit-failed {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+.chip.audit-aborted,
+.chip.audit-running {
+  color: #9a6a1e;
+  border-color: color-mix(in srgb, #9a6a1e 35%, transparent);
+}
+
+.chip.audit-source-model,
+.chip.audit-source-style {
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.message.retrying {
+  border-style: dashed;
 }
 
 .audit-target {

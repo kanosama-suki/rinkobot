@@ -1,6 +1,6 @@
 # 项目文件结构
 
-以下路径相对于项目根目录 `a/`。当前仓库处于 M3.7 可配置视觉输入完成、完整 M3 进行中的状态：已有 DSH Host 插件、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、复用 DSH 登录态的网页聊天和 SSE、连接本地 Magpie 的精确模型网关和调用审计、长期记忆候选规则、纠正和 FTS5 双列中文检索、聊天前记忆召回注入、单次聊天调用返回的 JSON 信封、正文流式显示、记忆/appraisal/commitments 写入、所有者记忆面板、确定性回复风格检查、所有者操作审计、紧急停止、角色/记忆/历史分块字符预算、当前时间/星期/沉默时长、定性状态描述，以及独立可配置的视觉模型和单图转述闭环；不经过 DSH 的本地开发入口、统一审计视图、真实模型场景比较和主动消息仍不存在。本文中的“目标结构”是后续实现的约束，不是已经存在的目录。
+以下路径相对于项目根目录 `a/`。当前仓库处于 M3 网页聊天闭环已完成、下一步进入 M4 的状态：已有 DSH Host 插件和不经过 DSH 的本地开发入口、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、复用 DSH 登录态的网页聊天和 SSE、连接本地 Magpie 的精确模型网关和调用审计、长期记忆候选规则、纠正和 FTS5 双列中文检索、聊天前记忆召回注入、单次聊天调用返回的 JSON 信封、正文流式显示、记忆/appraisal/commitments 写入、所有者记忆面板、确定性回复风格检查与一次自动重写、五来源统一审计、紧急停止、分块字符预算、时间/状态注入、独立可配置的视觉模型和单图转述闭环；真实模型场景比较、主动消息、QQ、浏览器 worker、VM 和自进化仍不存在。本文中的“目标结构”是后续实现的约束，不是已经存在的目录。
 
 ## 1. 当前结构
 
@@ -21,6 +21,7 @@ kanobot/a/
 │   └── examples/                     可提交的占位 system/identity/life-state/memory/policy TOML
 ├── scripts/
 │   ├── check-import-case.ts          相对 import 路径大小写检查
+│   ├── dev-server.ts                 不经过 DSH 的本地开发网页启动器
 │   ├── validate-config.ts            配置目录预检 CLI
 │   ├── preflight-runtime.ts          配置、主库、墓碑库的启动前预检
 │   └── m1-lifecycle.ts               10 次 apply/dispose 生命周期报告
@@ -28,6 +29,7 @@ kanobot/a/
 │   ├── plugin/
 │   │   ├── index.ts                  DSH Host 插件入口
 │   │   ├── lifecycle.ts              定时器生命周期
+│   │   ├── models.ts                 Host 与开发入口共用的精确模型工厂
 │   │   ├── version.ts                插件名和版本
 │   │   └── cordis.patch.yml          bundle 默认插入的插件行
 │   ├── core/
@@ -61,7 +63,8 @@ kanobot/a/
 │   │   │   └── index.ts              状态模块公开导出
 │   │   ├── observability/
 │   │   │   ├── index.ts              可观测性模块公开导出
-│   │   │   └── owner-audit.ts        所有者操作审计的时间来源和接口
+│   │   │   ├── owner-audit.ts        所有者操作审计的时间来源和接口
+│   │   │   └── audit-timeline.ts     所有者/记忆/模型/风格/聊天的统一时间线
 │   │   ├── policy/
 │   │   │   ├── index.ts              策略模块公开导出
 │   │   │   └── emergency.ts          紧急停止数据库状态和 STOP 文件
@@ -81,12 +84,15 @@ kanobot/a/
 │   │   │   ├── types.ts              视觉模型、输入和能力声明契约
 │   │   │   ├── input.ts              格式、大小、base64 和魔数校验
 │   │   │   └── magpie-vision.ts       Magpie 精确视觉模型转述驱动
+│   ├── dev/
+│   │   ├── index.ts                  本地开发入口公开导出
+│   │   └── server.ts                 回环监听、一次性 token、会话鉴权和网页装配
 │   └── web/
 │       ├── index.ts                  Web 适配层公开导出
 │       ├── chat-http.ts              DSH 鉴权、聊天 API、SSE、记忆 API 和静态资源路由
 │       └── assets/
-│           ├── index.html            聊天页、状态/记忆双页签、记忆编辑和图片选择
-│           ├── app.js                SSE 消费、记忆 API、图片预览、DOM 渲染和状态刷新
+│           ├── index.html            聊天页、状态/记忆/统一审计页签、记忆编辑和图片选择
+│           ├── app.js                SSE 消费（含风格重写）、记忆/审计 API、图片预览和 DOM 渲染
 │           └── app.css               响应式浅色/深色样式
 ├── tests/
 │   ├── unit/                         配置、上下文组装和纯 reducer
@@ -108,6 +114,7 @@ kanobot/a/
     ├── m3.5-acceptance.md            M3.5 单次对话信封、状态与承诺闭环验收
     ├── m3.6-acceptance.md            M3.6 上下文预算、时间/状态注入和相对时间验收
     ├── m3.7-acceptance.md            M3.7 独立视觉模型、单图输入和失败闭环验收
+    ├── m3-completion-acceptance.md   M3 收尾：本地开发入口、统一审计、风格重写和 schema v8
     ├── plugin-research.md            第三方插件源码调研与取舍
     ├── plugin-catalog.zh.md          第三方 DSH 插件汇总表（只读参考）
     ├── mods.md                       第三方插件与改动的记录模板
@@ -133,6 +140,7 @@ kanobot/a/
 - `docs/m3.5-acceptance.md` 记录 M3.5 的单次 JSON 信封、逐字正文、记忆/appraisal/commitments 写入、自动测试和真实 4100 验收边界。
 - `docs/m3.6-acceptance.md` 记录 M3.6 的上下文分块预算、时间/星期/沉默时长、定性状态、相对时间 `dueAt`、自动测试和真实 4100 验收边界。
 - `docs/m3.7-acceptance.md` 记录 M3.7 的独立视觉模型、图片输入校验、视觉调用审计、失败闭环、不落库保证、自动测试和真实 4100 验收边界。
+- `docs/m3-completion-acceptance.md` 记录 M3 收尾的本地开发入口、一次性 token/Cookie 边界、统一审计、风格自动重写、schema v8 和 171 项自动测试结果。
 
 ## 2. 目标结构
 
@@ -155,6 +163,7 @@ kanobot/a/
 │   └── examples/                     可提交的脱敏 TOML 模板
 ├── src/
 │   ├── plugin/                       DSH 入口、生命周期和依赖装配
+│   ├── dev/                          仅开发用的回环网页入口
 │   ├── core/                         配置、时钟、事件、reducer、快照、存储和迁移
 │   ├── identity/                     身份基线和版本
 │   ├── relationship/                 关系、边界、受伤和修复
@@ -187,11 +196,11 @@ F:\kanobot\dsh\                       本地 DSH 安装、测试脚本和证据�
 DSH 数据目录                          M2 之后：数据库、快照、日志和备份
 ```
 
-M2/M3.0/M3.1/M3.2/M3.3/M3.4/M3.5/M3.6/M3.7 的实际数据布局：
+M2/M3 的实际数据布局：
 
 ```text
 <dataDir>/
-├── kanobot.sqlite                    主库：事件、快照、正文、对话/消息、模型调用审计、记忆、FTS5 记忆索引、风格检查、所有者审计、紧急状态、outbox、墓碑投影
+├── kanobot.sqlite                    主库（schema v8）：事件、快照、正文、对话/消息、模型调用审计、记忆、FTS5 记忆索引、风格检查（含重写审计）、所有者审计、紧急状态、outbox、墓碑投影
 ├── tombstones.sqlite                 独立墓碑库，不进入主库备份
 └── backups/
     └── kanobot-backup-*.sqlite       最近 7 份主库一致性备份

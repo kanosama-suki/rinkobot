@@ -49,6 +49,7 @@ export type {
   BodyRecord,
   ChatMessageInput,
   ChatMessageRecord,
+  ChatTurnAuditRecord,
   ChatRole,
   ConversationRecord,
   EmergencyStateRecord,

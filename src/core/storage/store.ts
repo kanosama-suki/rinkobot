@@ -78,6 +78,7 @@ import type {
   BodyRecord,
   ChatMessageInput,
   ChatMessageRecord,
+  ChatTurnAuditRecord,
   ConversationRecord,
   EmergencyStateRecord,
   FinishModelCallInput,
@@ -760,13 +761,13 @@ export class KanobotStorage {
       ? this.db.prepare(
           `SELECT * FROM model_calls
            WHERE conversation_id = ?
-           ORDER BY started_at DESC, id DESC
+           ORDER BY started_at DESC, rowid DESC
            LIMIT 1`,
         ).get(id) as Record<string, unknown> | undefined
       : this.db.prepare(
           `SELECT * FROM model_calls
            WHERE conversation_id = ? AND purpose = ?
-           ORDER BY started_at DESC, id DESC
+           ORDER BY started_at DESC, rowid DESC
            LIMIT 1`,
         ).get(id, validateModelCallPurpose(purpose)) as
           | Record<string, unknown>
@@ -781,6 +782,21 @@ export class KanobotStorage {
       'SELECT COUNT(*) AS count FROM model_calls WHERE local_day = ?',
     ).get(localDay) as Record<string, unknown> | undefined
     return Number(row?.count ?? 0)
+  }
+
+  /**
+   * 统一审计只读取调用元数据；provider/model/errorCode 都不含提示词或
+   * 回复正文。
+   */
+  listModelCalls(limit = 100): ModelCallRecord[] {
+    this.assertOpen()
+    assertAuditLimit(limit, 'model call audit')
+    const rows = this.db.prepare(
+      `SELECT * FROM model_calls
+       ORDER BY started_at DESC, rowid DESC
+       LIMIT ?`,
+    ).all(limit) as Array<Record<string, unknown>>
+    return rows.map(modelCallFromRow)
   }
 
   /**
@@ -820,17 +836,39 @@ export class KanobotStorage {
       input.id ?? `style-${randomUUID()}`,
       'replyStyleCheck.id',
     )
+    const retryCount = input.retryCount ?? 0
+    if (retryCount !== 0 && retryCount !== 1) {
+      invalid('replyStyleCheck.retryCount', 'expected 0 or 1')
+    }
+    const initialViolationCodes = validateStyleViolationCodes(
+      input.initialViolationCodes ?? [],
+    )
+    if (retryCount === 0 && initialViolationCodes.length > 0) {
+      invalid(
+        'replyStyleCheck.initialViolationCodes',
+        'must be empty when no retry occurred',
+      )
+    }
+    if (retryCount === 1 && initialViolationCodes.length === 0) {
+      invalid(
+        'replyStyleCheck.initialViolationCodes',
+        'must record the failed first check when retryCount is 1',
+      )
+    }
     try {
       this.db.prepare(
         `INSERT INTO reply_style_checks
           (id, assistant_message_id, schema_version, ok,
-           violation_codes_json, checked_at)
-         VALUES (?, ?, 1, ?, ?, ?)`,
+           violation_codes_json, retry_count, initial_violation_codes_json,
+           checked_at)
+         VALUES (?, ?, 1, ?, ?, ?, ?, ?)`,
       ).run(
         id,
         assistantMessageId,
         input.ok ? 1 : 0,
         canonicalJson(violationCodes),
+        retryCount,
+        canonicalJson(initialViolationCodes),
         checkedAt,
       )
     } catch (error) {
@@ -856,6 +894,61 @@ export class KanobotStorage {
       'SELECT * FROM reply_style_checks WHERE assistant_message_id = ?',
     ).get(messageId) as Record<string, unknown> | undefined
     return row === undefined ? null : replyStyleCheckFromRow(row)
+  }
+
+  listReplyStyleChecks(limit = 100): ReplyStyleCheckRecord[] {
+    this.assertOpen()
+    assertAuditLimit(limit, 'reply style check audit')
+    const rows = this.db.prepare(
+      `SELECT * FROM reply_style_checks
+       ORDER BY checked_at DESC, id DESC
+       LIMIT ?`,
+    ).all(limit) as Array<Record<string, unknown>>
+    return rows.map(replyStyleCheckFromRow)
+  }
+
+  /**
+   * 聊天回合摘要用于把消息、模型调用和风格检查放在同一条时间线上。
+   * 查询不 JOIN bodies，正文没有进入这条审计路径的机会。
+   */
+  listChatTurnAudits(limit = 100): ChatTurnAuditRecord[] {
+    this.assertOpen()
+    assertAuditLimit(limit, 'chat turn audit')
+    const rows = this.db.prepare(
+      `SELECT
+         m.id AS assistant_message_id,
+         m.conversation_id,
+         m.created_at,
+         COUNT(mc.id) AS model_call_count,
+         COALESCE(SUM(CASE WHEN mc.status = 'succeeded' THEN 1 ELSE 0 END), 0)
+           AS succeeded_model_call_count,
+         s.ok AS style_ok,
+         s.violation_codes_json,
+         s.retry_count
+       FROM messages m
+       LEFT JOIN model_calls mc ON mc.assistant_message_id = m.id
+       LEFT JOIN reply_style_checks s ON s.assistant_message_id = m.id
+       WHERE m.role = 'assistant'
+       GROUP BY m.id, m.conversation_id, m.created_at, s.ok,
+                s.violation_codes_json, s.retry_count
+       ORDER BY m.created_at DESC, m.seq DESC
+       LIMIT ?`,
+    ).all(limit) as Array<Record<string, unknown>>
+    return rows.map(chatTurnAuditFromRow)
+  }
+
+  /**
+   * 记忆审计只需要记录语气、来源、状态和 ID，不读取正文 body。
+   */
+  listRecentMemories(limit = 100): MemoryRecord[] {
+    this.assertOpen()
+    assertAuditLimit(limit, 'memory audit')
+    const rows = this.db.prepare(
+      `SELECT * FROM memories
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
+    ).all(limit) as Array<Record<string, unknown>>
+    return rows.map(memoryFromRow)
   }
 
   /**
@@ -2428,6 +2521,8 @@ function replyStyleCheckFromRow(
     Number(row.schema_version) !== 1 ||
     (row.ok !== 0 && row.ok !== 1) ||
     typeof row.violation_codes_json !== 'string' ||
+    (row.retry_count !== 0 && row.retry_count !== 1) ||
+    typeof row.initial_violation_codes_json !== 'string' ||
     typeof row.checked_at !== 'string'
   ) {
     throw new StorageIntegrityError(
@@ -2458,6 +2553,37 @@ function replyStyleCheckFromRow(
       ':reply_style_checks:',
     )
   }
+  let parsedInitial: unknown
+  try {
+    parsedInitial = JSON.parse(row.initial_violation_codes_json)
+  } catch (error) {
+    throw new StorageIntegrityError(
+      'reply style check initial_violation_codes_json is not valid JSON',
+      ':reply_style_checks:',
+      error,
+    )
+  }
+  const initialViolationCodes = validateStyleViolationCodes(parsedInitial)
+  if (
+    canonicalJson(initialViolationCodes) !== row.initial_violation_codes_json
+  ) {
+    throw new StorageIntegrityError(
+      'reply style check initial_violation_codes_json is not canonical JSON',
+      ':reply_style_checks:',
+    )
+  }
+  if (row.retry_count === 0 && initialViolationCodes.length > 0) {
+    throw new StorageIntegrityError(
+      'reply style check has initial violations without a retry',
+      ':reply_style_checks:',
+    )
+  }
+  if (row.retry_count === 1 && initialViolationCodes.length === 0) {
+    throw new StorageIntegrityError(
+      'reply style check retry is missing its initial violations',
+      ':reply_style_checks:',
+    )
+  }
   return {
     id: validateIdentifier(row.id, 'replyStyleCheck.id'),
     assistantMessageId: validateIdentifier(
@@ -2467,10 +2593,67 @@ function replyStyleCheckFromRow(
     schemaVersion: 1,
     ok: row.ok === 1,
     violationCodes,
+    retryCount: row.retry_count,
+    initialViolationCodes,
     checkedAt: validateInstant(
       row.checked_at,
       'replyStyleCheck.checkedAt',
     ),
+  }
+}
+
+function chatTurnAuditFromRow(
+  row: Record<string, unknown>,
+): ChatTurnAuditRecord {
+  if (
+    typeof row.assistant_message_id !== 'string' ||
+    typeof row.conversation_id !== 'string' ||
+    typeof row.created_at !== 'string' ||
+    (row.violation_codes_json !== null &&
+      typeof row.violation_codes_json !== 'string') ||
+    (row.style_ok !== null && row.style_ok !== 0 && row.style_ok !== 1) ||
+    (row.retry_count !== null && row.retry_count !== 0 && row.retry_count !== 1)
+  ) {
+    throw new StorageIntegrityError(
+      'chat turn audit row has invalid column types',
+      ':chat_turns:',
+    )
+  }
+  let violationCodes: string[] = []
+  if (row.violation_codes_json !== null) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(row.violation_codes_json)
+    } catch (error) {
+      throw new StorageIntegrityError(
+        'chat turn violation codes are not valid JSON',
+        ':chat_turns:',
+        error,
+      )
+    }
+    violationCodes = validateStyleViolationCodes(parsed)
+  }
+  return {
+    assistantMessageId: validateIdentifier(
+      row.assistant_message_id,
+      'chatTurn.assistantMessageId',
+    ),
+    conversationId: validateIdentifier(
+      row.conversation_id,
+      'chatTurn.conversationId',
+    ),
+    createdAt: validateInstant(row.created_at, 'chatTurn.createdAt'),
+    modelCallCount: validateNonNegativeInteger(
+      row.model_call_count,
+      'chatTurn.modelCallCount',
+    ),
+    succeededModelCallCount: validateNonNegativeInteger(
+      row.succeeded_model_call_count,
+      'chatTurn.succeededModelCallCount',
+    ),
+    styleOk: row.style_ok === null ? null : row.style_ok === 1,
+    violationCodes,
+    retryCount: row.retry_count === null ? null : row.retry_count,
   }
 }
 
@@ -2529,6 +2712,15 @@ function validateModelLabel(value: unknown, field: string): string {
     invalid(field, 'expected 1..200 printable characters')
   }
   return value
+}
+
+function assertAuditLimit(limit: number, kind: string): void {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+    throw new StorageError(
+      'RECORD_INVALID',
+      `${kind} limit must be an integer between 1 and 200`,
+    )
+  }
 }
 
 function validateModelCallPurpose(value: unknown): ModelCallPurpose {

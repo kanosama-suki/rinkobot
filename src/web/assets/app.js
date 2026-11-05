@@ -65,6 +65,7 @@ const elements = {
   emergencyButton: document.querySelector('#emergency-button'),
   auditBadge: document.querySelector('#audit-badge'),
   auditRefresh: document.querySelector('#audit-refresh'),
+  auditSource: document.querySelector('#audit-source'),
   auditList: document.querySelector('#audit-list'),
   auditEmpty: document.querySelector('#audit-empty'),
   auditError: document.querySelector('#audit-error'),
@@ -85,7 +86,8 @@ const state = {
   counts: { active: 0, candidate: 0, trash: 0 },
   memories: [],
   emergency: null,
-  auditEvents: [],
+  auditSource: 'all',
+  auditEntries: [],
 }
 
 void initialize()
@@ -215,6 +217,9 @@ async function sendMessage() {
       } else if (event.type === 'delta') {
         if (assistant === null) throw new Error('聊天流顺序错误：缺少 ready 事件。')
         appendDelta(assistant, event.text)
+      } else if (event.type === 'retry') {
+        if (assistant === null) throw new Error('聊天流顺序错误：缺少重写气泡。')
+        beginAssistantRetry(assistant, event)
       } else if (event.type === 'done') {
         if (assistant === null) throw new Error('聊天流顺序错误：缺少助手消息。')
         finishAssistant(assistant, event.message)
@@ -228,7 +233,7 @@ async function sendMessage() {
         applyState(event.state)
         applyUsage(event.modelUsage)
         appendMemoryOutcome(assistant, event.memory)
-        appendStyleOutcome(assistant, event.styleCheck)
+        appendStyleOutcome(assistant, event.styleCheck, event.styleRetry)
         appendEnvelopeOutcome(assistant, event.envelope)
         assistant = null
         void loadMemories().catch(error => showMemoryError(errorMessage(error)))
@@ -390,8 +395,20 @@ function appendDelta(article, text) {
   scrollToBottom()
 }
 
+function beginAssistantRetry(article, event) {
+  article.classList.add('pending', 'retrying')
+  const content = article.querySelector('.message-text')
+  content.textContent = ''
+  const labels = Array.isArray(event.initialViolationCodes)
+    ? event.initialViolationCodes.join('、')
+    : ''
+  article.querySelector('.message-meta').textContent = labels === ''
+    ? '风格检查未通过，正在重写…'
+    : `风格检查未通过（${labels}），正在重写…`
+}
+
 function finishAssistant(article, message) {
-  article.classList.remove('pending')
+  article.classList.remove('pending', 'retrying')
   article.querySelector('.message-text').textContent = message.text
   article.querySelector('.message-meta').textContent = formatTime(message.createdAt)
 }
@@ -427,17 +444,30 @@ function appendMemoryOutcome(article, memory) {
   article.append(note)
 }
 
-function appendStyleOutcome(article, styleCheck) {
-  if (!styleCheck || styleCheck.ok !== false) return
+function appendStyleOutcome(article, styleCheck, styleRetry) {
+  if (!styleCheck || typeof styleCheck !== 'object') return
   const messages = Array.isArray(styleCheck.violations)
     ? styleCheck.violations
         .map(violation => violation?.message)
         .filter(message => typeof message === 'string' && message !== '')
     : []
-  if (messages.length === 0) return
+  let text = ''
+  if (styleRetry?.attempted === true) {
+    text = styleCheck.ok === true
+      ? '风格检查未通过，已自动重写一次并通过。'
+      : `风格检查未通过，已自动重写一次；当前回复仍有：${messages.join('；')}`
+  } else if (styleCheck.ok === false) {
+    text = messages.length > 0
+      ? `风格检查提示：${messages.join('；')}`
+      : '风格检查未通过。'
+    if (styleRetry?.reason === 'daily_model_call_limit') {
+      text += '（今日调用额度不足，未自动重写）'
+    }
+  }
+  if (text === '') return
   const note = document.createElement('p')
   note.className = 'style-outcome'
-  note.textContent = `风格检查提示：${messages.join('；')}`
+  note.textContent = text
   article.append(note)
 }
 
@@ -723,7 +753,11 @@ async function toggleEmergency() {
 }
 
 async function loadAudit() {
-  const response = await fetch('/kanobot/api/audit?limit=100', {
+  const params = new URLSearchParams({
+    limit: '100',
+    source: state.auditSource,
+  })
+  const response = await fetch(`/kanobot/api/audit?${params}`, {
     credentials: 'same-origin',
     headers: { accept: 'application/json' },
   })
@@ -737,45 +771,125 @@ async function loadAudit() {
     throw new Error(await responseMessage(response, '读取审计记录失败'))
   }
   const payload = await response.json()
-  state.auditEvents = Array.isArray(payload.events) ? payload.events : []
+  state.auditEntries = Array.isArray(payload.timeline) ? payload.timeline : []
   renderAudit()
   hideAuditError()
 }
 
 function renderAudit() {
   elements.auditList.replaceChildren()
-  elements.auditBadge.textContent = String(state.auditEvents.length)
-  if (state.auditEvents.length === 0) {
+  elements.auditBadge.textContent = String(state.auditEntries.length)
+  if (state.auditEntries.length === 0) {
     elements.auditEmpty.hidden = false
-    elements.auditEmpty.textContent = '还没有审计记录。'
+    elements.auditEmpty.textContent = state.auditSource === 'all'
+      ? '还没有审计记录。'
+      : '这个来源还没有审计记录。'
     return
   }
   elements.auditEmpty.hidden = true
-  for (const event of state.auditEvents) {
+  for (const entry of state.auditEntries) {
     const article = document.createElement('article')
     article.className = 'audit-item'
 
     const heading = document.createElement('p')
     heading.className = 'audit-action'
-    heading.textContent = auditActionLabel(event.action)
+    heading.textContent = auditEntryTitle(entry)
     article.append(heading)
 
     const meta = document.createElement('div')
     meta.className = 'audit-meta'
     meta.append(
-      chip(auditOutcomeLabel(event.outcome), `audit-${event.outcome}`),
-      chip(auditTargetLabel(event.targetType)),
-      chip(formatDateTime(event.occurredAt)),
+      chip(auditSourceLabel(entry.source), `audit-source-${entry.source}`),
+      chip(auditOutcomeLabel(entry.outcome), `audit-${entry.outcome}`),
+      chip(formatDateTime(entry.occurredAt)),
     )
     article.append(meta)
 
     const target = document.createElement('p')
     target.className = 'audit-target'
-    target.textContent = `对象：${event.targetId}` +
-      (event.detailCode ? ` · ${event.detailCode}` : '')
+    target.textContent = auditEntryDetail(entry)
     article.append(target)
     elements.auditList.append(article)
   }
+}
+
+function auditEntryTitle(entry) {
+  if (entry.source === 'owner') return auditActionLabel(entry.kind)
+  if (entry.source === 'memory') return '记忆记录'
+  if (entry.source === 'model') return '模型调用'
+  if (entry.source === 'style') return '回复风格检查'
+  if (entry.source === 'chat') return '聊天回合'
+  return String(entry.kind ?? '审计事件')
+}
+
+function auditSourceLabel(value) {
+  switch (value) {
+    case 'owner':
+      return '所有者'
+    case 'memory':
+      return '记忆'
+    case 'model':
+      return '模型'
+    case 'style':
+      return '风格'
+    case 'chat':
+      return '聊天'
+    default:
+      return '未知来源'
+  }
+}
+
+function auditEntryDetail(entry) {
+  if (entry.source === 'owner') {
+    return `对象：${entry.targetId ?? '—'}` +
+      (entry.detailCode ? ` · ${entry.detailCode}` : '')
+  }
+  if (entry.source === 'memory') {
+    const memory = entry.memory
+    if (!memory) return `记忆：${entry.targetId ?? '—'}`
+    return `记忆：${memory.memoryId} · ${kindLabel(memory.kind)}` +
+      ` · ${importanceLabel(memory.importance)}` +
+      ` · ${sensitivityLabel(memory.sensitivity)}` +
+      ` · ${sourceLabel(memory.source)} · 状态 ${memory.status}`
+  }
+  if (entry.source === 'model') {
+    const call = entry.modelCall
+    if (!call) return `调用：${entry.targetId ?? '—'}`
+    const tokens = call.inputTokens === null || call.outputTokens === null
+      ? 'Token —'
+      : `Token 入 ${formatCount(call.inputTokens)} / 出 ${formatCount(call.outputTokens)}`
+    const cost = typeof call.estimatedCost === 'number'
+      ? ` · ${formatCost(call.estimatedCost)}（未标币种）`
+      : ''
+    return `${call.provider} · ${call.model} · ${call.purpose}` +
+      ` · ${call.attempts} 次请求 · ${tokens}${cost}` +
+      (entry.detailCode ? ` · ${entry.detailCode}` : '')
+  }
+  if (entry.source === 'style') {
+    const style = entry.style
+    if (!style) return `消息：${entry.targetId ?? '—'}`
+    const retry = style.retryCount === 1
+      ? ` · 自动重写 1 次（初次：${style.initialViolationCodes.join('、') || '—'}）`
+      : ''
+    const violations = style.violationCodes.length > 0
+      ? ` · 最终违规：${style.violationCodes.join('、')}`
+      : ' · 通过'
+    return `助手消息：${style.assistantMessageId}${violations}${retry}`
+  }
+  if (entry.source === 'chat') {
+    const turn = entry.chat
+    if (!turn) return `助手消息：${entry.targetId ?? '—'}`
+    const style = turn.styleOk === null
+      ? '风格未记录'
+      : turn.styleOk ? '风格通过' : `风格未通过：${turn.violationCodes.join('、')}`
+    const retry = turn.retryCount === 1 ? ' · 自动重写 1 次' : ''
+    return `会话 ${turn.conversationId} · 助手消息 ${entry.targetId}` +
+      ` · ${turn.succeededModelCallCount}/${turn.modelCallCount} 次调用成功` +
+      ` · ${style}${retry}`
+  }
+  return entry.targetId === null
+    ? String(entry.kind ?? '')
+    : `对象：${entry.targetId}`
 }
 
 function auditActionLabel(value) {
@@ -806,7 +920,18 @@ function auditTargetLabel(value) {
 }
 
 function auditOutcomeLabel(value) {
-  return value === 'failed' ? '失败' : '成功'
+  switch (value) {
+    case 'failed':
+      return '失败'
+    case 'aborted':
+      return '已中止'
+    case 'running':
+      return '进行中'
+    case 'info':
+      return '记录'
+    default:
+      return '成功'
+  }
 }
 
 function formatDateTime(value) {
@@ -923,6 +1048,14 @@ elements.memorySearch.addEventListener('submit', event => {
 
 elements.memoryAdd.addEventListener('click', () => openMemoryDialog())
 elements.auditRefresh.addEventListener('click', () => {
+  void loadAudit().catch(error => showAuditError(errorMessage(error)))
+})
+elements.auditSource.addEventListener('change', () => {
+  const source = elements.auditSource.value
+  if (!['all', 'owner', 'memory', 'model', 'style', 'chat'].includes(source)) {
+    return
+  }
+  state.auditSource = source
   void loadAudit().catch(error => showAuditError(errorMessage(error)))
 })
 elements.emergencyButton.addEventListener('click', () => {

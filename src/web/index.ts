@@ -7,6 +7,7 @@ export {
   registerChatSurface,
 } from './chat-http.ts'
 export type {
+  ChatAuthMessages,
   ChatConnection,
   ChatLogger,
   ChatSurfaceOptions,

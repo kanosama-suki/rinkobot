@@ -2,7 +2,7 @@
 
 ## 0. 项目一句话
 
-在 DSH 宿主中自研一个连续、可恢复、可审计的陪伴型机器人；当前已完成 M3.0 的网页聊天骨架、M3.1 的 Magpie 模型网关、M3.2 的长期记忆核心、M3.3 的记忆闭环、M3.4 的风格检查/所有者控制、M3.5 的单次对话信封、M3.6 的上下文预算/时间感知和 M3.7 的可配置视觉输入，正在建设完整 M3。
+在 DSH 宿主中自研一个连续、可恢复、可审计的陪伴型机器人；M3 网页聊天闭环已经完成，包括网页聊天、Magpie 网关、长期记忆、风格控制、单次对话信封、上下文预算、可配置视觉、本地开发入口、统一审计和风格自动重写。下一步进入 M4 主动、提醒与每日整理。
 
 ## 1. 必读顺序
 
@@ -66,17 +66,18 @@
 npm test
 npm run check:case
 npm run config:check
+npm run dev
 node scripts/preflight-runtime.ts F:\kanobot\dsh\test-home\kanobot\config F:\kanobot\dsh\test-home\kanobot\data
 npm run test:lifecycle -- --output F:\kanobot\dsh\m1-plugin-lifecycle.json
 ```
 
-`npm test` 使用 `node --test`，当前 166 项通过。自动测试不会读取真实人格文件、调用真实模型接口或操作正式数据库；真实 Magpie 验收使用隔离的 4100 测试 Profile，M3.1/M3.3/M3.4/M3.5/M3.6/M3.7 证据分别见 `docs/m3.1-acceptance.md`、`docs/m3.3-acceptance.md`、`docs/m3.4-acceptance.md`、`docs/m3.5-acceptance.md`、`docs/m3.6-acceptance.md` 和 `docs/m3.7-acceptance.md`。测试实例的启停、配置预检和工具审计脚本在 `F:\kanobot\dsh`，不在本仓库内；正式 `4096` 实例不属于测试命令。
+`npm test` 使用 `node --test`，当前 171 项通过。自动测试不会读取真实人格文件、调用真实模型接口或操作正式数据库；真实 Magpie 验收使用隔离的 4100 测试 Profile，M3.1/M3.3/M3.4/M3.5/M3.6/M3.7 证据分别见 `docs/m3.1-acceptance.md`、`docs/m3.3-acceptance.md`、`docs/m3.4-acceptance.md`、`docs/m3.5-acceptance.md`、`docs/m3.6-acceptance.md` 和 `docs/m3.7-acceptance.md`。M3 收尾的本地开发入口、统一审计和风格重写见 `docs/m3-completion-acceptance.md`。测试实例的启停、配置预检和工具审计脚本在 `F:\kanobot\dsh`，不在本仓库内；正式 `4096` 实例不属于测试命令。
 
 ## 5. 当前状态
 
-- 阶段：M3.7 可配置视觉输入已完成（2026-11-05）；完整 M3 进行中，下一步是不经过 DSH 的本地开发入口和统一审计视图。真实模型比较与主模型选型按 kano 的决定后置到整个项目完工后。
-- 已存在：DSH 测试 Profile、Host 插件、严格配置 loader、版本化事件与纯 reducer、SQLite 主库和独立墓碑库、确定性快照、回收站/彻底清除、每日备份、恢复测试、配置/数据库预检、复用 DSH 登录态的 `/kanobot/` 网页、SSE 聊天、schema v7 对话/消息/模型调用审计（含 `purpose`，包括独立 `vision` 调用）/FTS5 记忆索引/风格检查/所有者审计/紧急状态、Magpie 精确模型网关、超时/有限重试、token 与估算费用记录、并发/每日调用熔断、长期记忆候选规则、纠正与中文双列检索、聊天前记忆召回注入、单次聊天调用返回的 JSON 信封、正文流式显示、同一轮记忆候选写入、appraisal 状态事件、commitment 正文与事件、所有者记忆面板（查看/新增/纠正/转正/回收站/恢复/彻底清除）、确定性回复风格检查、7 个脚本化人格场景、所有者操作审计页签、紧急停止与 `STOP` 文件双重开关、`[context]` 分块字符预算、当前时间/星期/沉默时长、定性状态描述、相对时间 `dueAt`，以及独立可配置的 `[vision]` 模型、单图输入校验、视觉转述/失败闭环和不落库保证，以及 M1/M2/M3.0/M3.1/M3.2/M3.3/M3.4/M3.5/M3.6/M3.7 验收记录。
-- 尚未存在：真实模型场景比较、不经过 DSH 的本地开发入口、统一审计视图、QQ 适配器、浏览器 worker、VM 和自进化。风格检查失败目前只记录并照常发送，不会自动重新生成；所有者审计只覆盖成功操作，不覆盖读取和失败尝试。视觉模型不自动选型或比较，当前只支持本机回环 Magpie 路由、单张图片和当轮内存转述。
+- 阶段：M3 网页聊天闭环已完成（2026-11-05）；下一步进入 M4 主动、提醒与每日整理。真实模型比较与主模型选型按 kano 的决定后置到整个项目完工后。
+- 已存在：DSH 测试 Profile、Host 插件、不经过 DSH 的本地开发入口、严格配置 loader、版本化事件与纯 reducer、SQLite 主库和独立墓碑库、确定性快照、回收站/彻底清除、每日备份、恢复测试、配置/数据库预检、复用 DSH 登录态的 `/kanobot/` 网页、SSE 聊天、schema v8 对话/消息/模型调用审计（含 `purpose`，包括独立 `vision` 调用）/FTS5 记忆索引/风格检查（含一次自动重写记录）/所有者审计/紧急状态、Magpie 精确模型网关、超时/有限重试、token 与估算费用记录、并发/每日调用熔断、长期记忆候选规则、纠正与中文双列检索、聊天前记忆召回注入、单次聊天调用返回的 JSON 信封、正文流式显示、同一轮记忆候选写入、appraisal 状态事件、commitment 正文与事件、所有者记忆面板、确定性回复风格检查与一次受控重写、7 个脚本化人格场景、跨所有者/记忆/模型/风格/聊天的统一审计时间线、紧急停止与 `STOP` 文件双重开关、`[context]` 分块字符预算、当前时间/星期/沉默时长、定性状态描述、相对时间 `dueAt`，以及独立可配置的 `[vision]` 模型、单图输入校验、视觉转述/失败闭环和不落库保证。
+- 尚未存在：真实模型场景比较、QQ 适配器、浏览器 worker、VM 和自进化。统一审计只覆盖已有元数据，读取行为和失败的所有者操作仍未完整审计。视觉模型不自动选型或比较，当前只支持本机回环 Magpie 路由、单张图片和当轮内存转述。
 - 已知部署基线：Windows 10（10.0.19045），Node v24.19.0，DSH `0.2.1-rc.5`（npm `latest` 标签；当前没有非 RC 版本）。插件源码在本目录，测试实例使用独立 `DSH_HOME=F:\kanobot\dsh\test-home`。
 - 已知清理记录：旧插件、NapCat 和旧 VM 已从宿主清理；重新部署必须按新设计进行，不能复用旧配置假设。
 - 已确认的产品决定见 `docs/plan.md` 第 1 节。
@@ -90,6 +91,7 @@ npm run test:lifecycle -- --output F:\kanobot\dsh\m1-plugin-lifecycle.json
 - M3.5 的单次 JSON 信封、逐字正文、记忆/appraisal/commitments 闭环和真实 4100 结果见 `docs/m3.5-acceptance.md`。
 - M3.6 的上下文分块预算、时间/状态注入、相对时间承诺和真实 4100 结果见 `docs/m3.6-acceptance.md`。
 - M3.7 的独立视觉模型、单图输入、视觉审计、失败闭环和真实 4100 结果见 `docs/m3.7-acceptance.md`。
+- M3 收尾的本地开发入口、统一审计、风格自动重写、schema v8 和自动测试结果见 `docs/m3-completion-acceptance.md`。
 - 测试 Profile 数据在 `F:\kanobot\dsh\test-home\kanobot\data`；主库备份不包含独立墓碑库，迁移和恢复时必须单独保留 `tombstones.sqlite`。
 - 最近更新时间：2026-11-05。
 

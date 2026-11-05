@@ -21,7 +21,12 @@ import {
   MemoryInputError,
   type KanobotMemoryService,
 } from '../core/memory/index.ts'
-import type { OwnerAuditService } from '../core/observability/index.ts'
+import {
+  AUDIT_TIMELINE_SOURCES,
+  type AuditTimelineFilter,
+  type AuditTimelineService,
+  type OwnerAuditService,
+} from '../core/observability/index.ts'
 import type { KanobotEmergencyService } from '../core/policy/index.ts'
 import {
   StorageError,
@@ -83,8 +88,20 @@ export interface ChatSurfaceOptions {
   chat: KanobotChatService
   memory?: KanobotMemoryService
   audit?: OwnerAuditService
+  timeline?: AuditTimelineService
   emergency?: KanobotEmergencyService
   logger: ChatLogger
+  auth?: ChatAuthMessages
+}
+
+/**
+ * 宿主可以替换未认证提示文案；正式 DSH 默认引导去根页面登录，
+ * 本地开发入口则提示使用启动时打印的短期链接。
+ */
+export interface ChatAuthMessages {
+  unauthenticatedMessage?: string
+  forbiddenMessage?: string
+  showLoginLink?: boolean
 }
 
 interface UiAssets {
@@ -129,7 +146,7 @@ async function handleRequest(
 
   const admission = options.connection.admit({ headers: req.headers })
   if ('rejection' in admission) {
-    writeAuthRejection(res, admission.rejection, api)
+    writeAuthRejection(res, admission.rejection, api, options.auth)
     return
   }
 
@@ -604,8 +621,21 @@ async function handleAuditRequest(
     writeError(res, 400, 'invalid_limit', 'limit 必须是 1 到 200 的整数', true)
     return
   }
+  const source = parseAuditSource(url.searchParams.get('source'))
+  if (source === null) {
+    writeError(
+      res,
+      400,
+      'invalid_source',
+      'source 只能是 all、owner、memory、model、style 或 chat',
+      true,
+    )
+    return
+  }
   writeJson(res, 200, {
+    // 保留旧字段，避免已经打开的旧页面在升级瞬间失去所有者操作记录。
     events: options.audit.list(limit),
+    timeline: options.timeline?.list(limit, source) ?? [],
   })
 }
 
@@ -771,25 +801,37 @@ function writeAuthRejection(
   res: ServerResponse,
   rejection: 401 | 403,
   api: boolean,
+  messages: ChatAuthMessages | undefined,
 ): void {
+  const showLoginLink = messages?.showLoginLink !== false
+  const unauthenticatedMessage =
+    messages?.unauthenticatedMessage ??
+    '需要先登录 DSH。请先打开 DSH 根页面完成登录'
+  const forbiddenMessage =
+    messages?.forbiddenMessage ?? '请求来源不被允许'
   if (api) {
     writeJson(res, rejection, {
       error: {
         code: rejection === 401 ? 'unauthenticated' : 'forbidden',
         message:
           rejection === 401
-            ? '请先打开 DSH 根页面完成登录'
-            : '请求来源不被允许',
+            ? unauthenticatedMessage
+            : forbiddenMessage,
       },
     })
     return
   }
+  const pageMessage =
+    rejection === 401 ? unauthenticatedMessage : forbiddenMessage
   const html =
     '<!doctype html><html lang="zh-CN"><meta charset="utf-8">' +
     '<title>Kanobot 需要登录</title><body>' +
-    `<h1>${rejection === 401 ? '需要先登录 DSH' : '请求来源不被允许'}</h1>` +
-    '<p>请先打开 <a href="/">DSH 根页面</a> 完成浏览器登录，然后重新访问 ' +
-    '<code>/kanobot/</code>。</p></body></html>'
+    `<h1>${rejection === 401 ? '需要先登录' : forbiddenMessage}</h1>` +
+    `<p>${pageMessage}。` +
+    (rejection === 401 && showLoginLink
+      ? '请先打开 <a href="/">DSH 根页面</a> 完成浏览器登录，然后重新访问'
+      : '请重新打开带有效凭据的页面地址，然后访问') +
+    ' <code>/kanobot/</code>。</p></body></html>'
   res.writeHead(rejection, {
     ...SECURITY_HEADERS,
     'content-type': 'text/html; charset=utf-8',
@@ -854,6 +896,18 @@ function parseAuditLimit(raw: string | null): number | undefined | null {
   if (!/^\d+$/.test(raw)) return null
   const value = Number(raw)
   return Number.isInteger(value) && value >= 1 && value <= 200 ? value : null
+}
+
+function parseAuditSource(
+  raw: string | null,
+): AuditTimelineFilter | null {
+  if (raw === null) return 'all'
+  if (raw === 'all') return 'all'
+  return AUDIT_TIMELINE_SOURCES.includes(
+    raw as (typeof AUDIT_TIMELINE_SOURCES)[number],
+  )
+    ? raw as AuditTimelineFilter
+    : null
 }
 
 function loadAssets(): UiAssets {

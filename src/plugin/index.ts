@@ -13,15 +13,14 @@ import { dirname, resolve } from 'node:path'
 import { loadConfigFromDirectory } from '../core/config/index.ts'
 import {
   KanobotChatService,
-  MagpieChatModel,
-  MockChatModel,
-  type ChatModel,
 } from '../core/chat/index.ts'
-import { MagpieVisionModel } from '../core/vision/index.ts'
 import {
   KanobotMemoryService,
 } from '../core/memory/index.ts'
-import { OwnerAuditService } from '../core/observability/index.ts'
+import {
+  AuditTimelineService,
+  OwnerAuditService,
+} from '../core/observability/index.ts'
 import { KanobotEmergencyService } from '../core/policy/index.ts'
 import type { LoadedConfig } from '../core/config/index.ts'
 import {
@@ -36,6 +35,7 @@ import {
   type ChatWebServer,
 } from '../web/index.ts'
 import { createPluginLifecycle } from './lifecycle.ts'
+import { createChatModel, createVisionModel } from './models.ts'
 import { PLUGIN_NAME, PLUGIN_VERSION } from './version.ts'
 
 export const inject = ['webServer', 'connection']
@@ -91,6 +91,7 @@ export async function apply(
     storage.maybeCreateDailyBackup()
     const memory = new KanobotMemoryService(storage, clock)
     const audit = new OwnerAuditService(storage)
+    const timeline = new AuditTimelineService(storage)
     const emergency = new KanobotEmergencyService(
       storage,
       storage.dataDir,
@@ -120,6 +121,7 @@ export async function apply(
       chat,
       memory,
       audit,
+      timeline,
       emergency,
       logger: ctx.logger,
     })
@@ -208,81 +210,6 @@ export async function apply(
     }
     throw error
   }
-}
-
-async function createChatModel(
-  loaded: LoadedConfig,
-  modelMode: 'mock' | 'magpie',
-): Promise<ChatModel> {
-  if (modelMode === 'mock') {
-    return new MockChatModel()
-  }
-
-  const model = loaded.system.model
-  if (model.provider !== 'magpie') {
-    throw new Error(
-      `modelMode "magpie" requires model.provider "magpie"; got "${model.provider}"`,
-    )
-  }
-  if (model.baseUrl === null) {
-    throw new Error('modelMode "magpie" requires model.base_url')
-  }
-  if (model.maxOutputTokens === null) {
-    throw new Error('modelMode "magpie" requires model.max_output_tokens')
-  }
-  const magpie = new MagpieChatModel({
-    baseUrl: model.baseUrl,
-    model: model.name,
-    maxOutputTokens: model.maxOutputTokens,
-    timeoutMs: model.timeoutMs,
-    maxRetries: model.maxRetries,
-    apiKey: resolveApiKey(model.apiKeyEnv, 'model.api_key_env'),
-  })
-  await magpie.checkAvailable()
-  return magpie
-}
-
-async function createVisionModel(
-  loaded: LoadedConfig,
-  modelMode: 'mock' | 'magpie',
-): Promise<MagpieVisionModel | null> {
-  const vision = loaded.system.vision
-  if (!vision.enabled) return null
-  if (modelMode !== 'magpie') {
-    // mock 模式承诺不调用真实模型；带图配置必须显式切到真实路由，
-    // 不能一边显示 mock 一边偷偷发起视觉请求。
-    throw new Error('vision.enabled requires modelMode "magpie"')
-  }
-  if (
-    vision.provider !== 'magpie' ||
-    vision.baseUrl === null ||
-    vision.name === null ||
-    vision.maxOutputTokens === null
-  ) {
-    throw new Error('vision configuration is incomplete')
-  }
-  const model = new MagpieVisionModel({
-    baseUrl: vision.baseUrl,
-    model: vision.name,
-    maxOutputTokens: vision.maxOutputTokens,
-    timeoutMs: vision.timeoutMs,
-    maxRetries: vision.maxRetries,
-    apiKey: resolveApiKey(vision.apiKeyEnv, 'vision.api_key_env'),
-  })
-  await model.checkAvailable()
-  return model
-}
-
-function resolveApiKey(apiKeyEnv: string | null, field: string): string | null {
-  if (apiKeyEnv === null) return null
-  const value = process.env[apiKeyEnv]
-  if (value === undefined || value.trim() === '') {
-    // 只报告变量名，不打印或回显变量值。
-    throw new Error(
-      `${field} "${apiKeyEnv}" is configured but the environment variable is empty or missing`,
-    )
-  }
-  return value
 }
 
 function resolveConfigDir(config: KanobotPluginConfig): string {

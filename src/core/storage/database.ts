@@ -27,7 +27,7 @@ import {
   StorageIntegrityError,
 } from './errors.ts'
 
-export const STORAGE_SCHEMA_VERSION = 7
+export const STORAGE_SCHEMA_VERSION = 8
 export const TOMBSTONE_STORE_SCHEMA_VERSION = 1
 
 type DatabaseKind = 'main' | 'tombstones'
@@ -150,6 +150,15 @@ const MAIN_REQUIRED_COLUMNS_V6: Record<string, readonly string[]> = {
     'detail_code',
   ],
   emergency_state: ['id', 'stopped', 'updated_at', 'reason_code'],
+}
+
+const MAIN_REQUIRED_COLUMNS_V8: Record<string, readonly string[]> = {
+  ...MAIN_REQUIRED_COLUMNS_V6,
+  reply_style_checks: [
+    ...MAIN_REQUIRED_COLUMNS_V6.reply_style_checks,
+    'retry_count',
+    'initial_violation_codes_json',
+  ],
 }
 
 const TOMBSTONE_REQUIRED_COLUMNS: Record<string, readonly string[]> = {
@@ -409,6 +418,18 @@ CREATE INDEX model_calls_assistant_message_index ON model_calls(assistant_messag
 CREATE INDEX model_calls_purpose_index ON model_calls(purpose);
 `
 
+/**
+ * M3 收尾需要记录“第一次风格检查失败、随后自动重写”的审计事实。
+ * 这里只增加违规代码和重试次数，仍不复制回复正文。
+ */
+const STYLE_RETRY_SCHEMA_V8 = `
+ALTER TABLE reply_style_checks
+  ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0
+  CHECK (retry_count IN (0, 1));
+ALTER TABLE reply_style_checks
+  ADD COLUMN initial_violation_codes_json TEXT NOT NULL DEFAULT '[]';
+`
+
 const TOMBSTONE_SCHEMA = `
 CREATE TABLE schema_migrations (
   version INTEGER PRIMARY KEY,
@@ -531,7 +552,7 @@ function initializeDatabase(
     kind === 'main' ? STORAGE_SCHEMA_VERSION : TOMBSTONE_STORE_SCHEMA_VERSION
   const schema =
     kind === 'main'
-      ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}\n${MODEL_CALLS_SCHEMA_V3}\n${MEMORY_SEARCH_SCHEMA_V4}\n${MODEL_CALL_PURPOSE_SCHEMA_V5}\n${CONTROL_SCHEMA_V6}\n${MODEL_CALL_PURPOSE_SCHEMA_V7}`
+      ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}\n${MODEL_CALLS_SCHEMA_V3}\n${MEMORY_SEARCH_SCHEMA_V4}\n${MODEL_CALL_PURPOSE_SCHEMA_V5}\n${CONTROL_SCHEMA_V6}\n${MODEL_CALL_PURPOSE_SCHEMA_V7}\n${STYLE_RETRY_SCHEMA_V8}`
       : TOMBSTONE_SCHEMA
   db.exec('BEGIN IMMEDIATE')
   try {
@@ -651,7 +672,9 @@ function assertSchemaCompatible(
   const versions = readSchemaVersions(db, path, kind)
   const latest = versions.at(-1)
   const supported =
-    kind === 'main' ? [1, 2, 3, 4, 5, 6, 7] : [TOMBSTONE_STORE_SCHEMA_VERSION]
+    kind === 'main'
+      ? [1, 2, 3, 4, 5, 6, 7, 8]
+      : [TOMBSTONE_STORE_SCHEMA_VERSION]
   if (
     latest === undefined ||
     !supported.includes(latest) ||
@@ -676,7 +699,9 @@ function assertSchemaCompatible(
               ? MAIN_REQUIRED_COLUMNS_V4
               : latest === 5
                 ? MAIN_REQUIRED_COLUMNS_V5
-                : MAIN_REQUIRED_COLUMNS_V6
+                : latest === 6 || latest === 7
+                  ? MAIN_REQUIRED_COLUMNS_V6
+                  : MAIN_REQUIRED_COLUMNS_V8
   for (const [table, columns] of Object.entries(required)) {
     const tableRows = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -783,6 +808,20 @@ function migrateDatabaseIfNeeded(
       db.prepare(
         'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
       ).run(7, nowIso)
+    }
+    if (
+      latest === 1 ||
+      latest === 2 ||
+      latest === 3 ||
+      latest === 4 ||
+      latest === 5 ||
+      latest === 6 ||
+      latest === 7
+    ) {
+      db.exec(STYLE_RETRY_SCHEMA_V8)
+      db.prepare(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+      ).run(8, nowIso)
     }
     db.exec(`PRAGMA user_version = ${STORAGE_SCHEMA_VERSION}`)
     db.exec('COMMIT')

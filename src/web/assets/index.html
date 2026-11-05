@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>Kanobot · M3.7 聊天、记忆与视觉</title>
+    <title>Kanobot · M3 聊天、记忆与审计</title>
     <link rel="stylesheet" href="/kanobot/app.css">
   </head>
   <body>
@@ -13,7 +13,7 @@
         <div class="brand-block">
           <span class="brand-mark" aria-hidden="true">K</span>
           <div>
-            <p class="eyebrow">Kanobot / M3.7</p>
+            <p class="eyebrow">Kanobot / M3</p>
             <h1>聊天、记忆与视觉</h1>
           </div>
         </div>
@@ -166,7 +166,7 @@
 
             <section class="panel-card subtle-card">
               <p class="eyebrow">当前边界</p>
-              <h2>M3.7 对话、状态与视觉</h2>
+              <h2>M3 对话、状态与视觉</h2>
               <ul class="boundary-list">
                 <li>复用 DSH 浏览器登录态</li>
                 <li>单次模型调用返回一个 JSON 信封</li>
@@ -251,12 +251,28 @@
               <div class="panel-heading">
                 <div>
                   <p class="eyebrow">可观测性</p>
-                  <h2>所有者操作</h2>
+                  <h2>统一审计</h2>
                 </div>
-                <button id="audit-refresh" class="small-button" type="button">
-                  刷新
-                </button>
+                <div class="audit-actions">
+                  <label class="audit-filter" for="audit-source">
+                    来源
+                    <select id="audit-source">
+                      <option value="all">全部</option>
+                      <option value="chat">聊天</option>
+                      <option value="memory">记忆</option>
+                      <option value="model">模型</option>
+                      <option value="style">风格</option>
+                      <option value="owner">所有者</option>
+                    </select>
+                  </label>
+                  <button id="audit-refresh" class="small-button" type="button">
+                    刷新
+                  </button>
+                </div>
               </div>
+              <p class="audit-note">
+                只显示动作、状态、调用和记忆元数据，不读取聊天正文或提示词。
+              </p>
               <p id="audit-error" class="inline-error" role="alert" hidden></p>
               <div id="audit-list" class="audit-list"></div>
               <p id="audit-empty" class="memory-empty">还没有审计记录。</p>

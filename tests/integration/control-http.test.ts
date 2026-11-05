@@ -17,7 +17,10 @@ import {
   type ChatStreamEvent,
 } from '../../src/core/chat/index.ts'
 import { KanobotMemoryService } from '../../src/core/memory/index.ts'
-import { OwnerAuditService } from '../../src/core/observability/index.ts'
+import {
+  AuditTimelineService,
+  OwnerAuditService,
+} from '../../src/core/observability/index.ts'
 import { KanobotEmergencyService } from '../../src/core/policy/index.ts'
 import { CHAT_BASE_PATH, registerChatSurface } from '../../src/web/index.ts'
 import { createWorkspace } from '../helpers/storage-fixture.ts'
@@ -129,6 +132,7 @@ test('owner can stop, still chat, inspect audit, and resume', async () => {
     assert.equal(audit.status, 200)
     const auditBody = await audit.json() as {
       events: Array<{ action: string; outcome: string }>
+      timeline: Array<{ source: string; targetId: string | null }>
     }
     assert.ok(
       auditBody.events.some(event => event.action === 'emergency.stop'),
@@ -137,6 +141,15 @@ test('owner can stop, still chat, inspect audit, and resume', async () => {
       auditBody.events.some(event => event.action === 'memory.create'),
     )
     assert.ok(auditBody.events.every(event => event.outcome === 'succeeded'))
+    assert.ok(auditBody.timeline.some(entry => entry.source === 'model'))
+    assert.ok(auditBody.timeline.some(entry => entry.source === 'style'))
+    assert.ok(auditBody.timeline.some(entry => entry.source === 'chat'))
+
+    const invalidSource = await request(
+      harness,
+      '/kanobot/api/audit?source=unknown',
+    )
+    assert.equal(invalidSource.status, 400)
 
     const resumed = await request(
       harness,
@@ -210,6 +223,7 @@ async function createHarness(): Promise<{
     chat,
     memory,
     audit,
+    timeline: new AuditTimelineService(store),
     emergency,
     logger: {
       info(): void {},

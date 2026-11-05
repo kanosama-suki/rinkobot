@@ -1,8 +1,8 @@
 /**
- * schema v6 → v7 迁移测试。
+ * schema v6 → 当前版本迁移测试。
  *
  * 测试先把数据库降级成只含 chat/memory_extraction purpose 的 v6 表，
- * 再通过正常启动迁移到 v7，确认历史审计行没有丢失且 vision 调用可写入。
+ * 再通过正常启动迁移到当前版本，确认历史审计行没有丢失且 vision 调用可写入。
  */
 
 import assert from 'node:assert/strict'
@@ -101,7 +101,7 @@ test('a v6 model_calls table migrates to v7 without losing history', () => {
       ).all() as Array<Record<string, unknown>>
       assert.deepEqual(
         versions.map(row => Number(row.version)),
-        [1, 2, 3, 4, 5, 6, 7],
+        [1, 2, 3, 4, 5, 6, 7, 8],
       )
       const ddl = db.prepare(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'model_calls'",
@@ -171,6 +171,18 @@ function downgradeToV6(databasePath: string): void {
       CREATE INDEX model_calls_user_message_index ON model_calls(user_message_id);
       CREATE INDEX model_calls_assistant_message_index ON model_calls(assistant_message_id);
       CREATE INDEX model_calls_purpose_index ON model_calls(purpose);
+      DROP TABLE reply_style_checks;
+      CREATE TABLE reply_style_checks (
+        id TEXT PRIMARY KEY,
+        assistant_message_id TEXT NOT NULL UNIQUE
+          REFERENCES messages(id) ON DELETE CASCADE,
+        schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+        ok INTEGER NOT NULL CHECK (ok IN (0, 1)),
+        violation_codes_json TEXT NOT NULL,
+        checked_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX reply_style_checks_checked_at_index
+        ON reply_style_checks(checked_at);
     `)
     db.exec('DELETE FROM schema_migrations')
     const migration = db.prepare(
