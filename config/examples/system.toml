@@ -1,0 +1,22 @@
+# 运行环境、时区、模型路由和资源上限。
+# API key 通过 DSH 凭据或环境变量提供，不写进配置文件。
+schema_version = 1
+environment = "development"
+
+[time]
+# 安静时段只限制主动联系，不阻止回复用户主动发来的消息。
+timezone = "Asia/Shanghai"
+quiet_hours_start = "00:10"
+quiet_hours_end = "07:00"
+
+[model]
+# provider 使用 DSH 已注册的路由名，不在插件里硬编码服务商地址。
+provider = "deepseek-official"
+name = "deepseek-flash"
+timeout_ms = 120000
+max_retries = 2
+
+[resources]
+# 并发和每日调用额度用于成本与资源熔断。
+max_concurrent_model_calls = 2
+daily_model_call_limit = 2000

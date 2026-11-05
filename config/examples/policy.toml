@@ -1,0 +1,23 @@
+# M1 的安全基线：模型工具为空，所有高风险权限关闭。
+# 任何新增工具、权限或公开渠道都要等到对应里程碑单独设计并验收。
+schema_version = 1
+
+[tools]
+# 第一版只允许对话和后续的记忆流程，不向模型暴露 shell/文件工具。
+allow = []
+
+[permissions]
+# 这些字段当前由加载器强制为 false，不能靠改配置提前打开。
+allow_shell = false
+allow_file_write = false
+allow_network = false
+allow_public_posting = false
+
+[limits]
+# 限制单轮成本与回复长度，避免失控生成。
+max_reply_chars = 2000
+max_steps_per_turn = 1
+
+[emergency]
+# 相对于 DSH 数据目录的普通文件名；出现该文件时自主活动必须停止。
+stop_file = "STOP"

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Kanobot">
+  <rect width="64" height="64" rx="16" fill="#18222f"/>
+  <circle cx="24" cy="30" r="4" fill="#f4c95d"/>
+  <circle cx="40" cy="30" r="4" fill="#f4c95d"/>
+  <path d="M21 43c6 4 16 4 22 0" fill="none" stroke="#f4c95d" stroke-width="3" stroke-linecap="round"/>
+  <path d="M32 9v8" stroke="#f4c95d" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="32" cy="8" r="3" fill="#f4c95d"/>
+</svg>

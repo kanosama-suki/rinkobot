@@ -1,0 +1,133 @@
+/**
+ * 插件生命周期集成测试。
+ *
+ * 用最小的 fake context 模拟 Cordis 的 logger/effect，验证真实插件的
+ * 启停、坏配置顺序、启动报告和定时器清理。
+ */
+
+import assert from 'node:assert/strict'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import test from 'node:test'
+
+import { apply, PLUGIN_NAME, PLUGIN_VERSION } from '../../src/plugin/index.ts'
+
+const examplesDir = fileURLToPath(new URL('../../config/examples', import.meta.url))
+
+interface FakePluginContext {
+  ctx: {
+    logger: {
+      info(message: string): void
+    }
+    effect(callback: () => () => void): () => void
+  }
+  logs: string[]
+  dispose(): void
+}
+
+function createFakeContext(): FakePluginContext {
+  const logs: string[] = []
+  const disposers: Array<() => void> = []
+  let disposed = false
+
+  // 按逆序执行 disposer，模拟宿主卸载插件时的资源释放方式。
+  return {
+    ctx: {
+      logger: {
+        info(message: string): void {
+          logs.push(message)
+        },
+      },
+      effect(callback: () => () => void): () => void {
+        const cleanup = callback()
+        disposers.push(cleanup)
+        return cleanup
+      },
+    },
+    logs,
+    dispose(): void {
+      if (disposed) return
+      disposed = true
+      for (const cleanup of disposers.reverse()) {
+        cleanup()
+      }
+    },
+  }
+}
+
+function timeoutCount(): number {
+  // Node 的活动资源列表能区分定时器；测试只关心 Timeout 数量。
+  return process.getActiveResourcesInfo().filter(name => name === 'Timeout').length
+}
+
+test('the real plugin apply/dispose cycle leaves no timer behind', async () => {
+  const baseline = timeoutCount()
+
+  for (let cycle = 0; cycle < 10; cycle += 1) {
+    const fake = createFakeContext()
+    apply(fake.ctx, { configDir: examplesDir, heartbeatMs: 60_000 })
+
+    assert.ok(
+      fake.logs.some(
+        line =>
+          line.includes(PLUGIN_NAME) &&
+          line.includes(PLUGIN_VERSION) &&
+          line.includes('loaded'),
+      ),
+    )
+    assert.ok(timeoutCount() >= baseline + 1)
+
+    fake.dispose()
+    await new Promise<void>(resolve => setImmediate(resolve))
+
+    assert.equal(timeoutCount(), baseline)
+    assert.ok(fake.logs.some(line => line.includes('unloaded')))
+  }
+})
+
+test('plugin configuration failures happen before a timer is registered', () => {
+  const baseline = timeoutCount()
+  const fake = createFakeContext()
+
+  assert.throws(
+    () =>
+      apply(fake.ctx, {
+        configDir: `${examplesDir}-missing`,
+        heartbeatMs: 60_000,
+      }),
+    /configuration directory does not exist/,
+  )
+  assert.equal(timeoutCount(), baseline)
+
+  fake.dispose()
+})
+
+test('an explicit startup report proves successful activation', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kanobot-startup-report-'))
+  const reportPath = join(dir, 'startup.json')
+  const fake = createFakeContext()
+
+  try {
+    apply(fake.ctx, {
+      configDir: examplesDir,
+      heartbeatMs: 60_000,
+      startupReportPath: reportPath,
+    })
+    fake.dispose()
+  } finally {
+    // 断言失败时也要清理定时器和临时目录，避免测试进程被挂住。
+    fake.dispose()
+  }
+
+  try {
+    const report = JSON.parse(readFileSync(reportPath, 'utf8')) as Record<string, unknown>
+    assert.equal(report.plugin, PLUGIN_NAME)
+    assert.equal(report.version, PLUGIN_VERSION)
+    assert.equal(report.provider, 'deepseek-official')
+    assert.equal(report.identity, 'placeholder')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Kanobot",
+    "description": "陪伴运行时，当前包含配置加载和插件生命周期检查。"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "name": "@kanobot/dsh-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Kanobot companion runtime for the DSH host",
+  "type": "module",
+  "exports": {
+    ".": "./src/plugin/index.ts",
+    "./config": "./src/core/config/index.ts"
+  },
+  "files": [
+    "src",
+    "config",
+    "locale",
+    "icon.svg",
+    "README.md",
+    "AGENTS.md",
+    "structure.md"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "check:case": "node scripts/check-import-case.ts",
+    "check": "npm run check:case && npm test",
+    "config:check": "node scripts/validate-config.ts config/examples",
+    "test:lifecycle": "node scripts/m1-lifecycle.ts"
+  },
+  "dependencies": {
+    "smol-toml": "1.9.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./src/plugin/cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "license": "UNLICENSED"
+}
