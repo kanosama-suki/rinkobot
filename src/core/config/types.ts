@@ -18,6 +18,16 @@ export interface SystemConfig {
     quietHoursStart: string
     quietHoursEnd: string
   }
+  context: {
+    maxPromptChars: number
+    maxStateChars: number
+    maxMemoryItems: number
+    maxMemoryItemChars: number
+    maxMemoryChars: number
+    maxHistoryMessages: number
+    maxHistoryChars: number
+    maxMessageChars: number
+  }
   model: {
     provider: string
     name: string

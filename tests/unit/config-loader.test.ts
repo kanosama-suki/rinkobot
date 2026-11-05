@@ -28,6 +28,16 @@ timezone = "Asia/Shanghai"
 quiet_hours_start = "00:10"
 quiet_hours_end = "07:00"
 
+[context]
+max_prompt_chars = 20000
+max_state_chars = 480
+max_memory_items = 5
+max_memory_item_chars = 500
+max_memory_chars = 3000
+max_history_messages = 40
+max_history_chars = 8000
+max_message_chars = 4000
+
 [model]
 provider = "magpie"
 name = "deepseek/deepseek-flash"
@@ -149,6 +159,9 @@ test('loads the checked-in example configuration', () => {
   assert.equal(config.system.schemaVersion, 1)
   assert.equal(config.system.environment, 'development')
   assert.equal(config.system.time.timezone, 'Asia/Shanghai')
+  assert.equal(config.system.context.maxPromptChars, 20_000)
+  assert.equal(config.system.context.maxMemoryItems, 5)
+  assert.equal(config.system.context.maxMessageChars, 4_000)
   assert.equal(config.identity.mode, 'placeholder')
   assert.deepEqual(config.policy.tools.allow, [])
   assert.equal(config.policy.permissions.allowShell, false)
@@ -169,6 +182,16 @@ test('maps snake_case TOML fields to typed runtime fields', () => {
       timeoutMs: 120000,
       maxRetries: 2,
       maxOutputTokens: 4096,
+    })
+    assert.deepEqual(config.system.context, {
+      maxPromptChars: 20_000,
+      maxStateChars: 480,
+      maxMemoryItems: 5,
+      maxMemoryItemChars: 500,
+      maxMemoryChars: 3_000,
+      maxHistoryMessages: 40,
+      maxHistoryChars: 8_000,
+      maxMessageChars: 4_000,
     })
     assert.equal(config.identity.displayName, 'Kanobot Test')
     assert.equal(config.policy.emergency.stopFile, 'STOP')
@@ -196,6 +219,45 @@ test('rejects a wrong field type', () => {
     expectIssue(
       () => loadConfigFromDirectory(dir),
       'resources.daily_model_call_limit',
+      'system.toml',
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rejects an unknown context field', () => {
+  const dir = writeConfigs({
+    system: validSystem.replace(
+      'max_prompt_chars = 20000',
+      'max_prompt_chars = 20000\nsurprise = true',
+    ),
+  })
+  try {
+    expectIssue(
+      () => loadConfigFromDirectory(dir),
+      'context.surprise',
+      'system.toml',
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rejects a context budget whose current message exceeds the total budget', () => {
+  const dir = writeConfigs({
+    system: validSystem.replace(
+      'max_prompt_chars = 20000',
+      'max_prompt_chars = 2000',
+    ).replace(
+      'max_message_chars = 4000',
+      'max_message_chars = 3000',
+    ),
+  })
+  try {
+    expectIssue(
+      () => loadConfigFromDirectory(dir),
+      'context.max_message_chars',
       'system.toml',
     )
   } finally {

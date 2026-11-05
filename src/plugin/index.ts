@@ -27,6 +27,7 @@ import {
   KanobotStorage,
   StorageError,
 } from '../core/storage/index.ts'
+import { systemClock } from '../core/state/index.ts'
 import {
   CHAT_BASE_PATH,
   registerChatSurface,
@@ -75,14 +76,17 @@ export async function apply(
   }
 
   try {
+    // 聊天、记忆和存储共用同一个真实时钟；测试可替换为手动时钟，
+    // 避免提示词里的“现在”和消息/审计时间来自不同时间源。
+    const clock = systemClock
     // 真实模型模式必须在打开数据库和注册定时器之前完成精确模型检查。
     // 检查失败时拒绝激活，不自动降级到 mock 或另一个模型。
     const model = await createChatModel(loaded, modelMode)
     // 数据库损坏、schema 不兼容或路径逃逸都会在这里阻止插件继续激活。
-    storage = KanobotStorage.openFromConfig(loaded, dataDir)
+    storage = KanobotStorage.openFromConfig(loaded, dataDir, clock)
     // 备份失败也应阻止“看似启动成功”：日备份是 M2 的数据安全边界。
     storage.maybeCreateDailyBackup()
-    const memory = new KanobotMemoryService(storage)
+    const memory = new KanobotMemoryService(storage, clock)
     const audit = new OwnerAuditService(storage)
     const emergency = new KanobotEmergencyService(
       storage,
@@ -96,6 +100,9 @@ export async function apply(
         loaded.system.resources.maxConcurrentModelCalls,
       dailyModelCallLimit: loaded.system.resources.dailyModelCallLimit,
       memory,
+      context: loaded.system.context,
+      timezone: loaded.system.time.timezone,
+      clock,
     })
     disposeChatSurface = registerChatSurface({
       webServer: ctx.webServer,
@@ -145,6 +152,8 @@ export async function apply(
         maxConcurrentModelCalls:
           loaded.system.resources.maxConcurrentModelCalls,
         dailyModelCallLimit: loaded.system.resources.dailyModelCallLimit,
+        contextMaxPromptChars: loaded.system.context.maxPromptChars,
+        timezone: loaded.system.time.timezone,
         memoryCount: memory.listViews('all').length,
         memoryCandidateCount: memory.listViews('candidate').length,
         ownerAuditCount: audit.count(),

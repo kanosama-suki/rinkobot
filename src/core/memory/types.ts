@@ -50,6 +50,12 @@ export interface MemorySearchOptions {
   matchMode?: 'all' | 'any'
 }
 
+export interface MemoryRecallOptions {
+  // 上下文预算可能在检索后继续丢弃低相关度记忆；只有实际进入提示词的
+  // 条目才应更新 lastRecalledAt。
+  markRecalled?: boolean
+}
+
 /**
  * 面板和 SSE 完成事件共用的可读视图。
  * 正文从 bodies 读取，记录结构本身仍只保存引用。

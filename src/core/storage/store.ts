@@ -516,6 +516,29 @@ export class KanobotStorage {
     return rows.map(chatMessageFromRow)
   }
 
+  /**
+   * 只查最近一条用户消息，用于计算“距上次发言多久”。
+   *
+   * 不能从有限的上下文窗口倒推：窗口可能被助手消息占满，也可能因为
+   * 用户消息被彻底清除而缺少对应条目。
+   */
+  latestUserChatMessage(
+    conversationId = 'main',
+  ): ChatMessageRecord | null {
+    this.assertOpen()
+    const id = validateIdentifier(conversationId, 'message.conversationId')
+    const row = this.db.prepare(
+      `SELECT m.id, m.body_id, m.conversation_id, m.role,
+              b.content AS body_text, m.created_at
+       FROM messages m
+       JOIN bodies b ON b.id = m.body_id
+       WHERE m.conversation_id = ? AND m.role = 'user'
+       ORDER BY m.seq DESC
+       LIMIT 1`,
+    ).get(id) as Record<string, unknown> | undefined
+    return row === undefined ? null : chatMessageFromRow(row)
+  }
+
   chatMessageCount(conversationId = 'main'): number {
     this.assertOpen()
     const id = validateIdentifier(conversationId, 'message.conversationId')

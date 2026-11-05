@@ -188,7 +188,15 @@ function readConfigFile(file: string): { table?: TomlTable; issue?: ConfigIssue 
 function validateSystem(table: TomlTable, file: string): SystemConfig {
   knownKeys(
     table,
-    ['schema_version', 'environment', 'time', 'model', 'resources', 'storage'],
+    [
+      'schema_version',
+      'environment',
+      'time',
+      'context',
+      'model',
+      'resources',
+      'storage',
+    ],
     '',
   )
   requireSchemaVersion(table, CONFIG_SCHEMA_VERSION)
@@ -225,6 +233,42 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
   // 当前模型只支持一个连续安静时段，起止相同视为配置错误。
   if (quietHoursStart === quietHoursEnd) {
     fail('time.quiet_hours_end', 'quiet hours must have a non-zero duration')
+  }
+
+  const context = requiredTable(table, 'context', 'context')
+  knownKeys(
+    context,
+    [
+      'max_prompt_chars',
+      'max_state_chars',
+      'max_memory_items',
+      'max_memory_item_chars',
+      'max_memory_chars',
+      'max_history_messages',
+      'max_history_chars',
+      'max_message_chars',
+    ],
+    'context',
+  )
+  const maxPromptChars = requiredInteger(
+    context,
+    'max_prompt_chars',
+    'context.max_prompt_chars',
+    2_000,
+    200_000,
+  )
+  const maxMessageChars = requiredInteger(
+    context,
+    'max_message_chars',
+    'context.max_message_chars',
+    1,
+    4_000,
+  )
+  if (maxMessageChars > maxPromptChars) {
+    fail(
+      'context.max_message_chars',
+      'must not exceed context.max_prompt_chars',
+    )
   }
 
   const model = requiredTable(table, 'model', 'model')
@@ -343,6 +387,52 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
       timezone,
       quietHoursStart,
       quietHoursEnd,
+    },
+    context: {
+      maxPromptChars,
+      maxStateChars: requiredInteger(
+        context,
+        'max_state_chars',
+        'context.max_state_chars',
+        240,
+        4_000,
+      ),
+      maxMemoryItems: requiredInteger(
+        context,
+        'max_memory_items',
+        'context.max_memory_items',
+        1,
+        10,
+      ),
+      maxMemoryItemChars: requiredInteger(
+        context,
+        'max_memory_item_chars',
+        'context.max_memory_item_chars',
+        20,
+        2_000,
+      ),
+      maxMemoryChars: requiredInteger(
+        context,
+        'max_memory_chars',
+        'context.max_memory_chars',
+        200,
+        50_000,
+      ),
+      maxHistoryMessages: requiredInteger(
+        context,
+        'max_history_messages',
+        'context.max_history_messages',
+        0,
+        99,
+      ),
+      maxHistoryChars: requiredInteger(
+        context,
+        'max_history_chars',
+        'context.max_history_chars',
+        0,
+        100_000,
+      ),
+      maxMessageChars,
     },
     model: {
       provider,

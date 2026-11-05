@@ -9,6 +9,7 @@ export { MemoryInputError } from './types.ts'
 export type {
   CorrectMemoryInput,
   MemoryExtractionSummary,
+  MemoryRecallOptions,
   MemorySearchOptions,
   MemoryView,
   OwnerMemoryInput,

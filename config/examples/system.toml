@@ -9,6 +9,19 @@ timezone = "Asia/Shanghai"
 quiet_hours_start = "00:10"
 quiet_hours_end = "07:00"
 
+[context]
+# 预算按 Unicode 码点计，不冒充上游 tokenizer 的精确 token 数。
+# 身份/系统规则和本条消息永不裁剪；超限先删最旧对话，再删相关度最低的记忆。
+max_prompt_chars = 20000
+max_state_chars = 480
+max_memory_items = 5
+max_memory_item_chars = 500
+max_memory_chars = 3000
+# 最近对话的上限不含本条用户消息。
+max_history_messages = 40
+max_history_chars = 8000
+max_message_chars = 4000
+
 [model]
 # M3.1 使用电脑上的 Magpie 本地模型路由。地址只能是回环 /v1 端点；
 # 精确模型名不会自动替换成 auto/* 路由组。

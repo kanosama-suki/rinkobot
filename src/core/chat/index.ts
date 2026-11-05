@@ -8,6 +8,18 @@ export { MockChatModel, MOCK_MODEL_ID } from './mock-model.ts'
 export { KanobotChatService } from './service.ts'
 export type { ChatServiceOptions } from './service.ts'
 export {
+  assembleChatContext,
+  ChatContextError,
+  DEFAULT_CHAT_CONTEXT_BUDGET,
+  validateChatContextBudget,
+} from './context.ts'
+export type {
+  AssembledChatContext,
+  AssembleChatContextInput,
+  ChatContextBudget,
+  ChatContextStats,
+} from './context.ts'
+export {
   CHAT_ENVELOPE_SCHEMA_VERSION,
   ChatEnvelopeError,
   MAX_ENVELOPE_COMMITMENTS,

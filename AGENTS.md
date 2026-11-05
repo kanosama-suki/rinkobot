@@ -2,7 +2,7 @@
 
 ## 0. 项目一句话
 
-在 DSH 宿主中自研一个连续、可恢复、可审计的陪伴型机器人；当前已完成 M3.0 的网页聊天骨架、M3.1 的 Magpie 模型网关、M3.2 的长期记忆核心、M3.3 的记忆闭环、M3.4 的风格检查/所有者控制和 M3.5 的单次对话信封，正在建设完整 M3。
+在 DSH 宿主中自研一个连续、可恢复、可审计的陪伴型机器人；当前已完成 M3.0 的网页聊天骨架、M3.1 的 Magpie 模型网关、M3.2 的长期记忆核心、M3.3 的记忆闭环、M3.4 的风格检查/所有者控制、M3.5 的单次对话信封和 M3.6 的上下文预算/时间感知，正在建设完整 M3。
 
 ## 1. 必读顺序
 
@@ -38,6 +38,7 @@
 - DSH 只作为宿主；陪伴核心、状态、记忆、主动性和进化治理自研。
 - 配置按功能模块拆分：`system`、`identity`、`life-state`、`relationship`、`memory`、`initiative`、`channels`、`digital-life`、`evolution`、`policy`、`observability`、`ui`。群配置只在 `channels.toml`。
 - 配置加载器负责 schema、默认值、跨文件引用、版本迁移和 fail-closed；模块不能绕过加载器读取散落参数。
+- 单轮聊天预算只从 `system.toml` 的 `[context]` 读取，由纯函数上下文组装器执行；身份/规则和当前消息不能被预算静默裁剪。
 - `StateEvent` / `StateSnapshot` / `Appraisal` / `Policy` 必须版本化；模型只能提交候选变化，reducer 和 policy 决定持久化与权限。
 - 状态字段必须有读取者或写入者，并影响可观察行为；虚拟身体明确标记为模拟，不能冒充真实生理或医疗事实。
 - 外部网页、聊天、文件和工具结果一律是不可信输入，不能成为系统指令或未经核验的事实记忆。
@@ -67,13 +68,13 @@ node scripts/preflight-runtime.ts F:\kanobot\dsh\test-home\kanobot\config F:\kan
 npm run test:lifecycle -- --output F:\kanobot\dsh\m1-plugin-lifecycle.json
 ```
 
-`npm test` 使用 `node --test`，当前 124 项通过。自动测试不会读取真实人格文件、调用真实模型接口或操作正式数据库；真实 Magpie 验收使用隔离的 4100 测试 Profile，M3.1/M3.3/M3.4/M3.5 证据分别见 `docs/m3.1-acceptance.md`、`docs/m3.3-acceptance.md`、`docs/m3.4-acceptance.md` 和 `docs/m3.5-acceptance.md`。测试实例的启停、配置预检和工具审计脚本在 `F:\kanobot\dsh`，不在本仓库内；正式 `4096` 实例不属于测试命令。
+`npm test` 使用 `node --test`，当前 136 项通过。自动测试不会读取真实人格文件、调用真实模型接口或操作正式数据库；真实 Magpie 验收使用隔离的 4100 测试 Profile，M3.1/M3.3/M3.4/M3.5/M3.6 证据分别见 `docs/m3.1-acceptance.md`、`docs/m3.3-acceptance.md`、`docs/m3.4-acceptance.md`、`docs/m3.5-acceptance.md` 和 `docs/m3.6-acceptance.md`。测试实例的启停、配置预检和工具审计脚本在 `F:\kanobot\dsh`，不在本仓库内；正式 `4096` 实例不属于测试命令。
 
 ## 5. 当前状态
 
-- 阶段：M3.5 单次 JSON 信封、appraisal 与 commitments 闭环已完成（2026-11-05）；完整 M3 进行中，下一步是可配置视觉模型和上下文分块预算。真实模型比较与主模型选型按 kano 的决定后置到整个项目完工后。
-- 已存在：DSH 测试 Profile、Host 插件、严格配置 loader、版本化事件与纯 reducer、SQLite 主库和独立墓碑库、确定性快照、回收站/彻底清除、每日备份、恢复测试、配置/数据库预检、复用 DSH 登录态的 `/kanobot/` 网页、SSE 聊天、schema v6 对话/消息/模型调用审计（含 `purpose`）/FTS5 记忆索引/风格检查/所有者审计/紧急状态、Magpie 精确模型网关、超时/有限重试、token 与估算费用记录、并发/每日调用熔断、长期记忆候选规则、纠正与中文双列检索、聊天前记忆召回注入、单次聊天调用返回的 JSON 信封、正文流式显示、同一轮记忆候选写入、appraisal 状态事件、commitment 正文与事件、所有者记忆面板（查看/新增/纠正/转正/回收站/恢复/彻底清除）、确定性回复风格检查、7 个脚本化人格场景、所有者操作审计页签、紧急停止与 `STOP` 文件双重开关，以及 M1/M2/M3.0/M3.1/M3.2/M3.3/M3.4/M3.5 验收记录。
-- 尚未存在：可配置视觉模型驱动、真实模型场景比较、上下文分块预算、不经过 DSH 的本地开发入口、QQ 适配器、浏览器 worker、VM 和自进化。风格检查失败目前只记录并照常发送，不会自动重新生成；所有者审计只覆盖成功操作，不覆盖读取和失败尝试。
+- 阶段：M3.6 上下文分块预算、当前时间/星期、沉默时长和定性状态已完成（2026-11-05）；完整 M3 进行中，下一步是可配置视觉模型和不经过 DSH 的本地开发入口。真实模型比较与主模型选型按 kano 的决定后置到整个项目完工后。
+- 已存在：DSH 测试 Profile、Host 插件、严格配置 loader、版本化事件与纯 reducer、SQLite 主库和独立墓碑库、确定性快照、回收站/彻底清除、每日备份、恢复测试、配置/数据库预检、复用 DSH 登录态的 `/kanobot/` 网页、SSE 聊天、schema v6 对话/消息/模型调用审计（含 `purpose`）/FTS5 记忆索引/风格检查/所有者审计/紧急状态、Magpie 精确模型网关、超时/有限重试、token 与估算费用记录、并发/每日调用熔断、长期记忆候选规则、纠正与中文双列检索、聊天前记忆召回注入、单次聊天调用返回的 JSON 信封、正文流式显示、同一轮记忆候选写入、appraisal 状态事件、commitment 正文与事件、所有者记忆面板（查看/新增/纠正/转正/回收站/恢复/彻底清除）、确定性回复风格检查、7 个脚本化人格场景、所有者操作审计页签、紧急停止与 `STOP` 文件双重开关、`[context]` 分块字符预算、当前时间/星期/沉默时长、定性状态描述和相对时间 `dueAt`，以及 M1/M2/M3.0/M3.1/M3.2/M3.3/M3.4/M3.5/M3.6 验收记录。
+- 尚未存在：可配置视觉模型驱动、真实模型场景比较、不经过 DSH 的本地开发入口、统一审计视图、QQ 适配器、浏览器 worker、VM 和自进化。风格检查失败目前只记录并照常发送，不会自动重新生成；所有者审计只覆盖成功操作，不覆盖读取和失败尝试。
 - 已知部署基线：Windows 10（10.0.19045），Node v24.19.0，DSH `0.2.1-rc.5`（npm `latest` 标签；当前没有非 RC 版本）。插件源码在本目录，测试实例使用独立 `DSH_HOME=F:\kanobot\dsh\test-home`。
 - 已知清理记录：旧插件、NapCat 和旧 VM 已从宿主清理；重新部署必须按新设计进行，不能复用旧配置假设。
 - 已确认的产品决定见 `docs/plan.md` 第 1 节。
@@ -85,6 +86,7 @@ npm run test:lifecycle -- --output F:\kanobot\dsh\m1-plugin-lifecycle.json
 - M3.3 的检索注入、结构化抽取、独立调用审计、记忆面板和真实路由结果见 `docs/m3.3-acceptance.md`。
 - M3.4 的风格检查、场景规格、所有者审计和紧急停止见 `docs/m3.4-acceptance.md`。
 - M3.5 的单次 JSON 信封、逐字正文、记忆/appraisal/commitments 闭环和真实 4100 结果见 `docs/m3.5-acceptance.md`。
+- M3.6 的上下文分块预算、时间/状态注入、相对时间承诺和真实 4100 结果见 `docs/m3.6-acceptance.md`。
 - 测试 Profile 数据在 `F:\kanobot\dsh\test-home\kanobot\data`；主库备份不包含独立墓碑库，迁移和恢复时必须单独保留 `tombstones.sqlite`。
 - 最近更新时间：2026-11-05。
 

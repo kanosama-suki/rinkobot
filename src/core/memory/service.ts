@@ -26,6 +26,7 @@ import {
 import {
   MemoryInputError,
   type CorrectMemoryInput,
+  type MemoryRecallOptions,
   type MemorySearchOptions,
   type MemoryView,
   type OwnerMemoryInput,
@@ -181,7 +182,11 @@ export class KanobotMemoryService {
    * 聊天上下文召回优先保证精确，再补一次宽松召回。
    * 宽松模式只在精确结果不足时使用，避免常用字召回的记忆塞满提示词。
    */
-  recall(query: string, limit = 5): MemorySearchResult[] {
+  recall(
+    query: string,
+    limit = 5,
+    options: MemoryRecallOptions = {},
+  ): MemorySearchResult[] {
     if (!Number.isInteger(limit) || limit < 1 || limit > 10) {
       throw new MemoryInputError(
         'invalid_limit',
@@ -210,10 +215,22 @@ export class KanobotMemoryService {
       merged.push(result)
       if (merged.length >= limit) break
     }
-    if (merged.length > 0) {
+    if (merged.length > 0 && (options.markRecalled ?? true)) {
       this.storage.markMemoriesRecalled(merged.map(result => result.memory.id))
     }
     return merged
+  }
+
+  /**
+   * 上下文组装完成后再统一标记召回时间。这样因预算被裁掉的条目不会被
+   * 误记为“刚被想起”，后续检索排序也不会被凭空抬高。
+   */
+  markRecalled(ids: readonly string[]): void {
+    if (ids.length === 0) return
+    this.storage.markMemoriesRecalled(
+      ids,
+      this.clock.now().toISOString(),
+    )
   }
 
   /**
