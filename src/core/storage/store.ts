@@ -1,5 +1,5 @@
 /**
- * M2 持久化引擎。
+ * M2/M3.0 持久化引擎。
  *
  * 边界：
  * - 事件追加和可选快照在同一 SQLite 事务里提交；
@@ -8,8 +8,9 @@
  * - 所有数据库错误显式抛出，不自动重建、不静默跳过损坏事件。
  */
 
-import type { DatabaseSync } from 'node:sqlite'
+import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
+import type { DatabaseSync } from 'node:sqlite'
 
 import type { LoadedConfig } from '../config/types.ts'
 import {
@@ -40,7 +41,9 @@ import {
 } from './paths.ts'
 import {
   invalid,
+  normalizeChatText,
   validateBodyInput,
+  validateChatRole,
   validateIdentifier,
   validateInstant,
   validateOutboxRecord,
@@ -66,6 +69,9 @@ import type {
   AppendedEvent,
   BackupRecord,
   BodyRecord,
+  ChatMessageInput,
+  ChatMessageRecord,
+  ConversationRecord,
   MemoryListOptions,
   OutboxRecord,
   PurgeResult,
@@ -77,6 +83,7 @@ import type {
 interface TombstoneEnforcement {
   tombstones: Tombstone[]
   deletedBodies: number
+  deletedMessages: number
   deletedMemories: number
   deletedOutbox: number
   deletedSnapshots: number
@@ -359,6 +366,142 @@ export class KanobotStorage {
     }
   }
 
+  ensureConversation(
+    id = 'main',
+    at: string = this.nowIso(),
+  ): ConversationRecord {
+    this.assertOpen()
+    const conversationId = validateIdentifier(id, 'conversation.id')
+    const createdAt = validateInstant(at, 'conversation.createdAt')
+    return this.ensureConversationRow(conversationId, createdAt)
+  }
+
+  getConversation(id = 'main'): ConversationRecord | null {
+    this.assertOpen()
+    const conversationId = validateIdentifier(id, 'conversation.id')
+    const row = this.db.prepare(
+      'SELECT id, created_at, updated_at FROM conversations WHERE id = ?',
+    ).get(conversationId) as Record<string, unknown> | undefined
+    return row === undefined ? null : conversationFromRow(row)
+  }
+
+  appendChatMessage(input: ChatMessageInput): ChatMessageRecord {
+    this.assertOpen()
+    const conversationId = validateIdentifier(
+      input.conversationId,
+      'message.conversationId',
+    )
+    const role = validateChatRole(input.role)
+    const text = normalizeChatText(input.text)
+    const messageId = validateIdentifier(
+      input.id ?? `message-${randomUUID()}`,
+      'message.id',
+    )
+    const createdAt = validateInstant(
+      input.createdAt ?? this.nowIso(),
+      'message.createdAt',
+    )
+    const bodyId = `body-${randomUUID()}`
+    const body = validateBodyInput({
+      id: bodyId,
+      kind: `chat.${role}`,
+      content: text,
+      createdAt,
+    })
+
+    this.inTransaction(() => {
+      this.ensureConversationRow(conversationId, createdAt)
+      try {
+        this.db.prepare(
+          'INSERT INTO bodies (id, kind, content, created_at) VALUES (?, ?, ?, ?)',
+        ).run(body.id, body.kind, body.content, body.createdAt)
+        this.db.prepare(
+          `INSERT INTO messages
+            (id, conversation_id, role, body_id, created_at)
+           VALUES (?, ?, ?, ?, ?)`,
+        ).run(messageId, conversationId, role, body.id, createdAt)
+        this.db.prepare(
+          `UPDATE conversations
+           SET updated_at = CASE WHEN updated_at < ? THEN ? ELSE updated_at END
+           WHERE id = ?`,
+        ).run(createdAt, createdAt, conversationId)
+      } catch (error) {
+        throw mapInsertError(error, 'chat message', messageId)
+      }
+    })
+
+    return {
+      id: messageId,
+      bodyId: body.id,
+      conversationId,
+      role,
+      text: body.content,
+      createdAt,
+    }
+  }
+
+  getChatMessage(id: string): ChatMessageRecord | null {
+    this.assertOpen()
+    const messageId = validateIdentifier(id, 'message.id')
+    const row = this.db.prepare(
+      `SELECT m.id, m.body_id, m.conversation_id, m.role,
+              b.content AS body_text, m.created_at
+       FROM messages m
+       JOIN bodies b ON b.id = m.body_id
+       WHERE m.id = ?`,
+    ).get(messageId) as Record<string, unknown> | undefined
+    return row === undefined ? null : chatMessageFromRow(row)
+  }
+
+  listChatMessages(conversationId = 'main', limit = 40): ChatMessageRecord[] {
+    this.assertOpen()
+    const id = validateIdentifier(conversationId, 'message.conversationId')
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new StorageError(
+        'RECORD_INVALID',
+        'message limit must be an integer between 1 and 100',
+      )
+    }
+    const rows = this.db.prepare(
+      `SELECT id, body_id, conversation_id, role, body_text, created_at
+       FROM (
+         SELECT m.seq, m.id, m.body_id, m.conversation_id, m.role,
+                b.content AS body_text, m.created_at
+         FROM messages m
+         JOIN bodies b ON b.id = m.body_id
+         WHERE m.conversation_id = ?
+         ORDER BY m.seq DESC
+         LIMIT ?
+       )
+       ORDER BY seq ASC`,
+    ).all(id, limit) as Array<Record<string, unknown>>
+    return rows.map(chatMessageFromRow)
+  }
+
+  chatMessageCount(conversationId = 'main'): number {
+    this.assertOpen()
+    const id = validateIdentifier(conversationId, 'message.conversationId')
+    const row = this.db.prepare(
+      'SELECT COUNT(*) AS count FROM messages WHERE conversation_id = ?',
+    ).get(id) as Record<string, unknown> | undefined
+    return Number(row?.count ?? 0)
+  }
+
+  purgeChatMessage(id: string, at: string = this.nowIso()): PurgeResult {
+    this.assertOpen()
+    const messageId = validateIdentifier(id, 'message.id')
+    const row = this.db.prepare(
+      'SELECT body_id FROM messages WHERE id = ?',
+    ).get(messageId) as Record<string, unknown> | undefined
+    if (row === undefined || typeof row.body_id !== 'string') {
+      throw new StorageError(
+        'REFERENCE_MISSING',
+        `chat message "${messageId}" does not exist`,
+      )
+    }
+    return this.purge({ targetType: 'body', targetId: row.body_id }, at)
+  }
+
   putMemory(input: MemoryRecord): MemoryRecord {
     this.assertOpen()
     const memory = validateMemoryRecord(input)
@@ -576,6 +719,7 @@ export class KanobotStorage {
       target: { targetType: target.targetType, targetId },
       tombstones: enforcement.tombstones,
       deletedBodies: enforcement.deletedBodies,
+      deletedMessages: enforcement.deletedMessages,
       deletedMemories: enforcement.deletedMemories,
       deletedOutbox: enforcement.deletedOutbox,
       rebuiltSnapshotSequence: snapshot.snapshot.lastSequence,
@@ -850,6 +994,7 @@ export class KanobotStorage {
 
     const tombstones = this.readLedgerTombstones()
     let deletedBodies = 0
+    let deletedMessages = 0
     let deletedMemories = 0
     let deletedOutbox = 0
     let deletedSnapshots = 0
@@ -863,6 +1008,10 @@ export class KanobotStorage {
       }
       for (const tombstone of tombstones) {
         if (tombstone.targetType === 'body') {
+          const messageRow = this.db.prepare(
+            'SELECT COUNT(*) AS count FROM messages WHERE body_id = ?',
+          ).get(tombstone.targetId) as Record<string, unknown> | undefined
+          deletedMessages += Number(messageRow?.count ?? 0)
           deletedBodies += Number(
             this.db.prepare('DELETE FROM bodies WHERE id = ?').run(tombstone.targetId)
               .changes,
@@ -887,6 +1036,7 @@ export class KanobotStorage {
     return {
       tombstones,
       deletedBodies,
+      deletedMessages,
       deletedMemories,
       deletedOutbox,
       deletedSnapshots,
@@ -1012,6 +1162,23 @@ export class KanobotStorage {
         `${targetType} "${targetId}" has been permanently purged`,
       )
     }
+  }
+
+  private ensureConversationRow(id: string, at: string): ConversationRecord {
+    this.db.prepare(
+      `INSERT OR IGNORE INTO conversations (id, created_at, updated_at)
+       VALUES (?, ?, ?)`,
+    ).run(id, at, at)
+    const row = this.db.prepare(
+      'SELECT id, created_at, updated_at FROM conversations WHERE id = ?',
+    ).get(id) as Record<string, unknown> | undefined
+    if (row === undefined) {
+      throw new StorageIntegrityError(
+        `conversation "${id}" disappeared during creation`,
+        ':conversations:',
+      )
+    }
+    return conversationFromRow(row)
   }
 
   private updateMemoryRow(
@@ -1143,6 +1310,52 @@ function validateOptions(options: StorageOptions): void {
       'RECORD_INVALID',
       'backupRetention must be an integer between 1 and 30',
     )
+  }
+}
+
+function conversationFromRow(row: Record<string, unknown>): ConversationRecord {
+  if (
+    typeof row.id !== 'string' ||
+    typeof row.created_at !== 'string' ||
+    typeof row.updated_at !== 'string'
+  ) {
+    throw new StorageIntegrityError(
+      'conversation row has invalid column types',
+      ':conversations:',
+    )
+  }
+  validateInstant(row.created_at, 'conversation.createdAt')
+  validateInstant(row.updated_at, 'conversation.updatedAt')
+  return {
+    id: row.id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function chatMessageFromRow(row: Record<string, unknown>): ChatMessageRecord {
+  if (
+    typeof row.id !== 'string' ||
+    typeof row.body_id !== 'string' ||
+    typeof row.conversation_id !== 'string' ||
+    (row.role !== 'user' && row.role !== 'assistant') ||
+    typeof row.body_text !== 'string' ||
+    typeof row.created_at !== 'string'
+  ) {
+    throw new StorageIntegrityError(
+      'chat message row has invalid column types or role',
+      ':messages:',
+    )
+  }
+  validateInstant(row.created_at, 'message.createdAt')
+  validateIdentifier(row.body_id, 'message.bodyId')
+  return {
+    id: row.id,
+    bodyId: row.body_id,
+    conversationId: row.conversation_id,
+    role: row.role,
+    text: row.body_text,
+    createdAt: row.created_at,
   }
 }
 

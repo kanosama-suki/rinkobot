@@ -27,6 +27,12 @@ interface FakePluginContext {
       info(message: string): void
     }
     effect(callback: () => () => void): () => void
+    webServer: {
+      register(): () => void
+    }
+    connection: {
+      admit(): { peer: object }
+    }
   }
   logs: string[]
   dispose(): void
@@ -49,6 +55,16 @@ function createFakeContext(): FakePluginContext {
         const cleanup = callback()
         disposers.push(cleanup)
         return cleanup
+      },
+      webServer: {
+        register(): () => void {
+          return () => {}
+        },
+      },
+      connection: {
+        admit(): { peer: object } {
+          return { peer: {} }
+        },
       },
     },
     logs,
@@ -145,6 +161,8 @@ test('an explicit startup report proves successful activation', () => {
     assert.equal(report.identity, 'placeholder')
     assert.equal(report.database, join(dataDir, 'kanobot.sqlite'))
     assert.equal(report.tombstones, join(dataDir, 'tombstones.sqlite'))
+    assert.equal(report.chatPath, '/kanobot/')
+    assert.equal(report.modelMode, 'mock')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

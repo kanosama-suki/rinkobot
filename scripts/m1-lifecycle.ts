@@ -26,6 +26,8 @@ function createFakeContext(): {
   ctx: {
     logger: { info(message: string): void }
     effect(callback: () => () => void): () => void
+    webServer: { register(): () => void }
+    connection: { admit(): { peer: object } }
   }
   logs: string[]
   dispose(): void
@@ -45,6 +47,16 @@ function createFakeContext(): {
         const cleanup = callback()
         disposers.push(cleanup)
         return cleanup
+      },
+      webServer: {
+        register(): () => void {
+          return () => {}
+        },
+      },
+      connection: {
+        admit(): { peer: object } {
+          return { peer: {} }
+        },
       },
     },
     logs,

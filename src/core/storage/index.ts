@@ -31,6 +31,10 @@ export {
   resolveStorageLayout,
 } from './paths.ts'
 export {
+  MAX_CHAT_MESSAGE_CHARS,
+  normalizeChatText,
+} from './records.ts'
+export {
   KanobotStorage,
   openStorageFromConfig,
   resolveConfiguredLayout,
@@ -39,6 +43,10 @@ export type {
   AppendedEvent,
   BackupRecord,
   BodyRecord,
+  ChatMessageInput,
+  ChatMessageRecord,
+  ChatRole,
+  ConversationRecord,
   MemoryListOptions,
   OutboxRecord,
   OutboxStatus,

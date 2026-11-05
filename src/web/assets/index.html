@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Kanobot · M3 测试聊天</title>
+    <link rel="stylesheet" href="/kanobot/app.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <span class="brand-mark" aria-hidden="true">K</span>
+          <div>
+            <p class="eyebrow">Kanobot / M3.0</p>
+            <h1>测试聊天</h1>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <span id="model-badge" class="badge">读取状态中</span>
+          <a class="quiet-link" href="/">返回 DSH</a>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="chat-panel" aria-label="聊天">
+          <div id="notice" class="notice" role="alert" hidden></div>
+          <div id="empty-state" class="empty-state" hidden>
+            <p>这里还没有消息。</p>
+            <span>这是占位人格和本地 mock 回复，不会调用真实模型。</span>
+          </div>
+          <div id="messages" class="messages" role="log" aria-live="polite"></div>
+          <form id="composer" class="composer">
+            <label class="sr-only" for="message-input">输入消息</label>
+            <textarea
+              id="message-input"
+              name="message"
+              rows="2"
+              maxlength="4000"
+              placeholder="说点什么…… Enter 发送，Shift + Enter 换行"
+              autocomplete="off"
+            ></textarea>
+            <button id="send-button" type="submit">发送</button>
+          </form>
+          <p class="composer-hint">
+            消息会保存到测试数据库；刷新或重启后仍可读取。
+          </p>
+        </section>
+
+        <aside class="owner-panel" aria-label="所有者面板">
+          <section class="panel-card">
+            <p class="eyebrow">所有者面板</p>
+            <h2>运行状态</h2>
+            <dl class="status-list">
+              <div>
+                <dt>模型</dt>
+                <dd id="status-model">—</dd>
+              </div>
+              <div>
+                <dt>持久化</dt>
+                <dd id="status-storage">—</dd>
+              </div>
+              <div>
+                <dt>消息数</dt>
+                <dd id="status-messages">—</dd>
+              </div>
+              <div>
+                <dt>事件序号</dt>
+                <dd id="status-events">—</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="panel-card subtle-card">
+            <p class="eyebrow">当前边界</p>
+            <h2>M3.0 骨架</h2>
+            <ul class="boundary-list">
+              <li>复用 DSH 浏览器登录态</li>
+              <li>SSE 流式传输占位回复</li>
+              <li>正文只写入 <code>bodies</code></li>
+              <li>未接入真实模型与长期记忆检索</li>
+            </ul>
+          </section>
+        </aside>
+      </main>
+    </div>
+    <script type="module" src="/kanobot/app.js"></script>
+  </body>
+</html>

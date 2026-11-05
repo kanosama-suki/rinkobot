@@ -12,17 +12,30 @@ import { dirname, resolve } from 'node:path'
 
 import { loadConfigFromDirectory } from '../core/config/index.ts'
 import {
+  KanobotChatService,
+  MockChatModel,
+} from '../core/chat/index.ts'
+import {
   KanobotStorage,
   StorageError,
 } from '../core/storage/index.ts'
+import {
+  CHAT_BASE_PATH,
+  registerChatSurface,
+  type ChatConnection,
+  type ChatWebServer,
+} from '../web/index.ts'
 import { createPluginLifecycle } from './lifecycle.ts'
 import { PLUGIN_NAME, PLUGIN_VERSION } from './version.ts'
+
+export const inject = ['webServer', 'connection']
 
 export interface KanobotPluginConfig {
   configDir?: string
   dataDir?: string
   heartbeatMs?: number
   startupReportPath?: string
+  modelMode?: 'mock'
 }
 
 interface PluginLogger {
@@ -33,6 +46,8 @@ interface PluginLogger {
 interface PluginContext {
   logger: PluginLogger
   effect(callback: () => () => void): () => void
+  webServer: ChatWebServer
+  connection: ChatConnection
 }
 
 export function apply(
@@ -45,12 +60,24 @@ export function apply(
   const dataDir = resolveDataDir(config)
   let storage: KanobotStorage | undefined
   let lifecycle: ReturnType<typeof createPluginLifecycle> | undefined
+  let disposeChatSurface: (() => void) | undefined
+  const modelMode = config.modelMode ?? 'mock'
+  if (modelMode !== 'mock') {
+    throw new Error(`unsupported modelMode "${String(modelMode)}"; M3.0 only supports mock`)
+  }
 
   try {
     // 数据库损坏、schema 不兼容或路径逃逸都会在这里阻止插件继续激活。
     storage = KanobotStorage.openFromConfig(loaded, dataDir)
     // 备份失败也应阻止“看似启动成功”：日备份是 M2 的数据安全边界。
     storage.maybeCreateDailyBackup()
+    const chat = new KanobotChatService(storage, new MockChatModel())
+    disposeChatSurface = registerChatSurface({
+      webServer: ctx.webServer,
+      connection: ctx.connection,
+      chat,
+      logger: ctx.logger,
+    })
     lifecycle = createPluginLifecycle({
       heartbeatMs: config.heartbeatMs,
       onHeartbeat: () => {
@@ -81,6 +108,8 @@ export function apply(
         database: storage.databasePath,
         tombstones: storage.tombstonePath,
         backupDir: storage.backupDir,
+        chatPath: `${CHAT_BASE_PATH}/`,
+        modelMode,
         provider: loaded.system.model.provider,
         model: loaded.system.model.name,
         identity: loaded.identity.mode,
@@ -90,18 +119,21 @@ export function apply(
     ctx.logger.info(
       `[kanobot] ${PLUGIN_NAME} ${PLUGIN_VERSION} loaded; ` +
         `config=${configDir}; database=${storage.databasePath}; ` +
+        `chat=${CHAT_BASE_PATH}/; modelMode=${modelMode}; ` +
         `provider=${loaded.system.model.provider}; ` +
         `model=${loaded.system.model.name}; identity=${loaded.identity.mode}`,
     )
 
     // DSH 卸载插件时会调用这个 disposer，所有需要释放的资源都从这里收口。
     ctx.effect(() => () => {
+      disposeChatSurface?.()
       lifecycle?.dispose()
       storage?.close()
       ctx.logger.info(`[kanobot] ${PLUGIN_NAME} ${PLUGIN_VERSION} unloaded`)
     })
   } catch (error) {
     // 初始化过程中任何一步失败都不能留下定时器或打开的数据库。
+    disposeChatSurface?.()
     lifecycle?.dispose()
     try {
       storage?.close()

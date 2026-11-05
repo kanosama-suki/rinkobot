@@ -1,10 +1,10 @@
 /**
- * SQLite 打开、完整性检查和 M2 schema。
+ * SQLite 打开、完整性检查和 M2/M3 schema。
  *
  * 关键边界：
  * - 已存在的文件只允许被验证后打开；验证失败绝不删除、覆盖或自动建空库；
  * - 新库只在目标路径原本不存在时创建；
- * - 迁移版本或必需表/列不匹配时 fail-closed；
+ * - 已支持的旧 schema 在事务内迁移；未知版本或必需表/列不匹配时 fail-closed；
  * - 主库与墓碑库使用独立连接和 schema，墓碑库不进入主库备份。
  */
 
@@ -27,73 +27,78 @@ import {
   StorageIntegrityError,
 } from './errors.ts'
 
-export const STORAGE_SCHEMA_VERSION = 1
+export const STORAGE_SCHEMA_VERSION = 2
 export const TOMBSTONE_STORE_SCHEMA_VERSION = 1
 
 type DatabaseKind = 'main' | 'tombstones'
 
-const REQUIRED_COLUMNS: Record<DatabaseKind, Record<string, readonly string[]>> = {
-  main: {
-    schema_migrations: ['version', 'applied_at'],
-    events: [
-      'seq',
-      'event_id',
-      'schema_version',
-      'occurred_at',
-      'source',
-      'event_type',
-      'payload_json',
-      'evidence_refs_json',
-      'confidence',
-    ],
-    snapshots: [
-      'id',
-      'schema_version',
-      'last_sequence',
-      'last_event_id',
-      'generated_at',
-      'state_hash',
-      'snapshot_json',
-    ],
-    bodies: ['id', 'kind', 'content', 'created_at'],
-    memories: [
-      'id',
-      'schema_version',
-      'kind',
-      'content_ref',
-      'quote_ref',
-      'source',
-      'created_at',
-      'confidence',
-      'sensitivity',
-      'importance',
-      'last_recalled_at',
-      'status',
-      'previous_status',
-      'replaced_by',
-      'deleted_at',
-      'purge_after',
-      'record_json',
-    ],
-    tombstones: ['target_type', 'target_id', 'purged_at'],
-    outbox: [
-      'id',
-      'target',
-      'payload_ref',
-      'status',
-      'due_at',
-      'created_at',
-      'attempts',
-      'last_error_code',
-    ],
-  },
-  tombstones: {
-    schema_migrations: ['version', 'applied_at'],
-    tombstones: ['target_type', 'target_id', 'purged_at'],
-  },
+const MAIN_REQUIRED_COLUMNS_V1: Record<string, readonly string[]> = {
+  schema_migrations: ['version', 'applied_at'],
+  events: [
+    'seq',
+    'event_id',
+    'schema_version',
+    'occurred_at',
+    'source',
+    'event_type',
+    'payload_json',
+    'evidence_refs_json',
+    'confidence',
+  ],
+  snapshots: [
+    'id',
+    'schema_version',
+    'last_sequence',
+    'last_event_id',
+    'generated_at',
+    'state_hash',
+    'snapshot_json',
+  ],
+  bodies: ['id', 'kind', 'content', 'created_at'],
+  memories: [
+    'id',
+    'schema_version',
+    'kind',
+    'content_ref',
+    'quote_ref',
+    'source',
+    'created_at',
+    'confidence',
+    'sensitivity',
+    'importance',
+    'last_recalled_at',
+    'status',
+    'previous_status',
+    'replaced_by',
+    'deleted_at',
+    'purge_after',
+    'record_json',
+  ],
+  tombstones: ['target_type', 'target_id', 'purged_at'],
+  outbox: [
+    'id',
+    'target',
+    'payload_ref',
+    'status',
+    'due_at',
+    'created_at',
+    'attempts',
+    'last_error_code',
+  ],
 }
 
-const MAIN_SCHEMA = `
+const MAIN_REQUIRED_COLUMNS_V2: Record<string, readonly string[]> = {
+  ...MAIN_REQUIRED_COLUMNS_V1,
+  conversations: ['id', 'created_at', 'updated_at'],
+  messages: ['seq', 'id', 'conversation_id', 'role', 'body_id', 'created_at'],
+}
+
+const TOMBSTONE_REQUIRED_COLUMNS: Record<string, readonly string[]> = {
+  schema_migrations: ['version', 'applied_at'],
+  tombstones: ['target_type', 'target_id', 'purged_at'],
+}
+
+const MAIN_SCHEMA_V1 = `
 CREATE TABLE schema_migrations (
   version INTEGER PRIMARY KEY,
   applied_at TEXT NOT NULL
@@ -171,6 +176,25 @@ CREATE TABLE outbox (
 ) STRICT;
 CREATE INDEX outbox_payload_ref_index ON outbox(payload_ref);
 CREATE INDEX outbox_status_index ON outbox(status);
+`
+
+const CHAT_SCHEMA_V2 = `
+CREATE TABLE conversations (
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE messages (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  id TEXT NOT NULL UNIQUE,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+  body_id TEXT NOT NULL REFERENCES bodies(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL
+) STRICT;
+CREATE INDEX messages_conversation_seq_index ON messages(conversation_id, seq);
+CREATE INDEX messages_body_id_index ON messages(body_id);
 `
 
 const TOMBSTONE_SCHEMA = `
@@ -263,6 +287,8 @@ function openDatabase(
     if (existed) {
       // 只读预检和写打开之间存在极短窗口；写打开后再做一次语义检查。
       assertSchemaCompatible(db, path, kind)
+      migrateDatabaseIfNeeded(db, path, kind, nowIso)
+      assertSchemaCompatible(db, path, kind)
     } else {
       initializeDatabase(db, path, kind, nowIso)
     }
@@ -291,7 +317,8 @@ function initializeDatabase(
 ): void {
   const version =
     kind === 'main' ? STORAGE_SCHEMA_VERSION : TOMBSTONE_STORE_SCHEMA_VERSION
-  const schema = kind === 'main' ? MAIN_SCHEMA : TOMBSTONE_SCHEMA
+  const schema =
+    kind === 'main' ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}` : TOMBSTONE_SCHEMA
   db.exec('BEGIN IMMEDIATE')
   try {
     db.exec(schema)
@@ -401,29 +428,26 @@ function assertSchemaCompatible(
   path: string,
   kind: DatabaseKind,
 ): void {
-  const expectedVersion =
-    kind === 'main' ? STORAGE_SCHEMA_VERSION : TOMBSTONE_STORE_SCHEMA_VERSION
-  let versions: number[]
-  try {
-    const rows = db.prepare(
-      'SELECT version FROM schema_migrations ORDER BY version',
-    ).all() as Array<Record<string, unknown>>
-    versions = rows.map(row => Number(row.version))
-  } catch (error) {
+  const versions = readSchemaVersions(db, path, kind)
+  const latest = versions.at(-1)
+  const supported = kind === 'main' ? [1, 2] : [TOMBSTONE_STORE_SCHEMA_VERSION]
+  if (
+    latest === undefined ||
+    !supported.includes(latest) ||
+    versions.some(version => !supported.includes(version))
+  ) {
     throw new SchemaCompatibilityError(
-      'schema_migrations is missing or unreadable; refusing to initialize over an existing database',
-      path,
-      error,
-    )
-  }
-  if (versions.length !== 1 || versions[0] !== expectedVersion) {
-    throw new SchemaCompatibilityError(
-      `unsupported schema versions ${JSON.stringify(versions)}; expected [${expectedVersion}]`,
+      `unsupported schema versions ${JSON.stringify(versions)}; supported ${JSON.stringify(supported)}`,
       path,
     )
   }
 
-  const required = REQUIRED_COLUMNS[kind]
+  const required =
+    kind === 'tombstones'
+      ? TOMBSTONE_REQUIRED_COLUMNS
+      : latest === 1
+        ? MAIN_REQUIRED_COLUMNS_V1
+        : MAIN_REQUIRED_COLUMNS_V2
   for (const [table, columns] of Object.entries(required)) {
     const tableRows = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -443,6 +467,58 @@ function assertSchemaCompatible(
         )
       }
     }
+  }
+}
+
+function readSchemaVersions(
+  db: DatabaseSync,
+  path: string,
+  kind: DatabaseKind,
+): number[] {
+  try {
+    const rows = db.prepare(
+      'SELECT version FROM schema_migrations ORDER BY version',
+    ).all() as Array<Record<string, unknown>>
+    return rows.map(row => Number(row.version))
+  } catch (error) {
+    throw new SchemaCompatibilityError(
+      'schema_migrations is missing or unreadable; refusing to initialize over an existing database',
+      path,
+      error,
+    )
+  }
+}
+
+function migrateDatabaseIfNeeded(
+  db: DatabaseSync,
+  path: string,
+  kind: DatabaseKind,
+  nowIso: string,
+): void {
+  if (kind !== 'main') return
+  const versions = readSchemaVersions(db, path, kind)
+  const latest = versions.at(-1)
+  if (latest !== 1) return
+
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    db.exec(CHAT_SCHEMA_V2)
+    db.prepare(
+      'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+    ).run(STORAGE_SCHEMA_VERSION, nowIso)
+    db.exec(`PRAGMA user_version = ${STORAGE_SCHEMA_VERSION}`)
+    db.exec('COMMIT')
+  } catch (error) {
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      // 原始迁移错误优先；SQLite 可能已经自动回滚。
+    }
+    throw new StorageIntegrityError(
+      `schema migration ${latest} -> ${STORAGE_SCHEMA_VERSION} failed: ${errorMessage(error)}`,
+      path,
+      error,
+    )
   }
 }
 

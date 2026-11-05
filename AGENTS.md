@@ -2,7 +2,7 @@
 
 ## 0. 项目一句话
 
-在 DSH 宿主中自研一个连续、可恢复、可审计的陪伴型机器人；当前已完成 M2 的状态、SQLite 持久化、删除、墓碑和备份。
+在 DSH 宿主中自研一个连续、可恢复、可审计的陪伴型机器人；当前已完成 M3.0 的网页聊天骨架，正在建设完整 M3。
 
 ## 1. 必读顺序
 
@@ -67,18 +67,19 @@ node scripts/preflight-runtime.ts F:\kanobot\dsh\test-home\kanobot\config F:\kan
 npm run test:lifecycle -- --output F:\kanobot\dsh\m1-plugin-lifecycle.json
 ```
 
-`npm test` 使用 `node --test`，当前 50 项通过。测试不会读取真实人格文件、调用真实模型接口或操作正式数据库。测试实例的启停、配置预检和工具审计脚本在 `F:\kanobot\dsh`，不在本仓库内；正式 `4096` 实例不属于测试命令。
+`npm test` 使用 `node --test`，当前 57 项通过。测试不会读取真实人格文件、调用真实模型接口或操作正式数据库。测试实例的启停、配置预检和工具审计脚本在 `F:\kanobot\dsh`，不在本仓库内；正式 `4096` 实例不属于测试命令。
 
 ## 5. 当前状态
 
-- 阶段：M2 已完成（2026-11-05）；下一步是 M3 网页聊天闭环。
-- 已存在：DSH 测试 Profile、Host 插件、严格配置 loader、版本化事件与纯 reducer、SQLite 主库和独立墓碑库、确定性快照、回收站/彻底清除、每日备份、恢复测试、配置/数据库预检和 M1/M2 验收记录。
-- 尚未存在：FTS5 检索、网页聊天/所有者面板、模型网关、QQ 适配器、浏览器 worker、VM 和自进化。
+- 阶段：M3.0 网页聊天骨架已完成（2026-11-05）；完整 M3 进行中，下一步是 M3.1 真实模型网关。
+- 已存在：DSH 测试 Profile、Host 插件、严格配置 loader、版本化事件与纯 reducer、SQLite 主库和独立墓碑库、确定性快照、回收站/彻底清除、每日备份、恢复测试、配置/数据库预检、复用 DSH 登录态的 `/kanobot/` 网页、SSE 聊天、明确标记的本地 mock 模型、schema v2 对话/消息迁移，以及 M1/M2/M3.0 验收记录。
+- 尚未存在：真实 DeepSeek/Gemini 网关、超时重试与费用记录、FTS5 检索、长期记忆与纠正、风格/场景测试、完整所有者操作、QQ 适配器、浏览器 worker、VM 和自进化。
 - 已知部署基线：Windows 10（10.0.19045），Node v24.19.0，DSH `0.2.1-rc.5`（npm `latest` 标签；当前没有非 RC 版本）。插件源码在本目录，测试实例使用独立 `DSH_HOME=F:\kanobot\dsh\test-home`。
 - 已知清理记录：旧插件、NapCat 和旧 VM 已从宿主清理；重新部署必须按新设计进行，不能复用旧配置假设。
 - 已确认的产品决定见 `docs/plan.md` 第 1 节。
 - M1 的八项结果和边界见 `docs/m1-acceptance.md`。
 - M2 的五项结果和边界见 `docs/m2-acceptance.md`。
+- M3.0 的聊天骨架、鉴权、SSE、mock、迁移和已知缺口见 `docs/m3-acceptance.md`。
 - 测试 Profile 数据在 `F:\kanobot\dsh\test-home\kanobot\data`；主库备份不包含独立墓碑库，迁移和恢复时必须单独保留 `tombstones.sqlite`。
 - 最近更新时间：2026-11-05。
 

@@ -9,6 +9,7 @@ import { parseInstant } from '../state/index.ts'
 import { StorageError } from './errors.ts'
 import type {
   BodyRecord,
+  ChatRole,
   OutboxRecord,
   OutboxStatus,
 } from './types.ts'
@@ -16,6 +17,7 @@ import type {
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const KIND = /^[a-z][a-z0-9_.-]{0,63}$/
 const ERROR_CODE = /^[a-z][a-z0-9_.-]{0,127}$/
+export const MAX_CHAT_MESSAGE_CHARS = 4_000
 const OUTBOX_STATUSES: readonly OutboxStatus[] = [
   'pending',
   'delivered',
@@ -85,6 +87,25 @@ export function validateIdentifier(value: string, field: string): string {
     invalid(field, 'expected a safe identifier')
   }
   return value
+}
+
+export function validateChatRole(value: unknown): ChatRole {
+  if (value !== 'user' && value !== 'assistant') {
+    invalid('message.role', 'expected "user" or "assistant"')
+  }
+  return value
+}
+
+export function normalizeChatText(value: unknown, field = 'message.text'): string {
+  if (typeof value !== 'string') {
+    invalid(field, 'expected a string')
+  }
+  const text = value.trim()
+  const length = Array.from(text).length
+  if (length === 0 || length > MAX_CHAT_MESSAGE_CHARS) {
+    invalid(field, `expected 1..${MAX_CHAT_MESSAGE_CHARS} characters`)
+  }
+  return text
 }
 
 export function validateInstant(value: string, field: string): string {

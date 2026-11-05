@@ -34,6 +34,31 @@ export interface BodyRecord {
   createdAt: string
 }
 
+export type ChatRole = 'user' | 'assistant'
+
+export interface ConversationRecord {
+  id: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ChatMessageRecord {
+  id: string
+  bodyId: string
+  conversationId: string
+  role: ChatRole
+  text: string
+  createdAt: string
+}
+
+export interface ChatMessageInput {
+  conversationId: string
+  role: ChatRole
+  text: string
+  id?: string
+  createdAt?: string
+}
+
 export type OutboxStatus = 'pending' | 'delivered' | 'failed' | 'cancelled'
 
 export interface OutboxRecord {
@@ -66,6 +91,7 @@ export interface PurgeResult {
   target: PurgeTarget
   tombstones: Tombstone[]
   deletedBodies: number
+  deletedMessages: number
   deletedMemories: number
   deletedOutbox: number
   rebuiltSnapshotSequence: number

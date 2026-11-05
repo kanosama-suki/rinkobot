@@ -1,6 +1,6 @@
 # 项目文件结构
 
-以下路径相对于项目根目录 `a/`。当前仓库处于 M2 完成、M3 未开始的状态：已有 DSH Host 插件、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除和备份；FTS5 检索、网页聊天、模型网关和主动消息仍不存在。本文中的“目标结构”是后续实现的约束，不是已经存在的目录。
+以下路径相对于项目根目录 `a/`。当前仓库处于 M3.0 聊天骨架完成、完整 M3 进行中的状态：已有 DSH Host 插件、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、复用 DSH 登录态的网页聊天和 SSE；真实模型网关、FTS5 检索、长期记忆和主动消息仍不存在。本文中的“目标结构”是后续实现的约束，不是已经存在的目录。
 
 ## 1. 当前结构
 
@@ -30,33 +30,45 @@ kanobot/a/
 │   │   ├── lifecycle.ts              定时器生命周期
 │   │   ├── version.ts                插件名和版本
 │   │   └── cordis.patch.yml          bundle 默认插入的插件行
-│   └── core/
-│       ├── config/
-│       │   ├── index.ts              配置模块公开导出
-│       │   ├── loader.ts             TOML 读取、跨文件校验
-│       │   ├── types.ts              schema 版本和运行时类型
-│       │   ├── validation.ts         字段、范围、路径和时间校验
-│       │   └── errors.ts             带文件和字段位置的错误
-│       ├── state/
-│       │   ├── types.ts              事件、快照、记忆和墓碑契约
-│       │   ├── events.ts             数据契约严格校验
-│       │   ├── reducer.ts            纯状态转移和数值夹紧
-│       │   ├── canonical.ts          确定性 JSON 和哈希
-│       │   ├── clock.ts              唯一真实时钟接口
-│       │   └── index.ts              状态模块公开导出
-│       └── storage/
-│           ├── database.ts           打开、完整性、迁移和表 schema
-│           ├── store.ts              事务、回放、独立墓碑级联、清除、回收站和恢复
-│           ├── snapshots.ts          快照构造、写入和严格读取
-│           ├── backup.ts             VACUUM INTO、quick_check、保留和恢复
-│           ├── paths.ts              数据目录内的安全路径解析
-│           ├── records.ts            正文/outbox 壳记录校验
-│           ├── errors.ts             带 code 和 path 的存储错误
-│           ├── types.ts              存储公开类型
-│           └── index.ts              存储模块公开导出
+│   ├── core/
+│   │   ├── config/
+│   │   │   ├── index.ts              配置模块公开导出
+│   │   │   ├── loader.ts             TOML 读取、跨文件校验
+│   │   │   ├── types.ts              schema 版本和运行时类型
+│   │   │   ├── validation.ts         字段、范围、路径和时间校验
+│   │   │   └── errors.ts             带文件和字段位置的错误
+│   │   ├── chat/
+│   │   │   ├── index.ts              聊天领域公开导出
+│   │   │   ├── types.ts              模型、SSE 事件和会话视图契约
+│   │   │   ├── service.ts            校验、持久化、模型流和互动事件
+│   │   │   └── mock-model.ts         不联网的明确占位模型
+│   │   ├── state/
+│   │   │   ├── types.ts              事件、快照、记忆和墓碑契约
+│   │   │   ├── events.ts             数据契约严格校验
+│   │   │   ├── reducer.ts            纯状态转移和数值夹紧
+│   │   │   ├── canonical.ts          确定性 JSON 和哈希
+│   │   │   ├── clock.ts              唯一真实时钟接口
+│   │   │   └── index.ts              状态模块公开导出
+│   │   └── storage/
+│   │       ├── database.ts           打开、完整性、迁移和表 schema
+│   │       ├── store.ts              事务、回放、独立墓碑级联、清除、回收站和恢复
+│   │       ├── snapshots.ts          快照构造、写入和严格读取
+│   │       ├── backup.ts             VACUUM INTO、quick_check、保留和恢复
+│   │       ├── paths.ts              数据目录内的安全路径解析
+│   │       ├── records.ts            正文/outbox 壳记录校验
+│   │       ├── errors.ts             带 code 和 path 的存储错误
+│   │       ├── types.ts              存储公开类型
+│   │       └── index.ts              存储模块公开导出
+│   └── web/
+│       ├── index.ts                  Web 适配层公开导出
+│       ├── chat-http.ts              DSH 鉴权、聊天 API、SSE 和静态资源路由
+│       └── assets/
+│           ├── index.html            聊天页和最小所有者状态面板
+│           ├── app.js                SSE 消费、DOM 渲染和状态刷新
+│           └── app.css               响应式浅色/深色样式
 ├── tests/
 │   ├── unit/                         配置和纯 reducer
-│   ├── integration/                  插件、存储、清除、备份、强杀和 fail-closed
+│   ├── integration/                  插件、聊天/SSE、存储、清除、备份、强杀和 fail-closed
 │   ├── replay/                       同一事件流快照逐字节一致性
 │   ├── fixtures/                     崩溃写入子进程等测试夹具
 │   └── helpers/                      临时目录和固定事件工厂
@@ -65,6 +77,7 @@ kanobot/a/
     ├── plan.md                       总体规划书、模块边界和里程碑
     ├── m1-acceptance.md              M1 八项验收、证据和已知边界
     ├── m2-acceptance.md              M2 五项验收、运行证据和已知边界
+    ├── m3-acceptance.md              M3.0 聊天骨架验收、证据和未完成项
     ├── plugin-research.md            第三方插件源码调研与取舍
     ├── plugin-catalog.zh.md          第三方 DSH 插件汇总表（只读参考）
     ├── mods.md                       第三方插件与改动的记录模板
@@ -82,6 +95,7 @@ kanobot/a/
 - `docs/mods.md` 记录插件引入、替换和迁移；当前明确没有直接安装第三方插件作为生产依赖。
 - `docs/m1-acceptance.md` 记录 M1 的八项结果；其中零工具审计、真实 DSH 加载和坏配置预检报告放在仓库外的 `F:\kanobot\dsh`。
 - `docs/m2-acceptance.md` 记录 M2 的事件回放、强杀恢复、文件级清除、旧备份恢复和 fail-closed 边界。
+- `docs/m3-acceptance.md` 记录 M3.0 的 DSH 鉴权、网页/SSE、mock 模型、schema v2 迁移、重启恢复和尚未实现的 M3 项。
 
 ## 2. 目标结构
 
@@ -136,11 +150,11 @@ F:\kanobot\dsh\                       本地 DSH 安装、测试脚本和证据�
 DSH 数据目录                          M2 之后：数据库、快照、日志和备份
 ```
 
-M2 的实际数据布局：
+M2/M3.0 的实际数据布局：
 
 ```text
 <dataDir>/
-├── kanobot.sqlite                    主库：事件、快照、正文、记忆、outbox、墓碑投影
+├── kanobot.sqlite                    主库：事件、快照、正文、对话/消息、记忆、outbox、墓碑投影
 ├── tombstones.sqlite                 独立墓碑库，不进入主库备份
 └── backups/
     └── kanobot-backup-*.sqlite       最近 7 份主库一致性备份
@@ -159,7 +173,7 @@ M2 的实际数据布局：
 
 ## 4. 配置拆分规则
 
-一个功能模块对应一个配置文件，规则在 `plan.md` 第 10.1 节；文件随对应里程碑逐步出现。M2 需要 `system`、`identity`、`life-state`、`memory`、`policy` 五个文件：
+一个功能模块对应一个配置文件，规则在 `plan.md` 第 10.1 节；文件随对应里程碑逐步出现。M2 需要 `system`、`identity`、`life-state`、`memory`、`policy` 五个文件；M3.0 继续复用它们，完整 M3 再按网页渠道需要引入 `channels.toml`：
 
 ```text
 system.toml

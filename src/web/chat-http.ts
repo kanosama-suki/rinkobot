@@ -1,0 +1,445 @@
+/**
+ * Kanobot M3.0 的网页和聊天 HTTP 适配层。
+ *
+ * 边界：
+ * - 页面与接口复用 DSH 已认证的浏览器 Cookie；没有会话时一律 401；
+ * - 非流式响应使用有限 JSON 请求体，聊天回复使用 SSE 长连接；
+ * - 静态资源、路径和响应头固定，不把用户输入拼进 HTML。
+ */
+
+import { readFileSync } from 'node:fs'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import { fileURLToPath } from 'node:url'
+
+import type {
+  ChatInputError,
+  ChatStreamEvent,
+  ConversationView,
+  KanobotChatService,
+} from '../core/chat/index.ts'
+
+export const CHAT_BASE_PATH = '/kanobot'
+
+const MAX_BODY_BYTES = 64 * 1024
+const MAX_LIMIT = 100
+
+const SECURITY_HEADERS = {
+  'cache-control': 'no-store',
+  'content-security-policy':
+    "default-src 'none'; script-src 'self'; style-src 'self'; " +
+    "img-src 'self' data:; connect-src 'self'; base-uri 'none'; " +
+    "form-action 'none'; frame-ancestors 'none'",
+  'referrer-policy': 'no-referrer',
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+} as const
+
+const SSE_HEADERS = {
+  ...SECURITY_HEADERS,
+  'cache-control': 'no-cache, no-transform',
+  'content-type': 'text/event-stream; charset=utf-8',
+  connection: 'keep-alive',
+  'x-accel-buffering': 'no',
+} as const
+
+interface WebRoute {
+  kind: 'prefix'
+  path: string
+  handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
+}
+
+export interface ChatWebServer {
+  register(route: WebRoute): () => void
+}
+
+export interface ChatConnection {
+  admit(request: {
+    headers: IncomingMessage['headers']
+  }):
+    | { peer: unknown }
+    | { rejection: 401 | 403 }
+}
+
+export interface ChatLogger {
+  info(message: string): void
+  error?(message: string): void
+}
+
+export interface ChatSurfaceOptions {
+  webServer: ChatWebServer
+  connection: ChatConnection
+  chat: KanobotChatService
+  logger: ChatLogger
+}
+
+interface UiAssets {
+  html: Buffer
+  javaScript: Buffer
+  style: Buffer
+}
+
+export function registerChatSurface(options: ChatSurfaceOptions): () => void {
+  const assets = loadAssets()
+  const activeStreams = new Set<ServerResponse>()
+
+  const disposeRoute = options.webServer.register({
+    kind: 'prefix',
+    path: CHAT_BASE_PATH,
+    handler: (req, res) => {
+      void handleRequest(req, res, options, assets, activeStreams).catch(error => {
+        handleUnexpectedError(req, res, options.logger, error)
+      })
+    },
+  })
+
+  return () => {
+    disposeRoute()
+    for (const response of activeStreams) {
+      if (!response.writableEnded) response.destroy()
+    }
+    activeStreams.clear()
+  }
+}
+
+async function handleRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options: ChatSurfaceOptions,
+  assets: UiAssets,
+  activeStreams: Set<ServerResponse>,
+): Promise<void> {
+  const url = new URL(req.url ?? '/', 'http://kanobot.invalid')
+  const pathname = url.pathname
+  const api = pathname.startsWith(`${CHAT_BASE_PATH}/api/`)
+
+  const admission = options.connection.admit({ headers: req.headers })
+  if ('rejection' in admission) {
+    writeAuthRejection(res, admission.rejection, api)
+    return
+  }
+
+  if (pathname === CHAT_BASE_PATH) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      writeMethodNotAllowed(res, ['GET', 'HEAD'], api)
+      return
+    }
+    res.writeHead(308, {
+      ...SECURITY_HEADERS,
+      location: `${CHAT_BASE_PATH}/`,
+    })
+    res.end()
+    return
+  }
+
+  if (pathname === `${CHAT_BASE_PATH}/`) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      writeMethodNotAllowed(res, ['GET', 'HEAD'], api)
+      return
+    }
+    writeStatic(res, req.method === 'HEAD', 'text/html; charset=utf-8', assets.html)
+    return
+  }
+
+  if (pathname === `${CHAT_BASE_PATH}/app.js`) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      writeMethodNotAllowed(res, ['GET', 'HEAD'], api)
+      return
+    }
+    writeStatic(
+      res,
+      req.method === 'HEAD',
+      'text/javascript; charset=utf-8',
+      assets.javaScript,
+    )
+    return
+  }
+
+  if (pathname === `${CHAT_BASE_PATH}/app.css`) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      writeMethodNotAllowed(res, ['GET', 'HEAD'], api)
+      return
+    }
+    writeStatic(res, req.method === 'HEAD', 'text/css; charset=utf-8', assets.style)
+    return
+  }
+
+  if (pathname === `${CHAT_BASE_PATH}/api/conversation`) {
+    if (req.method !== 'GET') {
+      writeMethodNotAllowed(res, ['GET'], true)
+      return
+    }
+    const limit = parseLimit(url.searchParams.get('limit'))
+    if (limit === null) {
+      writeError(res, 400, 'invalid_limit', `limit 必须是 1 到 ${MAX_LIMIT} 的整数`, true)
+      return
+    }
+    const view = options.chat.conversation(limit)
+    writeJson(res, 200, view)
+    return
+  }
+
+  if (pathname === `${CHAT_BASE_PATH}/api/chat`) {
+    if (req.method !== 'POST') {
+      writeMethodNotAllowed(res, ['POST'], true)
+      return
+    }
+    await handleChatStream(req, res, options, activeStreams)
+    return
+  }
+
+  writeError(res, 404, 'not_found', '接口不存在', api)
+}
+
+async function handleChatStream(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options: ChatSurfaceOptions,
+  activeStreams: Set<ServerResponse>,
+): Promise<void> {
+  const body = await readJsonBody(req)
+  if (
+    typeof body !== 'object' ||
+    body === null ||
+    Array.isArray(body) ||
+    Object.keys(body).length !== 1 ||
+    !Object.hasOwn(body, 'text')
+  ) {
+    throw new RequestError(400, 'invalid_body', '请求体必须只包含 text 字段')
+  }
+
+  const controller = new AbortController()
+  const onClose = (): void => controller.abort()
+  res.on('close', onClose)
+  activeStreams.add(res)
+  res.writeHead(200, SSE_HEADERS)
+  res.flushHeaders()
+
+  try {
+    for await (const event of options.chat.streamMessage(
+      (body as { text: unknown }).text,
+      controller.signal,
+    )) {
+      if (res.writableEnded || controller.signal.aborted) break
+      writeSse(res, event)
+    }
+  } catch (error) {
+    if (!controller.signal.aborted && !res.writableEnded) {
+      writeSse(res, streamError(error))
+    }
+    if (!isAbortError(error)) {
+      options.logger.error?.(`[kanobot] chat stream failed: ${formatError(error)}`)
+    }
+  } finally {
+    activeStreams.delete(res)
+    res.off('close', onClose)
+    if (!res.writableEnded) res.end()
+  }
+}
+
+function writeSse(res: ServerResponse, event: ChatStreamEvent | {
+  type: 'error'
+  code: string
+  message: string
+}): void {
+  if (res.writableEnded || res.destroyed) return
+  res.write(`data: ${JSON.stringify(event)}\n\n`)
+}
+
+function streamError(error: unknown): {
+  type: 'error'
+  code: string
+  message: string
+} {
+  const candidate = error as Partial<ChatInputError>
+  if (candidate.name === 'ChatInputError' && typeof candidate.code === 'string') {
+    return {
+      type: 'error',
+      code: candidate.code,
+      message: error instanceof Error ? error.message : '聊天请求失败',
+    }
+  }
+  return {
+    type: 'error',
+    code: 'chat_failed',
+    message: '聊天回复失败，请稍后重试',
+  }
+}
+
+function writeStatic(
+  res: ServerResponse,
+  head: boolean,
+  contentType: string,
+  body: Buffer,
+): void {
+  res.writeHead(200, {
+    ...SECURITY_HEADERS,
+    'content-type': contentType,
+    'content-length': String(body.byteLength),
+  })
+  res.end(head ? undefined : body)
+}
+
+function writeJson(res: ServerResponse, status: number, value: unknown): void {
+  const body = Buffer.from(`${JSON.stringify(value)}\n`, 'utf8')
+  res.writeHead(status, {
+    ...SECURITY_HEADERS,
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': String(body.byteLength),
+  })
+  res.end(body)
+}
+
+function writeError(
+  res: ServerResponse,
+  status: number,
+  code: string,
+  message: string,
+  api: boolean,
+): void {
+  if (api) {
+    writeJson(res, status, { error: { code, message } })
+    return
+  }
+  const body = Buffer.from(`${message}\n`, 'utf8')
+  res.writeHead(status, {
+    ...SECURITY_HEADERS,
+    'content-type': 'text/plain; charset=utf-8',
+    'content-length': String(body.byteLength),
+  })
+  res.end(body)
+}
+
+function writeAuthRejection(
+  res: ServerResponse,
+  rejection: 401 | 403,
+  api: boolean,
+): void {
+  if (api) {
+    writeJson(res, rejection, {
+      error: {
+        code: rejection === 401 ? 'unauthenticated' : 'forbidden',
+        message:
+          rejection === 401
+            ? '请先打开 DSH 根页面完成登录'
+            : '请求来源不被允许',
+      },
+    })
+    return
+  }
+  const html =
+    '<!doctype html><html lang="zh-CN"><meta charset="utf-8">' +
+    '<title>Kanobot 需要登录</title><body>' +
+    `<h1>${rejection === 401 ? '需要先登录 DSH' : '请求来源不被允许'}</h1>` +
+    '<p>请先打开 <a href="/">DSH 根页面</a> 完成浏览器登录，然后重新访问 ' +
+    '<code>/kanobot/</code>。</p></body></html>'
+  res.writeHead(rejection, {
+    ...SECURITY_HEADERS,
+    'content-type': 'text/html; charset=utf-8',
+  })
+  res.end(html)
+}
+
+function writeMethodNotAllowed(
+  res: ServerResponse,
+  methods: string[],
+  api: boolean,
+): void {
+  res.setHeader('allow', methods.join(', '))
+  writeError(res, 405, 'method_not_allowed', '请求方法不被允许', api)
+}
+
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const contentType = String(req.headers['content-type'] ?? '')
+    .split(';', 1)[0]
+    .trim()
+    .toLowerCase()
+  if (contentType !== 'application/json') {
+    throw new RequestError(415, 'unsupported_media_type', 'Content-Type 必须是 application/json')
+  }
+  const declaredLength = Number(req.headers['content-length'])
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
+    throw new RequestError(413, 'body_too_large', '请求体过大')
+  }
+
+  const chunks: Buffer[] = []
+  let total = 0
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    total += buffer.byteLength
+    if (total > MAX_BODY_BYTES) {
+      throw new RequestError(413, 'body_too_large', '请求体过大')
+    }
+    chunks.push(buffer)
+  }
+  if (chunks.length === 0) {
+    throw new RequestError(400, 'invalid_body', '请求体不能为空')
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
+  } catch {
+    throw new RequestError(400, 'invalid_json', '请求体不是合法 JSON')
+  }
+}
+
+function parseLimit(raw: string | null): number | undefined | null {
+  if (raw === null) return undefined
+  if (!/^\d+$/.test(raw)) return null
+  const value = Number(raw)
+  return Number.isInteger(value) && value >= 1 && value <= MAX_LIMIT ? value : null
+}
+
+function loadAssets(): UiAssets {
+  return {
+    html: readFileSync(fileURLToPath(new URL('./assets/index.html', import.meta.url))),
+    javaScript: readFileSync(
+      fileURLToPath(new URL('./assets/app.js', import.meta.url)),
+    ),
+    style: readFileSync(fileURLToPath(new URL('./assets/app.css', import.meta.url))),
+  }
+}
+
+function handleUnexpectedError(
+  req: IncomingMessage,
+  res: ServerResponse,
+  logger: ChatLogger,
+  error: unknown,
+): void {
+  if (res.headersSent) {
+    if (!res.destroyed) res.destroy()
+    return
+  }
+  if (error instanceof RequestError) {
+    writeError(
+      res,
+      error.status,
+      error.code,
+      error.message,
+      new URL(req.url ?? '/', 'http://kanobot.invalid').pathname.includes('/api/'),
+    )
+    return
+  }
+  logger.error?.(`[kanobot] chat HTTP request failed: ${formatError(error)}`)
+  writeError(res, 500, 'internal_error', '服务器内部错误', true)
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError'
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+class RequestError extends Error {
+  readonly status: number
+  readonly code: string
+
+  constructor(status: number, code: string, message: string) {
+    super(message)
+    this.name = 'RequestError'
+    this.status = status
+    this.code = code
+  }
+}
+
+export type { ConversationView }
