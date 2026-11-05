@@ -59,6 +59,75 @@ export interface ChatMessageInput {
   createdAt?: string
 }
 
+export type ModelCallStatus = 'running' | 'succeeded' | 'failed' | 'aborted'
+
+export interface ModelUsageRecord {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  reasoningTokens: number
+  totalTokens: number
+}
+
+export interface ModelPricingRecord {
+  prompt: number | null
+  completion: number | null
+  cacheRead: number | null
+  cacheWrite: number | null
+}
+
+/**
+ * 一次用户请求对应的模型调用审计行。
+ *
+ * `attempts` 是网关内部实际发出的 HTTP 请求数；行本身按用户请求计一次，
+ * 这样每日额度不会因为重试而被重复放大。正文永远不进入此表。
+ */
+export interface ModelCallRecord {
+  id: string
+  conversationId: string
+  userMessageId: string
+  assistantMessageId: string | null
+  provider: string
+  model: string
+  startedAt: string
+  completedAt: string | null
+  localDay: string
+  status: ModelCallStatus
+  attempts: number
+  inputTokens: number | null
+  outputTokens: number | null
+  cacheReadTokens: number | null
+  cacheWriteTokens: number | null
+  reasoningTokens: number | null
+  totalTokens: number | null
+  estimatedCost: number | null
+  pricing: ModelPricingRecord | null
+  responseId: string | null
+  errorCode: string | null
+}
+
+export interface BeginModelCallInput {
+  conversationId: string
+  userMessageId: string
+  provider: string
+  model: string
+  id?: string
+  startedAt?: string
+}
+
+export interface FinishModelCallInput {
+  status: Exclude<ModelCallStatus, 'running'>
+  completedAt?: string
+  assistantMessageId?: string | null
+  attempts: number
+  usage?: ModelUsageRecord | null
+  estimatedCost?: number | null
+  pricing?: ModelPricingRecord | null
+  responseId?: string | null
+  errorCode?: string | null
+}
+
 export type OutboxStatus = 'pending' | 'delivered' | 'failed' | 'cancelled'
 
 export interface OutboxRecord {

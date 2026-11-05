@@ -1,6 +1,6 @@
 # 项目文件结构
 
-以下路径相对于项目根目录 `a/`。当前仓库处于 M3.0 聊天骨架完成、完整 M3 进行中的状态：已有 DSH Host 插件、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、复用 DSH 登录态的网页聊天和 SSE；真实模型网关、FTS5 检索、长期记忆和主动消息仍不存在。本文中的“目标结构”是后续实现的约束，不是已经存在的目录。
+以下路径相对于项目根目录 `a/`。当前仓库处于 M3.1 模型网关完成、完整 M3 进行中的状态：已有 DSH Host 插件、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、复用 DSH 登录态的网页聊天和 SSE，以及连接本地 Magpie 的精确模型网关和调用审计；Gemini 视觉、FTS5 检索、长期记忆和主动消息仍不存在。本文中的“目标结构”是后续实现的约束，不是已经存在的目录。
 
 ## 1. 当前结构
 
@@ -41,7 +41,8 @@ kanobot/a/
 │   │   │   ├── index.ts              聊天领域公开导出
 │   │   │   ├── types.ts              模型、SSE 事件和会话视图契约
 │   │   │   ├── service.ts            校验、持久化、模型流和互动事件
-│   │   │   └── mock-model.ts         不联网的明确占位模型
+│   │   │   ├── mock-model.ts         不联网的明确占位模型
+│   │   │   └── magpie-model.ts       Magpie OpenAI-compatible 流式网关
 │   │   ├── state/
 │   │   │   ├── types.ts              事件、快照、记忆和墓碑契约
 │   │   │   ├── events.ts             数据契约严格校验
@@ -78,6 +79,7 @@ kanobot/a/
     ├── m1-acceptance.md              M1 八项验收、证据和已知边界
     ├── m2-acceptance.md              M2 五项验收、运行证据和已知边界
     ├── m3-acceptance.md              M3.0 聊天骨架验收、证据和未完成项
+    ├── m3.1-acceptance.md            M3.1 Magpie 网关、调用审计和资源熔断验收
     ├── plugin-research.md            第三方插件源码调研与取舍
     ├── plugin-catalog.zh.md          第三方 DSH 插件汇总表（只读参考）
     ├── mods.md                       第三方插件与改动的记录模板
@@ -96,6 +98,7 @@ kanobot/a/
 - `docs/m1-acceptance.md` 记录 M1 的八项结果；其中零工具审计、真实 DSH 加载和坏配置预检报告放在仓库外的 `F:\kanobot\dsh`。
 - `docs/m2-acceptance.md` 记录 M2 的事件回放、强杀恢复、文件级清除、旧备份恢复和 fail-closed 边界。
 - `docs/m3-acceptance.md` 记录 M3.0 的 DSH 鉴权、网页/SSE、mock 模型、schema v2 迁移、重启恢复和尚未实现的 M3 项。
+- `docs/m3.1-acceptance.md` 记录 M3.1 的 Magpie 精确模型、流式解析、超时/重试、schema v3 调用审计、资源熔断和真实路由验收边界。
 
 ## 2. 目标结构
 
@@ -150,11 +153,11 @@ F:\kanobot\dsh\                       本地 DSH 安装、测试脚本和证据�
 DSH 数据目录                          M2 之后：数据库、快照、日志和备份
 ```
 
-M2/M3.0 的实际数据布局：
+M2/M3.0/M3.1 的实际数据布局：
 
 ```text
 <dataDir>/
-├── kanobot.sqlite                    主库：事件、快照、正文、对话/消息、记忆、outbox、墓碑投影
+├── kanobot.sqlite                    主库：事件、快照、正文、对话/消息、模型调用审计、记忆、outbox、墓碑投影
 ├── tombstones.sqlite                 独立墓碑库，不进入主库备份
 └── backups/
     └── kanobot-backup-*.sqlite       最近 7 份主库一致性备份

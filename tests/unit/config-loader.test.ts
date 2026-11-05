@@ -29,10 +29,13 @@ quiet_hours_start = "00:10"
 quiet_hours_end = "07:00"
 
 [model]
-provider = "deepseek-official"
-name = "deepseek-flash"
+provider = "magpie"
+name = "deepseek/deepseek-flash"
+base_url = "http://127.0.0.1:3425/v1"
+api_key_env = "MAGPIE_API_KEY"
 timeout_ms = 120000
 max_retries = 2
+max_output_tokens = 4096
 
 [resources]
 max_concurrent_model_calls = 2
@@ -159,10 +162,13 @@ test('maps snake_case TOML fields to typed runtime fields', () => {
   try {
     const config = loadConfigFromDirectory(dir)
     assert.deepEqual(config.system.model, {
-      provider: 'deepseek-official',
-      name: 'deepseek-flash',
+      provider: 'magpie',
+      name: 'deepseek/deepseek-flash',
+      baseUrl: 'http://127.0.0.1:3425/v1',
+      apiKeyEnv: 'MAGPIE_API_KEY',
       timeoutMs: 120000,
       maxRetries: 2,
+      maxOutputTokens: 4096,
     })
     assert.equal(config.identity.displayName, 'Kanobot Test')
     assert.equal(config.policy.emergency.stopFile, 'STOP')
@@ -386,6 +392,139 @@ test('rejects a stop file with path separators', () => {
       () => loadConfigFromDirectory(dir),
       'emergency.stop_file',
       'policy.toml',
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('normalizes a Magpie base URL that ends with a slash', () => {
+  const dir = writeConfigs({
+    system: validSystem.replace(
+      'base_url = "http://127.0.0.1:3425/v1"',
+      'base_url = "http://127.0.0.1:3425/v1/"',
+    ),
+  })
+  try {
+    const config = loadConfigFromDirectory(dir)
+    assert.equal(config.system.model.baseUrl, 'http://127.0.0.1:3425/v1')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('accepts and normalizes an IPv6 loopback Magpie base URL', () => {
+  const dir = writeConfigs({
+    system: validSystem.replace(
+      'http://127.0.0.1:3425/v1',
+      'http://[0:0:0:0:0:0:0:1]:3425/v1/',
+    ),
+  })
+  try {
+    const config = loadConfigFromDirectory(dir)
+    assert.equal(config.system.model.baseUrl, 'http://[::1]:3425/v1')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rejects a Magpie model without a base URL', () => {
+  const dir = writeConfigs({
+    system: validSystem.replace(
+      'base_url = "http://127.0.0.1:3425/v1"\n',
+      '',
+    ),
+  })
+  try {
+    expectIssue(() => loadConfigFromDirectory(dir), 'model.base_url', 'system.toml')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rejects a non-loopback Magpie base URL', () => {
+  const dir = writeConfigs({
+    system: validSystem.replace(
+      'http://127.0.0.1:3425/v1',
+      'http://192.168.1.10:3425/v1',
+    ),
+  })
+  try {
+    expectIssue(() => loadConfigFromDirectory(dir), 'model.base_url', 'system.toml')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rejects credentials embedded in a Magpie base URL', () => {
+  const dir = writeConfigs({
+    system: validSystem.replace(
+      'http://127.0.0.1:3425/v1',
+      'http://user:secret@127.0.0.1:3425/v1',
+    ),
+  })
+  try {
+    expectIssue(() => loadConfigFromDirectory(dir), 'model.base_url', 'system.toml')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rejects a Magpie base URL with a query or fragment', () => {
+  const dir = writeConfigs({
+    system: validSystem.replace(
+      'http://127.0.0.1:3425/v1',
+      'http://127.0.0.1:3425/v1?token=secret',
+    ),
+  })
+  try {
+    expectIssue(() => loadConfigFromDirectory(dir), 'model.base_url', 'system.toml')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rejects a Magpie base URL that does not end in /v1', () => {
+  const dir = writeConfigs({
+    system: validSystem.replace(
+      'http://127.0.0.1:3425/v1',
+      'http://127.0.0.1:3425/api',
+    ),
+  })
+  try {
+    expectIssue(() => loadConfigFromDirectory(dir), 'model.base_url', 'system.toml')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rejects a Magpie model without max_output_tokens', () => {
+  const dir = writeConfigs({
+    system: validSystem.replace('max_output_tokens = 4096\n', ''),
+  })
+  try {
+    expectIssue(
+      () => loadConfigFromDirectory(dir),
+      'model.max_output_tokens',
+      'system.toml',
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rejects an invalid API key environment variable name', () => {
+  const dir = writeConfigs({
+    system: validSystem.replace(
+      'api_key_env = "MAGPIE_API_KEY"',
+      'api_key_env = "MAGPIE-API-KEY"',
+    ),
+  })
+  try {
+    expectIssue(
+      () => loadConfigFromDirectory(dir),
+      'model.api_key_env',
+      'system.toml',
     )
   } finally {
     rmSync(dir, { recursive: true, force: true })

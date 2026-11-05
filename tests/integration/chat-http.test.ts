@@ -47,7 +47,7 @@ test('authenticated page, SSE chat, and conversation restore work together', asy
     })
     assert.equal(page.status, 200)
     assert.match(page.headers.get('content-security-policy') ?? '', /script-src 'self'/)
-    assert.match(await page.text(), /M3 测试聊天/)
+    assert.match(await page.text(), /M3\.1 测试聊天/)
 
     const response = await fetch(`${harness.baseUrl}/kanobot/api/chat`, {
       method: 'POST',
@@ -63,7 +63,13 @@ test('authenticated page, SSE chat, and conversation restore work together', asy
     const events = parseSse(await response.text())
     assert.equal(events[0]?.type, 'ready')
     assert.ok(events.some(event => event.type === 'delta'))
-    assert.equal(events.at(-1)?.type, 'done')
+    const done = events.at(-1)
+    assert.equal(done?.type, 'done')
+    assert.ok(done?.type === 'done' && done.modelCall.status === 'succeeded')
+    assert.equal(
+      done?.type === 'done' ? done.modelUsage.todayCallCount : -1,
+      1,
+    )
 
     const conversation = await fetch(
       `${harness.baseUrl}/kanobot/api/conversation`,
@@ -73,11 +79,14 @@ test('authenticated page, SSE chat, and conversation restore work together', asy
     const body = await conversation.json() as {
       messages: Array<{ role: string; text: string }>
       state: { messageCount: number }
+      modelUsage: { lastCall: { status: string } | null; todayCallCount: number }
     }
     assert.equal(body.messages.length, 2)
     assert.equal(body.messages[0]?.role, 'user')
     assert.equal(body.messages[1]?.role, 'assistant')
     assert.equal(body.state.messageCount, 2)
+    assert.equal(body.modelUsage.lastCall?.status, 'succeeded')
+    assert.equal(body.modelUsage.todayCallCount, 1)
   } finally {
     await harness.close()
   }

@@ -13,8 +13,11 @@ import { dirname, resolve } from 'node:path'
 import { loadConfigFromDirectory } from '../core/config/index.ts'
 import {
   KanobotChatService,
+  MagpieChatModel,
   MockChatModel,
+  type ChatModel,
 } from '../core/chat/index.ts'
+import type { LoadedConfig } from '../core/config/index.ts'
 import {
   KanobotStorage,
   StorageError,
@@ -35,7 +38,7 @@ export interface KanobotPluginConfig {
   dataDir?: string
   heartbeatMs?: number
   startupReportPath?: string
-  modelMode?: 'mock'
+  modelMode?: 'mock' | 'magpie'
 }
 
 interface PluginLogger {
@@ -50,10 +53,10 @@ interface PluginContext {
   connection: ChatConnection
 }
 
-export function apply(
+export async function apply(
   ctx: PluginContext,
   config: KanobotPluginConfig = {},
-): void {
+): Promise<void> {
   // 配置错误必须在注册定时器之前暴露，否则插件会留下半初始化资源。
   const configDir = resolveConfigDir(config)
   const loaded = loadConfigFromDirectory(configDir)
@@ -62,16 +65,23 @@ export function apply(
   let lifecycle: ReturnType<typeof createPluginLifecycle> | undefined
   let disposeChatSurface: (() => void) | undefined
   const modelMode = config.modelMode ?? 'mock'
-  if (modelMode !== 'mock') {
-    throw new Error(`unsupported modelMode "${String(modelMode)}"; M3.0 only supports mock`)
+  if (modelMode !== 'mock' && modelMode !== 'magpie') {
+    throw new Error(`unsupported modelMode "${String(modelMode)}"`)
   }
 
   try {
+    // 真实模型模式必须在打开数据库和注册定时器之前完成精确模型检查。
+    // 检查失败时拒绝激活，不自动降级到 mock 或另一个模型。
+    const model = await createChatModel(loaded, modelMode)
     // 数据库损坏、schema 不兼容或路径逃逸都会在这里阻止插件继续激活。
     storage = KanobotStorage.openFromConfig(loaded, dataDir)
     // 备份失败也应阻止“看似启动成功”：日备份是 M2 的数据安全边界。
     storage.maybeCreateDailyBackup()
-    const chat = new KanobotChatService(storage, new MockChatModel())
+    const chat = new KanobotChatService(storage, model, {
+      maxConcurrentModelCalls:
+        loaded.system.resources.maxConcurrentModelCalls,
+      dailyModelCallLimit: loaded.system.resources.dailyModelCallLimit,
+    })
     disposeChatSurface = registerChatSurface({
       webServer: ctx.webServer,
       connection: ctx.connection,
@@ -110,8 +120,13 @@ export function apply(
         backupDir: storage.backupDir,
         chatPath: `${CHAT_BASE_PATH}/`,
         modelMode,
-        provider: loaded.system.model.provider,
-        model: loaded.system.model.name,
+        provider: chat.identity().provider,
+        model: chat.identity().id,
+        configuredProvider: loaded.system.model.provider,
+        configuredModel: loaded.system.model.name,
+        maxConcurrentModelCalls:
+          loaded.system.resources.maxConcurrentModelCalls,
+        dailyModelCallLimit: loaded.system.resources.dailyModelCallLimit,
         identity: loaded.identity.mode,
       })
     }
@@ -120,8 +135,8 @@ export function apply(
       `[kanobot] ${PLUGIN_NAME} ${PLUGIN_VERSION} loaded; ` +
         `config=${configDir}; database=${storage.databasePath}; ` +
         `chat=${CHAT_BASE_PATH}/; modelMode=${modelMode}; ` +
-        `provider=${loaded.system.model.provider}; ` +
-        `model=${loaded.system.model.name}; identity=${loaded.identity.mode}`,
+        `provider=${chat.identity().provider}; ` +
+        `model=${chat.identity().id}; identity=${loaded.identity.mode}`,
     )
 
     // DSH 卸载插件时会调用这个 disposer，所有需要释放的资源都从这里收口。
@@ -146,6 +161,50 @@ export function apply(
     }
     throw error
   }
+}
+
+async function createChatModel(
+  loaded: LoadedConfig,
+  modelMode: 'mock' | 'magpie',
+): Promise<ChatModel> {
+  if (modelMode === 'mock') {
+    return new MockChatModel()
+  }
+
+  const model = loaded.system.model
+  if (model.provider !== 'magpie') {
+    throw new Error(
+      `modelMode "magpie" requires model.provider "magpie"; got "${model.provider}"`,
+    )
+  }
+  if (model.baseUrl === null) {
+    throw new Error('modelMode "magpie" requires model.base_url')
+  }
+  if (model.maxOutputTokens === null) {
+    throw new Error('modelMode "magpie" requires model.max_output_tokens')
+  }
+  const magpie = new MagpieChatModel({
+    baseUrl: model.baseUrl,
+    model: model.name,
+    maxOutputTokens: model.maxOutputTokens,
+    timeoutMs: model.timeoutMs,
+    maxRetries: model.maxRetries,
+    apiKey: resolveApiKey(model.apiKeyEnv),
+  })
+  await magpie.checkAvailable()
+  return magpie
+}
+
+function resolveApiKey(apiKeyEnv: string | null): string | null {
+  if (apiKeyEnv === null) return null
+  const value = process.env[apiKeyEnv]
+  if (value === undefined || value.trim() === '') {
+    // 只报告变量名，不打印或回显变量值。
+    throw new Error(
+      `model.api_key_env "${apiKeyEnv}" is configured but the environment variable is empty or missing`,
+    )
+  }
+  return value
 }
 
 function resolveConfigDir(config: KanobotPluginConfig): string {

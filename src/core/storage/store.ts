@@ -24,6 +24,7 @@ import {
   createBackup,
   hasBackupForLocalDay,
   listBackups,
+  localDateKey,
 } from './backup.ts'
 import {
   openMainDatabase,
@@ -68,11 +69,16 @@ import type {
 import type {
   AppendedEvent,
   BackupRecord,
+  BeginModelCallInput,
   BodyRecord,
   ChatMessageInput,
   ChatMessageRecord,
   ConversationRecord,
+  FinishModelCallInput,
   MemoryListOptions,
+  ModelCallRecord,
+  ModelPricingRecord,
+  ModelUsageRecord,
   OutboxRecord,
   PurgeResult,
   PurgeTarget,
@@ -484,6 +490,203 @@ export class KanobotStorage {
     const row = this.db.prepare(
       'SELECT COUNT(*) AS count FROM messages WHERE conversation_id = ?',
     ).get(id) as Record<string, unknown> | undefined
+    return Number(row?.count ?? 0)
+  }
+
+  beginModelCall(input: BeginModelCallInput): ModelCallRecord {
+    this.assertOpen()
+    const conversationId = validateIdentifier(
+      input.conversationId,
+      'modelCall.conversationId',
+    )
+    const userMessageId = validateIdentifier(
+      input.userMessageId,
+      'modelCall.userMessageId',
+    )
+    const provider = validateModelLabel(input.provider, 'modelCall.provider')
+    const model = validateModelLabel(input.model, 'modelCall.model')
+    const id = validateIdentifier(
+      input.id ?? `model-call-${randomUUID()}`,
+      'modelCall.id',
+    )
+    const startedAt = validateInstant(
+      input.startedAt ?? this.nowIso(),
+      'modelCall.startedAt',
+    )
+    this.assertMessageRole(userMessageId, conversationId, 'user')
+    const localDay = localDateKey(
+      new Date(startedAt),
+      this.options.timezone,
+    )
+
+    try {
+      this.db.prepare(
+        `INSERT INTO model_calls
+          (id, conversation_id, user_message_id, assistant_message_id,
+           provider, model, started_at, completed_at, local_day, status,
+           attempts, input_tokens, output_tokens, cache_read_tokens,
+           cache_write_tokens, reasoning_tokens, total_tokens, estimated_cost,
+           pricing_json, response_id, error_code)
+         VALUES (?, ?, ?, NULL, ?, ?, ?, NULL, ?, 'running',
+                 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)`,
+      ).run(id, conversationId, userMessageId, provider, model, startedAt, localDay)
+    } catch (error) {
+      throw mapInsertError(error, 'model call', id)
+    }
+
+    const created = this.getModelCall(id)
+    if (created === null) {
+      throw new StorageIntegrityError(
+        `model call "${id}" disappeared during creation`,
+        ':model_calls:',
+      )
+    }
+    return created
+  }
+
+  finishModelCall(id: string, input: FinishModelCallInput): ModelCallRecord {
+    this.assertOpen()
+    const callId = validateIdentifier(id, 'modelCall.id')
+    const current = this.getModelCall(callId)
+    if (current === null) {
+      throw new StorageError(
+        'REFERENCE_MISSING',
+        `model call "${callId}" does not exist`,
+      )
+    }
+    if (current.status !== 'running') {
+      throw new StorageError(
+        'RECORD_INVALID',
+        `model call "${callId}" is already ${current.status}`,
+      )
+    }
+    if (input.status !== 'succeeded' && input.status !== 'failed' && input.status !== 'aborted') {
+      throw new StorageError(
+        'RECORD_INVALID',
+        `unsupported terminal model call status "${String(input.status)}"`,
+      )
+    }
+    const attempts = validateNonNegativeInteger(
+      input.attempts,
+      'modelCall.attempts',
+    )
+    const completedAt = validateInstant(
+      input.completedAt ?? this.nowIso(),
+      'modelCall.completedAt',
+    )
+    const assistantMessageId =
+      input.assistantMessageId === undefined || input.assistantMessageId === null
+        ? null
+        : validateIdentifier(
+            input.assistantMessageId,
+            'modelCall.assistantMessageId',
+          )
+    if (input.status === 'succeeded' && assistantMessageId === null) {
+      throw new StorageError(
+        'RECORD_INVALID',
+        'a succeeded model call must reference its assistant message',
+      )
+    }
+    if (assistantMessageId !== null) {
+      this.assertMessageRole(
+        assistantMessageId,
+        current.conversationId,
+        'assistant',
+      )
+    }
+
+    const usage = input.usage === undefined || input.usage === null
+      ? null
+      : validateModelUsage(input.usage)
+    const pricing = input.pricing === undefined || input.pricing === null
+      ? null
+      : validateModelPricing(input.pricing)
+    const estimatedCost =
+      input.estimatedCost === undefined || input.estimatedCost === null
+        ? null
+        : validateNonNegativeNumber(
+            input.estimatedCost,
+            'modelCall.estimatedCost',
+          )
+    const responseId =
+      input.responseId === undefined || input.responseId === null
+        ? null
+        : validateModelText(input.responseId, 'modelCall.responseId')
+    const errorCode =
+      input.errorCode === undefined || input.errorCode === null
+        ? null
+        : validateModelErrorCode(input.errorCode)
+
+    try {
+      this.db.prepare(
+        `UPDATE model_calls SET
+          assistant_message_id = ?, completed_at = ?, status = ?, attempts = ?,
+          input_tokens = ?, output_tokens = ?, cache_read_tokens = ?,
+          cache_write_tokens = ?, reasoning_tokens = ?, total_tokens = ?,
+          estimated_cost = ?, pricing_json = ?, response_id = ?, error_code = ?
+         WHERE id = ? AND status = 'running'`,
+      ).run(
+        assistantMessageId,
+        completedAt,
+        input.status,
+        attempts,
+        usage?.inputTokens ?? null,
+        usage?.outputTokens ?? null,
+        usage?.cacheReadTokens ?? null,
+        usage?.cacheWriteTokens ?? null,
+        usage?.reasoningTokens ?? null,
+        usage?.totalTokens ?? null,
+        estimatedCost,
+        pricing === null ? null : canonicalJson(pricing),
+        responseId,
+        errorCode,
+        callId,
+      )
+    } catch (error) {
+      throw new StorageError(
+        'IO',
+        `cannot finish model call "${callId}": ${messageOf(error)}`,
+        { cause: error },
+      )
+    }
+
+    const updated = this.getModelCall(callId)
+    if (updated === null) {
+      throw new StorageIntegrityError(
+        `model call "${callId}" disappeared during completion`,
+        ':model_calls:',
+      )
+    }
+    return updated
+  }
+
+  getModelCall(id: string): ModelCallRecord | null {
+    this.assertOpen()
+    const callId = validateIdentifier(id, 'modelCall.id')
+    const row = this.db.prepare(
+      'SELECT * FROM model_calls WHERE id = ?',
+    ).get(callId) as Record<string, unknown> | undefined
+    return row === undefined ? null : modelCallFromRow(row)
+  }
+
+  latestModelCall(conversationId = 'main'): ModelCallRecord | null {
+    this.assertOpen()
+    const id = validateIdentifier(conversationId, 'modelCall.conversationId')
+    const row = this.db.prepare(
+      `SELECT * FROM model_calls
+       WHERE conversation_id = ?
+       ORDER BY started_at DESC, id DESC
+       LIMIT 1`,
+    ).get(id) as Record<string, unknown> | undefined
+    return row === undefined ? null : modelCallFromRow(row)
+  }
+
+  modelCallCountToday(now: Date = this.options.clock.now()): number {
+    this.assertOpen()
+    const localDay = localDateKey(now, this.options.timezone)
+    const row = this.db.prepare(
+      'SELECT COUNT(*) AS count FROM model_calls WHERE local_day = ?',
+    ).get(localDay) as Record<string, unknown> | undefined
     return Number(row?.count ?? 0)
   }
 
@@ -1181,6 +1384,26 @@ export class KanobotStorage {
     return conversationFromRow(row)
   }
 
+  private assertMessageRole(
+    messageId: string,
+    conversationId: string,
+    role: 'user' | 'assistant',
+  ): void {
+    const row = this.db.prepare(
+      'SELECT conversation_id, role FROM messages WHERE id = ?',
+    ).get(messageId) as Record<string, unknown> | undefined
+    if (
+      row === undefined ||
+      row.conversation_id !== conversationId ||
+      row.role !== role
+    ) {
+      throw new StorageError(
+        'REFERENCE_MISSING',
+        `${role} message "${messageId}" does not belong to conversation "${conversationId}"`,
+      )
+    }
+  }
+
   private updateMemoryRow(
     memory: MemoryRecord,
     previousStatus: MemoryRecord['status'] | null,
@@ -1359,6 +1582,139 @@ function chatMessageFromRow(row: Record<string, unknown>): ChatMessageRecord {
   }
 }
 
+function modelCallFromRow(row: Record<string, unknown>): ModelCallRecord {
+  const status = row.status
+  if (
+    status !== 'running' &&
+    status !== 'succeeded' &&
+    status !== 'failed' &&
+    status !== 'aborted'
+  ) {
+    throw new StorageIntegrityError(
+      'model call row has an invalid status',
+      ':model_calls:',
+    )
+  }
+  if (
+    typeof row.id !== 'string' ||
+    typeof row.conversation_id !== 'string' ||
+    typeof row.user_message_id !== 'string' ||
+    (row.assistant_message_id !== null &&
+      typeof row.assistant_message_id !== 'string') ||
+    typeof row.provider !== 'string' ||
+    typeof row.model !== 'string' ||
+    typeof row.started_at !== 'string' ||
+    (row.completed_at !== null && typeof row.completed_at !== 'string') ||
+    typeof row.local_day !== 'string' ||
+    (row.pricing_json !== null && typeof row.pricing_json !== 'string') ||
+    (row.response_id !== null && typeof row.response_id !== 'string') ||
+    (row.error_code !== null && typeof row.error_code !== 'string')
+  ) {
+    throw new StorageIntegrityError(
+      'model call row has invalid column types',
+      ':model_calls:',
+    )
+  }
+
+  validateIdentifier(row.id, 'modelCall.id')
+  validateIdentifier(row.conversation_id, 'modelCall.conversationId')
+  validateIdentifier(row.user_message_id, 'modelCall.userMessageId')
+  if (row.assistant_message_id !== null) {
+    validateIdentifier(row.assistant_message_id, 'modelCall.assistantMessageId')
+  }
+  validateModelLabel(row.provider, 'modelCall.provider')
+  validateModelLabel(row.model, 'modelCall.model')
+  validateInstant(row.started_at, 'modelCall.startedAt')
+  if (row.completed_at !== null) {
+    validateInstant(row.completed_at, 'modelCall.completedAt')
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(row.local_day)) {
+    throw new StorageIntegrityError(
+      'model call local_day is not YYYY-MM-DD',
+      ':model_calls:',
+    )
+  }
+  if (status === 'running' && row.completed_at !== null) {
+    throw new StorageIntegrityError(
+      'a running model call cannot have completed_at',
+      ':model_calls:',
+    )
+  }
+  if (status !== 'running' && row.completed_at === null) {
+    throw new StorageIntegrityError(
+      'a terminal model call must have completed_at',
+      ':model_calls:',
+    )
+  }
+  if (status === 'succeeded' && row.assistant_message_id === null) {
+    throw new StorageIntegrityError(
+      'a succeeded model call must have an assistant message',
+      ':model_calls:',
+    )
+  }
+
+  let pricing: ModelPricingRecord | null = null
+  if (row.pricing_json !== null) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(row.pricing_json)
+    } catch (error) {
+      throw new StorageIntegrityError(
+        'model call pricing_json is not valid JSON',
+        ':model_calls:',
+        error,
+      )
+    }
+    pricing = validateModelPricing(parsed)
+    if (canonicalJson(pricing) !== row.pricing_json) {
+      throw new StorageIntegrityError(
+        'model call pricing_json is not canonical JSON',
+        ':model_calls:',
+      )
+    }
+  }
+
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    userMessageId: row.user_message_id,
+    assistantMessageId: row.assistant_message_id,
+    provider: row.provider,
+    model: row.model,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    localDay: row.local_day,
+    status,
+    attempts: validateNonNegativeInteger(row.attempts, 'modelCall.attempts'),
+    inputTokens: nullableCount(row.input_tokens, 'modelCall.inputTokens'),
+    outputTokens: nullableCount(row.output_tokens, 'modelCall.outputTokens'),
+    cacheReadTokens: nullableCount(
+      row.cache_read_tokens,
+      'modelCall.cacheReadTokens',
+    ),
+    cacheWriteTokens: nullableCount(
+      row.cache_write_tokens,
+      'modelCall.cacheWriteTokens',
+    ),
+    reasoningTokens: nullableCount(
+      row.reasoning_tokens,
+      'modelCall.reasoningTokens',
+    ),
+    totalTokens: nullableCount(row.total_tokens, 'modelCall.totalTokens'),
+    estimatedCost: nullableNonNegativeNumber(
+      row.estimated_cost,
+      'modelCall.estimatedCost',
+    ),
+    pricing,
+    responseId: row.response_id === null
+      ? null
+      : validateModelText(row.response_id, 'modelCall.responseId'),
+    errorCode: row.error_code === null
+      ? null
+      : validateModelErrorCode(row.error_code),
+  }
+}
+
 function eventFromRow(row: Record<string, unknown>): StateEvent {
   try {
     const payloadJson = row.payload_json
@@ -1477,6 +1833,129 @@ function mapInsertError(error: unknown, kind: string, id: string): StorageError 
     `cannot insert ${kind} "${id}": ${messageOf(error)}`,
     { cause: error },
   )
+}
+
+function validateModelLabel(value: unknown, field: string): string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > 200 ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    invalid(field, 'expected 1..200 printable characters')
+  }
+  return value
+}
+
+function validateModelText(value: unknown, field: string): string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > 512 ||
+    value.includes('\0')
+  ) {
+    invalid(field, 'expected 1..512 characters without NUL')
+  }
+  return value
+}
+
+function validateModelErrorCode(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    !/^[a-z][a-z0-9_.-]{0,127}$/.test(value)
+  ) {
+    invalid('modelCall.errorCode', 'expected a lowercase error code')
+  }
+  return value
+}
+
+function validateNonNegativeInteger(value: unknown, field: string): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value < 0
+  ) {
+    invalid(field, 'expected a non-negative safe integer')
+  }
+  return value
+}
+
+function validateNonNegativeNumber(value: unknown, field: string): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    value < 0
+  ) {
+    invalid(field, 'expected a non-negative finite number')
+  }
+  return value
+}
+
+function nullableCount(value: unknown, field: string): number | null {
+  return value === null ? null : validateNonNegativeInteger(value, field)
+}
+
+function nullableNonNegativeNumber(
+  value: unknown,
+  field: string,
+): number | null {
+  return value === null ? null : validateNonNegativeNumber(value, field)
+}
+
+function nullablePrice(value: unknown, field: string): number | null {
+  return value === null ? null : validateNonNegativeNumber(value, field)
+}
+
+function validateModelUsage(value: unknown): ModelUsageRecord {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    invalid('modelCall.usage', 'expected an object')
+  }
+  const usage = value as Record<string, unknown>
+  return {
+    inputTokens: validateNonNegativeInteger(
+      usage.inputTokens,
+      'modelCall.usage.inputTokens',
+    ),
+    outputTokens: validateNonNegativeInteger(
+      usage.outputTokens,
+      'modelCall.usage.outputTokens',
+    ),
+    cacheReadTokens: validateNonNegativeInteger(
+      usage.cacheReadTokens,
+      'modelCall.usage.cacheReadTokens',
+    ),
+    cacheWriteTokens: validateNonNegativeInteger(
+      usage.cacheWriteTokens,
+      'modelCall.usage.cacheWriteTokens',
+    ),
+    reasoningTokens: validateNonNegativeInteger(
+      usage.reasoningTokens,
+      'modelCall.usage.reasoningTokens',
+    ),
+    totalTokens: validateNonNegativeInteger(
+      usage.totalTokens,
+      'modelCall.usage.totalTokens',
+    ),
+  }
+}
+
+function validateModelPricing(value: unknown): ModelPricingRecord {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    invalid('modelCall.pricing', 'expected an object')
+  }
+  const pricing = value as Record<string, unknown>
+  return {
+    prompt: nullablePrice(pricing.prompt, 'modelCall.pricing.prompt'),
+    completion: nullablePrice(
+      pricing.completion,
+      'modelCall.pricing.completion',
+    ),
+    cacheRead: nullablePrice(pricing.cacheRead, 'modelCall.pricing.cacheRead'),
+    cacheWrite: nullablePrice(
+      pricing.cacheWrite,
+      'modelCall.pricing.cacheWrite',
+    ),
+  }
 }
 
 function tombstoneKey(tombstone: Tombstone): string {

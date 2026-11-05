@@ -10,11 +10,16 @@ quiet_hours_start = "00:10"
 quiet_hours_end = "07:00"
 
 [model]
-# provider 使用 DSH 已注册的路由名，不在插件里硬编码服务商地址。
-provider = "deepseek-official"
-name = "deepseek-flash"
+# M3.1 使用电脑上的 Magpie 本地模型路由。地址只能是回环 /v1 端点；
+# 精确模型名不会自动替换成 auto/* 路由组。
+provider = "magpie"
+name = "deepseek/deepseek-flash"
+base_url = "http://127.0.0.1:3425/v1"
+# 当前 Magpie 未启用鉴权；启用时只在本机环境变量中设置 key。
+# api_key_env = "MAGPIE_API_KEY"
 timeout_ms = 120000
 max_retries = 2
+max_output_tokens = 4096
 
 [resources]
 # 并发和每日调用额度用于成本与资源熔断。

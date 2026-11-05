@@ -86,7 +86,7 @@ async function main(): Promise<void> {
   try {
     for (let cycle = 0; cycle < 10; cycle += 1) {
       const fake = createFakeContext()
-      apply(fake.ctx, { configDir, dataDir, heartbeatMs: 60_000 })
+      await apply(fake.ctx, { configDir, dataDir, heartbeatMs: 60_000 })
       if (cycle === 0) firstCycleDuring = resources()
       fake.dispose()
       // 等一轮事件循环，让 clearInterval 后的资源句柄状态稳定下来。

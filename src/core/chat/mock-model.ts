@@ -5,7 +5,11 @@
  * SSE、正文持久化和重启恢复；接入真实模型前不得把它误当成正式人格。
  */
 
-import type { ChatModel, ChatModelRequest } from './types.ts'
+import type {
+  ChatModel,
+  ChatModelRequest,
+  ChatModelStreamEvent,
+} from './types.ts'
 
 const MAX_ECHO_CHARS = 160
 const CHUNK_CHARS = 24
@@ -15,8 +19,11 @@ export const MOCK_MODEL_ID = 'kanobot-mock-v1'
 export class MockChatModel implements ChatModel {
   readonly id = MOCK_MODEL_ID
   readonly mode = 'mock'
+  readonly provider = 'mock'
 
-  async *stream(request: ChatModelRequest): AsyncIterable<string> {
+  async *stream(
+    request: ChatModelRequest,
+  ): AsyncIterable<ChatModelStreamEvent> {
     const latest = [...request.messages]
       .reverse()
       .find(message => message.role === 'user')
@@ -32,7 +39,17 @@ export class MockChatModel implements ChatModel {
         throw abortError()
       }
       const chunk = characters.slice(offset, offset + CHUNK_CHARS).join('')
-      if (chunk !== '') yield chunk
+      if (chunk !== '') yield { type: 'text', text: chunk }
+    }
+    yield {
+      type: 'result',
+      result: {
+        attempts: 1,
+        usage: null,
+        estimatedCost: null,
+        pricing: null,
+        responseId: null,
+      },
     }
   }
 }

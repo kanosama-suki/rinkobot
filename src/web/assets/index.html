@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>Kanobot · M3 测试聊天</title>
+    <title>Kanobot · M3.1 测试聊天</title>
     <link rel="stylesheet" href="/kanobot/app.css">
   </head>
   <body>
@@ -13,7 +13,7 @@
         <div class="brand-block">
           <span class="brand-mark" aria-hidden="true">K</span>
           <div>
-            <p class="eyebrow">Kanobot / M3.0</p>
+            <p class="eyebrow">Kanobot / M3.1</p>
             <h1>测试聊天</h1>
           </div>
         </div>
@@ -28,7 +28,7 @@
           <div id="notice" class="notice" role="alert" hidden></div>
           <div id="empty-state" class="empty-state" hidden>
             <p>这里还没有消息。</p>
-            <span>这是占位人格和本地 mock 回复，不会调用真实模型。</span>
+            <span id="empty-note">这是占位人格；发送消息后才会调用配置的模型路由。</span>
           </div>
           <div id="messages" class="messages" role="log" aria-live="polite"></div>
           <form id="composer" class="composer">
@@ -58,8 +58,28 @@
                 <dd id="status-model">—</dd>
               </div>
               <div>
-                <dt>持久化</dt>
-                <dd id="status-storage">—</dd>
+                <dt>路由</dt>
+                <dd id="status-provider">—</dd>
+              </div>
+              <div>
+                <dt>今日调用</dt>
+                <dd id="status-calls">—</dd>
+              </div>
+              <div>
+                <dt>最近 Token</dt>
+                <dd id="status-tokens">—</dd>
+              </div>
+              <div>
+                <dt>缓存 / 推理</dt>
+                <dd id="status-cache">—</dd>
+              </div>
+              <div>
+                <dt>费用估算</dt>
+                <dd id="status-cost">—</dd>
+              </div>
+              <div>
+                <dt>最近调用</dt>
+                <dd id="status-last-call">—</dd>
               </div>
               <div>
                 <dt>消息数</dt>
@@ -74,12 +94,14 @@
 
           <section class="panel-card subtle-card">
             <p class="eyebrow">当前边界</p>
-            <h2>M3.0 骨架</h2>
+            <h2>M3.1 模型网关</h2>
             <ul class="boundary-list">
               <li>复用 DSH 浏览器登录态</li>
-              <li>SSE 流式传输占位回复</li>
+              <li>Magpie 本地路由 + 精确模型名</li>
+              <li>超时、有限重试和资源熔断</li>
+              <li>独立记录 token 与估算费用</li>
               <li>正文只写入 <code>bodies</code></li>
-              <li>未接入真实模型与长期记忆检索</li>
+              <li>仍是占位人格；长期记忆尚未接入</li>
             </ul>
           </section>
         </aside>

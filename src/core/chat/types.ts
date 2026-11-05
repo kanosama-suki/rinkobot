@@ -1,8 +1,9 @@
 /**
- * M3.0 聊天领域契约。
+ * M3.1 聊天领域契约。
  *
  * 模型网关只接收角色和文本，不接触 SQLite；聊天服务负责把已完成的消息
- * 写入正文表。当前只有 mock 实现，真实 DeepSeek/Gemini 驱动在后续切片接入。
+ * 写入正文表，并把模型返回的 usage 写入独立的调用审计表。推理内容和
+ * 上游错误正文都不穿过这一层。
  */
 
 import type {
@@ -25,15 +26,48 @@ export interface ChatModelRequest {
   signal: AbortSignal
 }
 
+export interface ChatUsage {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  reasoningTokens: number
+  totalTokens: number
+}
+
+/**
+ * 计价字段保持与 Magpie 路由返回的含义一致；本项目不替上游声明币种。
+ */
+export interface ChatModelPricing {
+  prompt: number | null
+  completion: number | null
+  cacheRead: number | null
+  cacheWrite: number | null
+}
+
+export interface ChatModelResult {
+  attempts: number
+  usage: ChatUsage | null
+  estimatedCost: number | null
+  pricing: ChatModelPricing | null
+  responseId: string | null
+}
+
+export type ChatModelStreamEvent =
+  | { type: 'text'; text: string }
+  | { type: 'result'; result: ChatModelResult }
+
 export interface ChatModel {
   readonly id: string
   readonly mode: string
-  stream(request: ChatModelRequest): AsyncIterable<string>
+  readonly provider: string
+  stream(request: ChatModelRequest): AsyncIterable<ChatModelStreamEvent>
 }
 
 export interface ChatModelIdentity {
   id: string
   mode: string
+  provider: string
 }
 
 export interface ChatStateView {
@@ -46,7 +80,27 @@ export interface ConversationView {
   conversationId: string
   model: ChatModelIdentity
   state: ChatStateView
+  modelUsage: ChatModelUsageView
   messages: ChatMessageRecord[]
+}
+
+export interface ModelCallView {
+  id: string
+  status: 'running' | 'succeeded' | 'failed' | 'aborted'
+  provider: string
+  model: string
+  startedAt: string
+  completedAt: string | null
+  attempts: number
+  usage: ChatUsage | null
+  estimatedCost: number | null
+  errorCode: string | null
+}
+
+export interface ChatModelUsageView {
+  lastCall: ModelCallView | null
+  todayCallCount: number
+  dailyCallLimit: number
 }
 
 export type ChatStreamEvent =
@@ -64,6 +118,8 @@ export type ChatStreamEvent =
       type: 'done'
       message: ChatMessageRecord
       state: ChatStateView
+      modelCall: ModelCallView
+      modelUsage: ChatModelUsageView
     }
 
 export class ChatInputError extends Error {
@@ -73,5 +129,20 @@ export class ChatInputError extends Error {
     super(message)
     this.name = 'ChatInputError'
     this.code = code
+  }
+}
+
+/**
+ * 模型网关错误只暴露机器可读分类和尝试次数，不携带上游响应正文。
+ */
+export class ChatModelError extends Error {
+  readonly code: string
+  readonly attempts: number
+
+  constructor(code: string, message: string, attempts: number) {
+    super(message)
+    this.name = 'ChatModelError'
+    this.code = code
+    this.attempts = attempts
   }
 }

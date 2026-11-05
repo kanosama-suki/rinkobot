@@ -21,8 +21,11 @@ export interface SystemConfig {
   model: {
     provider: string
     name: string
+    baseUrl: string | null
+    apiKeyEnv: string | null
     timeoutMs: number
     maxRetries: number
+    maxOutputTokens: number | null
   }
   resources: {
     maxConcurrentModelCalls: number

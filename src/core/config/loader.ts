@@ -228,9 +228,27 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
   }
 
   const model = requiredTable(table, 'model', 'model')
-  knownKeys(model, ['provider', 'name', 'timeout_ms', 'max_retries'], 'model')
+  knownKeys(
+    model,
+    [
+      'provider',
+      'name',
+      'base_url',
+      'api_key_env',
+      'timeout_ms',
+      'max_retries',
+      'max_output_tokens',
+    ],
+    'model',
+  )
   const provider = requiredString(model, 'provider', 'model.provider', 1, 128)
   const name = requiredString(model, 'name', 'model.name', 1, 128)
+  const rawBaseUrl = optionalString(model, 'base_url', 'model.base_url', 1, 512)
+  const baseUrl = rawBaseUrl === null ? null : requireLoopbackBaseUrl(rawBaseUrl, 'model.base_url')
+  const apiKeyEnv = optionalString(model, 'api_key_env', 'model.api_key_env', 1, 128)
+  if (apiKeyEnv !== null && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(apiKeyEnv)) {
+    fail('model.api_key_env', 'expected an environment variable name')
+  }
   const timeoutMs = requiredInteger(
     model,
     'timeout_ms',
@@ -245,6 +263,21 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
     0,
     5,
   )
+  const maxOutputTokens = optionalInteger(
+    model,
+    'max_output_tokens',
+    'model.max_output_tokens',
+    1,
+    65_536,
+  )
+  if (provider === 'magpie') {
+    if (baseUrl === null) {
+      fail('model.base_url', 'required when provider is "magpie"')
+    }
+    if (maxOutputTokens === null) {
+      fail('model.max_output_tokens', 'required when provider is "magpie"')
+    }
+  }
 
   const resources = requiredTable(table, 'resources', 'resources')
   knownKeys(
@@ -314,8 +347,11 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
     model: {
       provider,
       name,
+      baseUrl,
+      apiKeyEnv,
       timeoutMs,
       maxRetries,
+      maxOutputTokens,
     },
     resources: {
       maxConcurrentModelCalls,
@@ -348,6 +384,62 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
       ),
     },
   }
+}
+
+function optionalString(
+  parent: TomlTable,
+  key: string,
+  field: string,
+  minLength = 1,
+  maxLength = 512,
+): string | null {
+  if (!(key in parent)) return null
+  return requiredString(parent, key, field, minLength, maxLength)
+}
+
+function optionalInteger(
+  parent: TomlTable,
+  key: string,
+  field: string,
+  min: number,
+  max: number,
+): number | null {
+  if (!(key in parent)) return null
+  return requiredInteger(parent, key, field, min, max)
+}
+
+function requireLoopbackBaseUrl(value: string, field: string): string {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    fail(field, 'expected a valid URL')
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    fail(field, 'only http and https are allowed')
+  }
+  if (url.username !== '' || url.password !== '') {
+    fail(field, 'credentials must not be embedded in the URL')
+  }
+  if (url.search !== '' || url.hash !== '') {
+    fail(field, 'query strings and fragments are not allowed')
+  }
+  if (!isLoopbackHostname(url.hostname)) {
+    fail(field, 'model base URL must use a loopback host')
+  }
+  if (url.pathname !== '/v1' && url.pathname !== '/v1/') {
+    fail(field, 'model base URL must end with /v1')
+  }
+  return `${url.origin}/v1`
+}
+
+// Node 的 URL.hostname 对 IPv6 保留方括号，校验前必须先规范化。
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized =
+    hostname.startsWith('[') && hostname.endsWith(']')
+      ? hostname.slice(1, -1)
+      : hostname
+  return ['127.0.0.1', '::1', 'localhost'].includes(normalized.toLowerCase())
 }
 
 function validateLifeState(table: TomlTable, file: string): LifeStateConfig {

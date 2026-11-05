@@ -1,5 +1,5 @@
 /**
- * M3.0 测试聊天页面。
+ * M3.1 测试聊天页面。
  *
  * 所有消息都通过 textContent 渲染；SSE 仅接受本页面固定的聊天流格式。
  */
@@ -13,9 +13,15 @@ const elements = {
   send: document.querySelector('#send-button'),
   modelBadge: document.querySelector('#model-badge'),
   statusModel: document.querySelector('#status-model'),
-  statusStorage: document.querySelector('#status-storage'),
+  statusProvider: document.querySelector('#status-provider'),
+  statusCalls: document.querySelector('#status-calls'),
+  statusTokens: document.querySelector('#status-tokens'),
+  statusCache: document.querySelector('#status-cache'),
+  statusCost: document.querySelector('#status-cost'),
+  statusLastCall: document.querySelector('#status-last-call'),
   statusMessages: document.querySelector('#status-messages'),
   statusEvents: document.querySelector('#status-events'),
+  emptyNote: document.querySelector('#empty-note'),
 }
 
 const state = {
@@ -51,6 +57,7 @@ function renderConversation(view) {
   state.messageIds.clear()
   applyModel(view.model)
   applyState(view.state)
+  applyUsage(view.modelUsage)
   for (const message of view.messages) {
     appendMessage(message.role, message.text, message.createdAt, message.id)
   }
@@ -122,6 +129,7 @@ async function sendMessage() {
         )
         assistant = null
         applyState(event.state)
+        applyUsage(event.modelUsage)
       } else if (event.type === 'error') {
         throw new Error(event.message || '聊天回复失败。')
       }
@@ -234,16 +242,56 @@ function finishAssistant(article, message) {
 
 function applyModel(model) {
   if (!model || typeof model.id !== 'string') return
-  elements.modelBadge.textContent =
-    model.mode === 'mock' ? 'mock · 未连接真实模型' : `${model.mode} · ${model.id}`
+  const isMock = model.mode === 'mock'
+  elements.modelBadge.textContent = isMock
+    ? 'mock · 未连接真实模型'
+    : `Magpie · ${model.id}`
   elements.statusModel.textContent = `${model.id} (${model.mode})`
+  elements.statusProvider.textContent =
+    typeof model.provider === 'string' ? model.provider : model.mode
+  elements.emptyNote.textContent = isMock
+    ? '这是占位人格和本地 mock 回复，不会调用真实模型。'
+    : '这是占位人格；回复来自本地 Magpie 路由中的精确模型。'
 }
 
 function applyState(value) {
   if (!value) return
-  elements.statusStorage.textContent = 'SQLite 已连接'
   elements.statusMessages.textContent = String(value.messageCount)
   elements.statusEvents.textContent = String(value.lastSequence)
+}
+
+function applyUsage(value) {
+  if (!value || typeof value !== 'object') return
+  elements.statusCalls.textContent =
+    `${value.todayCallCount} / ${value.dailyCallLimit}`
+  const lastCall = value.lastCall
+  if (!lastCall || typeof lastCall !== 'object') {
+    elements.statusTokens.textContent = '—'
+    elements.statusCache.textContent = '—'
+    elements.statusCost.textContent = '—'
+    elements.statusLastCall.textContent = '—'
+    return
+  }
+
+  const usage = lastCall.usage
+  if (usage) {
+    elements.statusTokens.textContent =
+      `入 ${formatCount(usage.inputTokens)} · 出 ${formatCount(usage.outputTokens)}`
+    elements.statusCache.textContent =
+      `缓存 ${formatCount(usage.cacheReadTokens)} · 推理 ${formatCount(usage.reasoningTokens)}`
+  } else {
+    elements.statusTokens.textContent = '—'
+    elements.statusCache.textContent = '—'
+  }
+  elements.statusCost.textContent =
+    typeof lastCall.estimatedCost === 'number'
+      ? `${formatCost(lastCall.estimatedCost)}（未标币种）`
+      : '—'
+  const status = statusLabel(lastCall.status)
+  elements.statusLastCall.textContent =
+    lastCall.status === 'succeeded'
+      ? `${status} · ${lastCall.attempts} 次请求`
+      : `${status}${lastCall.errorCode ? ` · ${lastCall.errorCode}` : ''}`
 }
 
 function updateEmptyState() {
@@ -285,6 +333,34 @@ function formatTime(value) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(date)
+}
+
+function formatCount(value) {
+  return typeof value === 'number' && Number.isSafeInteger(value)
+    ? new Intl.NumberFormat('zh-CN').format(value)
+    : '—'
+}
+
+function formatCost(value) {
+  if (!Number.isFinite(value) || value < 0) return '—'
+  if (value === 0) return '0'
+  if (value < 0.000001) return value.toExponential(3)
+  return value.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')
+}
+
+function statusLabel(value) {
+  switch (value) {
+    case 'succeeded':
+      return '成功'
+    case 'running':
+      return '进行中'
+    case 'failed':
+      return '失败'
+    case 'aborted':
+      return '已中止'
+    default:
+      return '未知'
+  }
 }
 
 async function responseMessage(response, fallback) {

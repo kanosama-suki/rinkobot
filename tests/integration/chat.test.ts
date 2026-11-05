@@ -12,10 +12,12 @@ import test from 'node:test'
 
 import {
   ChatInputError,
+  ChatModelError,
   KanobotChatService,
   MockChatModel,
   type ChatModel,
   type ChatModelRequest,
+  type ChatModelStreamEvent,
   type ChatStreamEvent,
 } from '../../src/core/chat/index.ts'
 import { createWorkspace, tickEvent } from '../helpers/storage-fixture.ts'
@@ -87,7 +89,8 @@ test('a failed model keeps the user message but stores no partial reply or event
     const chat = new KanobotChatService(store, new FailingChatModel())
     await assert.rejects(
       collect(chat, '这条虚构消息会成功保存，但回复会失败'),
-      /connection lost/,
+      (error: unknown) =>
+        error instanceof ChatInputError && error.code === 'model_unavailable',
     )
     const view = chat.conversation()
     assert.equal(view.messages.length, 1)
@@ -95,6 +98,11 @@ test('a failed model keeps the user message but stores no partial reply or event
     assert.equal(view.state.messageCount, 1)
     assert.equal(view.state.eventCount, 0)
     assert.equal(view.state.lastSequence, 0)
+    const call = store.latestModelCall()
+    assert.equal(call?.status, 'failed')
+    assert.equal(call?.attempts, 2)
+    assert.equal(call?.errorCode, 'model_unavailable')
+    assert.equal(call?.assistantMessageId, null)
   } finally {
     store.close()
   }
@@ -156,8 +164,10 @@ test('an M2 schema migrates in place and preserves existing records', () => {
 
   const db = new DatabaseSync(join(ws.root, 'kanobot.sqlite'))
   try {
+    db.exec('DROP TABLE model_calls')
     db.exec('DROP TABLE messages')
     db.exec('DROP TABLE conversations')
+    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(3)
     db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(2)
     db.prepare(
       'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
@@ -184,13 +194,117 @@ test('an M2 schema migrates in place and preserves existing records', () => {
       ).all() as Array<Record<string, unknown>>
       assert.deepEqual(
         versions.map(row => Number(row.version)),
-        [1, 2],
+        [1, 2, 3],
+      )
+      const modelCalls = check.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'model_calls'",
+      ).all()
+      assert.equal(modelCalls.length, 1)
+    } finally {
+      check.close()
+    }
+  } finally {
+    reopened.close()
+  }
+})
+
+test('an M3.0 schema v2 migrates to v3 without losing chat records', () => {
+  const ws = createWorkspace(test)
+  const store = ws.open()
+  try {
+    store.appendChatMessage({
+      conversationId: 'main',
+      role: 'user',
+      text: 'v2 升级前保留的虚构消息',
+    })
+  } finally {
+    store.close()
+  }
+
+  const db = new DatabaseSync(join(ws.root, 'kanobot.sqlite'))
+  try {
+    db.exec('DROP TABLE model_calls')
+    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(3)
+    db.prepare(
+      'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+    ).run(2, '2026-11-05T00:00:00.000Z')
+    db.exec('PRAGMA user_version = 2')
+  } finally {
+    db.close()
+  }
+
+  const reopened = ws.open()
+  try {
+    assert.equal(reopened.chatMessageCount(), 1)
+    const check = new DatabaseSync(reopened.databasePath, { readOnly: true })
+    try {
+      const versions = check.prepare(
+        'SELECT version FROM schema_migrations ORDER BY version',
+      ).all() as Array<Record<string, unknown>>
+      assert.deepEqual(
+        versions.map(row => Number(row.version)),
+        [2, 3],
       )
     } finally {
       check.close()
     }
   } finally {
     reopened.close()
+  }
+})
+
+test('successful model usage is audited and survives reopen', async () => {
+  const ws = createWorkspace(test)
+  let store = ws.open()
+  try {
+    const chat = new KanobotChatService(store, new UsageChatModel())
+    const events = await collect(chat, '记录虚构 token 用量')
+    const done = events.find(event => event.type === 'done')
+    assert.ok(done?.type === 'done')
+    assert.equal(done.modelCall.status, 'succeeded')
+    assert.equal(done.modelCall.attempts, 2)
+    assert.equal(done.modelCall.usage?.inputTokens, 42)
+    assert.equal(done.modelCall.estimatedCost, 0.00000738)
+    assert.equal(done.modelUsage.todayCallCount, 1)
+
+    const call = store.latestModelCall()
+    assert.equal(call?.status, 'succeeded')
+    assert.equal(call?.assistantMessageId, done.message.id)
+    assert.equal(call?.provider, 'magpie')
+    assert.equal(call?.model, 'deepseek/deepseek-flash')
+    assert.equal(call?.cacheReadTokens, 10)
+    assert.equal(call?.reasoningTokens, 9)
+    assert.equal(call?.responseId, 'resp-test-1')
+  } finally {
+    store.close()
+  }
+
+  store = ws.open()
+  try {
+    const call = store.latestModelCall()
+    assert.equal(call?.status, 'succeeded')
+    assert.equal(call?.totalTokens, 53)
+    assert.equal(store.modelCallCountToday(), 1)
+  } finally {
+    store.close()
+  }
+})
+
+test('purging either side of a chat turn cascades its model call audit', async () => {
+  const ws = createWorkspace(test)
+  const store = ws.open()
+  try {
+    const chat = new KanobotChatService(store, new UsageChatModel())
+    await collect(chat, '待清除模型调用审计的虚构消息')
+    const view = chat.conversation()
+    const assistant = view.messages.find(message => message.role === 'assistant')
+    assert.ok(assistant)
+    assert.ok(store.latestModelCall())
+
+    store.purgeChatMessage(assistant.id)
+    assert.equal(store.latestModelCall(), null)
+  } finally {
+    store.close()
   }
 })
 
@@ -208,9 +322,50 @@ async function collect(
 class FailingChatModel implements ChatModel {
   readonly id = 'failing-test-model'
   readonly mode = 'test'
+  readonly provider = 'test'
 
-  async *stream(_request: ChatModelRequest): AsyncIterable<string> {
-    yield '不应落库的半截回复'
-    throw new Error('connection lost')
+  async *stream(
+    _request: ChatModelRequest,
+  ): AsyncIterable<ChatModelStreamEvent> {
+    yield { type: 'text', text: '不应落库的半截回复' }
+    throw new ChatModelError(
+      'model_unavailable',
+      'connection lost',
+      2,
+    )
+  }
+}
+
+class UsageChatModel implements ChatModel {
+  readonly id = 'deepseek/deepseek-flash'
+  readonly mode = 'magpie'
+  readonly provider = 'magpie'
+
+  async *stream(
+    _request: ChatModelRequest,
+  ): AsyncIterable<ChatModelStreamEvent> {
+    yield { type: 'text', text: '这是带用量的虚构回复。' }
+    yield {
+      type: 'result',
+      result: {
+        attempts: 2,
+        usage: {
+          inputTokens: 42,
+          outputTokens: 11,
+          cacheReadTokens: 10,
+          cacheWriteTokens: 0,
+          reasoningTokens: 9,
+          totalTokens: 53,
+        },
+        estimatedCost: 0.00000738,
+        pricing: {
+          prompt: 0.00000015,
+          completion: 0.0000006,
+          cacheRead: 0.000000003,
+          cacheWrite: null,
+        },
+        responseId: 'resp-test-1',
+      },
+    }
   }
 }

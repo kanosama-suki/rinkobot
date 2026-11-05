@@ -90,7 +90,7 @@ test('the real plugin apply/dispose cycle leaves no timer behind', async () => {
   try {
     for (let cycle = 0; cycle < 10; cycle += 1) {
       const fake = createFakeContext()
-      apply(fake.ctx, {
+      await apply(fake.ctx, {
         configDir: examplesDir,
         dataDir,
         heartbeatMs: 60_000,
@@ -117,11 +117,11 @@ test('the real plugin apply/dispose cycle leaves no timer behind', async () => {
   }
 })
 
-test('plugin configuration failures happen before a timer is registered', () => {
+test('plugin configuration failures happen before a timer is registered', async () => {
   const baseline = timeoutCount()
   const fake = createFakeContext()
 
-  assert.throws(
+  await assert.rejects(
     () =>
       apply(fake.ctx, {
         configDir: `${examplesDir}-missing`,
@@ -134,14 +134,14 @@ test('plugin configuration failures happen before a timer is registered', () => 
   fake.dispose()
 })
 
-test('an explicit startup report proves successful activation', () => {
+test('an explicit startup report proves successful activation', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'kanobot-startup-report-'))
   const reportPath = join(dir, 'startup.json')
   const dataDir = join(dir, 'data')
   const fake = createFakeContext()
 
   try {
-    apply(fake.ctx, {
+    await apply(fake.ctx, {
       configDir: examplesDir,
       dataDir,
       heartbeatMs: 60_000,
@@ -157,7 +157,10 @@ test('an explicit startup report proves successful activation', () => {
     const report = JSON.parse(readFileSync(reportPath, 'utf8')) as Record<string, unknown>
     assert.equal(report.plugin, PLUGIN_NAME)
     assert.equal(report.version, PLUGIN_VERSION)
-    assert.equal(report.provider, 'deepseek-official')
+    assert.equal(report.provider, 'mock')
+    assert.equal(report.model, 'kanobot-mock-v1')
+    assert.equal(report.configuredProvider, 'magpie')
+    assert.equal(report.configuredModel, 'deepseek/deepseek-flash')
     assert.equal(report.identity, 'placeholder')
     assert.equal(report.database, join(dataDir, 'kanobot.sqlite'))
     assert.equal(report.tombstones, join(dataDir, 'tombstones.sqlite'))
@@ -168,7 +171,7 @@ test('an explicit startup report proves successful activation', () => {
   }
 })
 
-test('a corrupt existing database blocks plugin activation before a timer exists', () => {
+test('a corrupt existing database blocks plugin activation before a timer exists', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'kanobot-corrupt-data-'))
   const databasePath = join(dir, 'kanobot.sqlite')
   const corrupt = Buffer.alloc(1024, 0x41)
@@ -177,7 +180,7 @@ test('a corrupt existing database blocks plugin activation before a timer exists
   const fake = createFakeContext()
 
   try {
-    assert.throws(
+    await assert.rejects(
       () =>
         apply(fake.ctx, {
           configDir: examplesDir,

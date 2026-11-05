@@ -27,7 +27,7 @@ import {
   StorageIntegrityError,
 } from './errors.ts'
 
-export const STORAGE_SCHEMA_VERSION = 2
+export const STORAGE_SCHEMA_VERSION = 3
 export const TOMBSTONE_STORE_SCHEMA_VERSION = 1
 
 type DatabaseKind = 'main' | 'tombstones'
@@ -91,6 +91,33 @@ const MAIN_REQUIRED_COLUMNS_V2: Record<string, readonly string[]> = {
   ...MAIN_REQUIRED_COLUMNS_V1,
   conversations: ['id', 'created_at', 'updated_at'],
   messages: ['seq', 'id', 'conversation_id', 'role', 'body_id', 'created_at'],
+}
+
+const MAIN_REQUIRED_COLUMNS_V3: Record<string, readonly string[]> = {
+  ...MAIN_REQUIRED_COLUMNS_V2,
+  model_calls: [
+    'id',
+    'conversation_id',
+    'user_message_id',
+    'assistant_message_id',
+    'provider',
+    'model',
+    'started_at',
+    'completed_at',
+    'local_day',
+    'status',
+    'attempts',
+    'input_tokens',
+    'output_tokens',
+    'cache_read_tokens',
+    'cache_write_tokens',
+    'reasoning_tokens',
+    'total_tokens',
+    'estimated_cost',
+    'pricing_json',
+    'response_id',
+    'error_code',
+  ],
 }
 
 const TOMBSTONE_REQUIRED_COLUMNS: Record<string, readonly string[]> = {
@@ -195,6 +222,37 @@ CREATE TABLE messages (
 ) STRICT;
 CREATE INDEX messages_conversation_seq_index ON messages(conversation_id, seq);
 CREATE INDEX messages_body_id_index ON messages(body_id);
+`
+
+const MODEL_CALLS_SCHEMA_V3 = `
+CREATE TABLE model_calls (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  user_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  assistant_message_id TEXT REFERENCES messages(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  completed_at TEXT,
+  local_day TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'aborted')),
+  attempts INTEGER NOT NULL CHECK (attempts >= 0),
+  input_tokens INTEGER CHECK (input_tokens IS NULL OR input_tokens >= 0),
+  output_tokens INTEGER CHECK (output_tokens IS NULL OR output_tokens >= 0),
+  cache_read_tokens INTEGER CHECK (cache_read_tokens IS NULL OR cache_read_tokens >= 0),
+  cache_write_tokens INTEGER CHECK (cache_write_tokens IS NULL OR cache_write_tokens >= 0),
+  reasoning_tokens INTEGER CHECK (reasoning_tokens IS NULL OR reasoning_tokens >= 0),
+  total_tokens INTEGER CHECK (total_tokens IS NULL OR total_tokens >= 0),
+  estimated_cost REAL CHECK (estimated_cost IS NULL OR estimated_cost >= 0),
+  pricing_json TEXT,
+  response_id TEXT,
+  error_code TEXT
+) STRICT;
+CREATE INDEX model_calls_conversation_started_index
+  ON model_calls(conversation_id, started_at);
+CREATE INDEX model_calls_local_day_index ON model_calls(local_day);
+CREATE INDEX model_calls_user_message_index ON model_calls(user_message_id);
+CREATE INDEX model_calls_assistant_message_index ON model_calls(assistant_message_id);
 `
 
 const TOMBSTONE_SCHEMA = `
@@ -318,7 +376,9 @@ function initializeDatabase(
   const version =
     kind === 'main' ? STORAGE_SCHEMA_VERSION : TOMBSTONE_STORE_SCHEMA_VERSION
   const schema =
-    kind === 'main' ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}` : TOMBSTONE_SCHEMA
+    kind === 'main'
+      ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}\n${MODEL_CALLS_SCHEMA_V3}`
+      : TOMBSTONE_SCHEMA
   db.exec('BEGIN IMMEDIATE')
   try {
     db.exec(schema)
@@ -430,7 +490,8 @@ function assertSchemaCompatible(
 ): void {
   const versions = readSchemaVersions(db, path, kind)
   const latest = versions.at(-1)
-  const supported = kind === 'main' ? [1, 2] : [TOMBSTONE_STORE_SCHEMA_VERSION]
+  const supported =
+    kind === 'main' ? [1, 2, 3] : [TOMBSTONE_STORE_SCHEMA_VERSION]
   if (
     latest === undefined ||
     !supported.includes(latest) ||
@@ -447,7 +508,9 @@ function assertSchemaCompatible(
       ? TOMBSTONE_REQUIRED_COLUMNS
       : latest === 1
         ? MAIN_REQUIRED_COLUMNS_V1
-        : MAIN_REQUIRED_COLUMNS_V2
+        : latest === 2
+          ? MAIN_REQUIRED_COLUMNS_V2
+          : MAIN_REQUIRED_COLUMNS_V3
   for (const [table, columns] of Object.entries(required)) {
     const tableRows = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -498,14 +561,22 @@ function migrateDatabaseIfNeeded(
   if (kind !== 'main') return
   const versions = readSchemaVersions(db, path, kind)
   const latest = versions.at(-1)
-  if (latest !== 1) return
+  if (latest === STORAGE_SCHEMA_VERSION) return
 
   db.exec('BEGIN IMMEDIATE')
   try {
-    db.exec(CHAT_SCHEMA_V2)
-    db.prepare(
-      'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
-    ).run(STORAGE_SCHEMA_VERSION, nowIso)
+    if (latest === 1) {
+      db.exec(CHAT_SCHEMA_V2)
+      db.prepare(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+      ).run(2, nowIso)
+    }
+    if (latest === 1 || latest === 2) {
+      db.exec(MODEL_CALLS_SCHEMA_V3)
+      db.prepare(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+      ).run(3, nowIso)
+    }
     db.exec(`PRAGMA user_version = ${STORAGE_SCHEMA_VERSION}`)
     db.exec('COMMIT')
   } catch (error) {
@@ -515,7 +586,7 @@ function migrateDatabaseIfNeeded(
       // 原始迁移错误优先；SQLite 可能已经自动回滚。
     }
     throw new StorageIntegrityError(
-      `schema migration ${latest} -> ${STORAGE_SCHEMA_VERSION} failed: ${errorMessage(error)}`,
+      `schema migration ${String(latest)} -> ${STORAGE_SCHEMA_VERSION} failed: ${errorMessage(error)}`,
       path,
       error,
     )
