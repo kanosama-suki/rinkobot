@@ -177,4 +177,15 @@ export interface MemoryListOptions {
   onlyDeleted?: boolean
 }
 
+export interface MemorySearchOptions {
+  limit?: number
+  markRecalled?: boolean
+}
+
+export interface MemorySearchResult {
+  memory: MemoryRecord
+  text: string
+  rank: number
+}
+
 export type StoredMemory = MemoryRecord

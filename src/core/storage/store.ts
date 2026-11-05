@@ -1,10 +1,11 @@
 /**
- * M2/M3.0 持久化引擎。
+ * M2/M3 持久化引擎。
  *
  * 边界：
  * - 事件追加和可选快照在同一 SQLite 事务里提交；
  * - 恢复顺序是“先应用独立墓碑，再从最近快照重放事件”，避免旧备份复活删除内容；
  * - 彻底清除会级联正文/记忆/outbox，删除并重建快照，最后 checkpoint + VACUUM；
+ * - 长期记忆正文仍只在 bodies；活跃记忆的 FTS5 双列索引可重建、可级联删除；
  * - 所有数据库错误显式抛出，不自动重建、不静默跳过损坏事件。
  */
 
@@ -26,6 +27,10 @@ import {
   listBackups,
   localDateKey,
 } from './backup.ts'
+import {
+  buildMemorySearchColumns,
+  buildMemorySearchMatch,
+} from './memory-search.ts'
 import {
   openMainDatabase,
   openTombstoneDatabase,
@@ -76,6 +81,8 @@ import type {
   ConversationRecord,
   FinishModelCallInput,
   MemoryListOptions,
+  MemorySearchOptions,
+  MemorySearchResult,
   ModelCallRecord,
   ModelPricingRecord,
   ModelUsageRecord,
@@ -707,42 +714,191 @@ export class KanobotStorage {
 
   putMemory(input: MemoryRecord): MemoryRecord {
     this.assertOpen()
-    const memory = validateMemoryRecord(input)
-    this.assertNotTombstoned('memory', memory.id)
-    this.assertBodyAvailable(memory.contentRef, 'memory.contentRef')
-    if (memory.quoteRef !== null) {
-      this.assertBodyAvailable(memory.quoteRef, 'memory.quoteRef')
-    }
-    const json = canonicalJson(memory)
-    try {
-      this.db.prepare(
-        `INSERT INTO memories
-          (id, schema_version, kind, content_ref, quote_ref, source, created_at,
-           confidence, sensitivity, importance, last_recalled_at, status, previous_status,
-           replaced_by, deleted_at, purge_after, record_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
-      ).run(
-        memory.id,
-        memory.schemaVersion,
-        memory.kind,
-        memory.contentRef,
-        memory.quoteRef,
-        memory.source,
-        memory.createdAt,
-        memory.confidence,
-        memory.sensitivity,
-        memory.importance,
-        memory.lastRecalledAt,
-        memory.status,
-        memory.replacedBy,
-        memory.deletedAt,
-        memory.purgeAfter,
-        json,
-      )
-    } catch (error) {
-      throw mapInsertError(error, 'memory', memory.id)
-    }
+    const memory = this.prepareMemoryWrite(input)
+    this.inTransaction(() => {
+      this.insertMemoryRow(memory)
+    })
     return memory
+  }
+
+  /**
+   * 用户纠正会建立一条新记忆，并在同一事务里把旧记忆标为 replaced。
+   * 旧记录的正文仍保留作证据，但不再进入全文检索。
+   */
+  replaceMemory(oldId: string, replacement: MemoryRecord): MemoryRecord {
+    this.assertOpen()
+    const previousId = validateIdentifier(oldId, 'memory.oldId')
+    const current = this.getMemory(previousId)
+    if (current === null) {
+      throw new StorageError(
+        'REFERENCE_MISSING',
+        `memory "${previousId}" does not exist`,
+      )
+    }
+    if (current.status !== 'active') {
+      throw new StorageError(
+        'RECORD_INVALID',
+        `memory "${previousId}" must be active before it can be replaced`,
+      )
+    }
+    const memory = this.prepareMemoryWrite(replacement)
+    if (memory.id === previousId) {
+      throw new StorageError(
+        'RECORD_INVALID',
+        'a replacement memory must have a different ID',
+      )
+    }
+    if (memory.status !== 'active') {
+      throw new StorageError(
+        'RECORD_INVALID',
+        'a replacement memory must be active',
+      )
+    }
+    const superseded = validateMemoryRecord({
+      ...current,
+      status: 'replaced',
+      replacedBy: memory.id,
+    })
+    this.inTransaction(() => {
+      this.insertMemoryRow(memory)
+      this.updateMemoryRow(superseded, null)
+    })
+    return memory
+  }
+
+  /**
+   * 候选转正只能由所有者操作触发；存储层不自行判断证据是否充分。
+   */
+  promoteMemory(id: string): MemoryRecord {
+    this.assertOpen()
+    const memoryId = validateIdentifier(id, 'memory.id')
+    const current = this.getMemory(memoryId)
+    if (current === null) {
+      throw new StorageError(
+        'REFERENCE_MISSING',
+        `memory "${memoryId}" does not exist`,
+      )
+    }
+    if (current.status !== 'candidate') {
+      throw new StorageError(
+        'RECORD_INVALID',
+        `memory "${memoryId}" is ${current.status}, not candidate`,
+      )
+    }
+    this.assertBodyAvailable(current.contentRef, 'memory.contentRef')
+    if (current.quoteRef !== null) {
+      this.assertBodyAvailable(current.quoteRef, 'memory.quoteRef')
+    }
+    const promoted = validateMemoryRecord({
+      ...current,
+      status: 'active',
+    })
+    this.inTransaction(() => {
+      this.updateMemoryRow(promoted, null)
+    })
+    return promoted
+  }
+
+  searchMemories(
+    query: string,
+    options: MemorySearchOptions = {},
+  ): MemorySearchResult[] {
+    this.assertOpen()
+    const limit = options.limit ?? 5
+    if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+      throw new StorageError(
+        'RECORD_INVALID',
+        'memory search limit must be an integer between 1 and 50',
+      )
+    }
+    let match: string | null
+    try {
+      match = buildMemorySearchMatch(query)
+    } catch (error) {
+      throw new StorageError(
+        'RECORD_INVALID',
+        error instanceof Error ? error.message : String(error),
+        { cause: error },
+      )
+    }
+    if (match === null) return []
+
+    const rows = this.db.prepare(
+      `SELECT m.*, b.content AS memory_text,
+              bm25(memory_search, 0.0, 2.0, 1.0) AS search_rank
+       FROM memory_search
+       JOIN memories m ON m.id = memory_search.memory_id
+       JOIN bodies b ON b.id = m.content_ref
+       WHERE memory_search MATCH ?
+         AND m.status = 'active'
+       ORDER BY
+         CASE m.importance
+           WHEN 'permanent' THEN 0
+           WHEN 'important' THEN 1
+           ELSE 2
+         END ASC,
+         COALESCE(m.last_recalled_at, m.created_at) DESC,
+         search_rank ASC,
+         m.id ASC
+       LIMIT ?`,
+    ).all(match, limit) as Array<Record<string, unknown>>
+
+    const results = rows.map(row => {
+      if (typeof row.memory_text !== 'string') {
+        throw new StorageIntegrityError(
+          'memory search row has invalid body text',
+          ':memory_search:',
+        )
+      }
+      if (typeof row.search_rank !== 'number' || !Number.isFinite(row.search_rank)) {
+        throw new StorageIntegrityError(
+          'memory search row has invalid rank',
+          ':memory_search:',
+        )
+      }
+      return {
+        memory: memoryFromRow(row),
+        text: row.memory_text,
+        rank: row.search_rank,
+      }
+    })
+
+    if (options.markRecalled === true && results.length > 0) {
+      this.markMemoriesRecalled(results.map(result => result.memory.id))
+    }
+    return results
+  }
+
+  markMemoriesRecalled(ids: readonly string[], at: string = this.nowIso()): void {
+    this.assertOpen()
+    const recalledAt = validateInstant(at, 'memory.lastRecalledAt')
+    const uniqueIds = new Set<string>()
+    for (const id of ids) {
+      uniqueIds.add(validateIdentifier(id, 'memory.id'))
+    }
+    this.inTransaction(() => {
+      for (const id of uniqueIds) {
+        const memory = this.getMemory(id)
+        if (memory === null) {
+          throw new StorageError(
+            'REFERENCE_MISSING',
+            `memory "${id}" does not exist`,
+          )
+        }
+        if (memory.status !== 'active' || memory.lastRecalledAt === recalledAt) {
+          continue
+        }
+        // 召回时间不参与 FTS 内容，无需重建索引。
+        this.updateMemoryRow(
+          validateMemoryRecord({
+            ...memory,
+            lastRecalledAt: recalledAt,
+          }),
+          null,
+          false,
+        )
+      }
+    })
   }
 
   getMemory(id: string): MemoryRecord | null {
@@ -785,7 +941,9 @@ export class KanobotStorage {
       purgeAfter,
     })
     // 回收站恢复要回到删除前状态；previous_status 是内部列，不新增正文。
-    this.updateMemoryRow(updated, current.status)
+    this.inTransaction(() => {
+      this.updateMemoryRow(updated, current.status)
+    })
     return updated
   }
 
@@ -828,7 +986,9 @@ export class KanobotStorage {
       deletedAt: null,
       purgeAfter: null,
     })
-    this.updateMemoryRow(restored, null)
+    this.inTransaction(() => {
+      this.updateMemoryRow(restored, null)
+    })
     return restored
   }
 
@@ -994,6 +1154,7 @@ export class KanobotStorage {
   private initialize(): void {
     const now = this.nowIso()
     const enforcement = this.enforceTombstones(now)
+    this.ensureMemorySearchIndex()
     this.restoreStateFromLog()
     if (enforcement.tombstones.length > 0) {
       // 墓碑出现后旧快照可能含已删除引用，必须从被抑制的事件流重建。
@@ -1220,6 +1381,7 @@ export class KanobotStorage {
               .changes,
           )
         } else if (tombstone.targetType === 'memory') {
+          this.deleteMemorySearchRow(tombstone.targetId)
           deletedMemories += Number(
             this.db.prepare('DELETE FROM memories WHERE id = ?').run(tombstone.targetId)
               .changes,
@@ -1234,6 +1396,13 @@ export class KanobotStorage {
       if (tombstones.length > 0) {
         deletedSnapshots = deleteAllSnapshots(this.db)
       }
+      // 崩溃恢复或旧备份里可能留下非 active 的索引行；启动收敛时一并清掉。
+      this.db.prepare(
+        `DELETE FROM memory_search
+         WHERE memory_id NOT IN (
+           SELECT id FROM memories WHERE status = 'active'
+         )`,
+      ).run()
     })
 
     return {
@@ -1407,6 +1576,7 @@ export class KanobotStorage {
   private updateMemoryRow(
     memory: MemoryRecord,
     previousStatus: MemoryRecord['status'] | null,
+    syncSearch = true,
   ): void {
     const json = canonicalJson(memory)
     this.db.prepare(
@@ -1424,6 +1594,134 @@ export class KanobotStorage {
       json,
       memory.id,
     )
+    if (syncSearch) this.syncMemorySearchRow(memory)
+  }
+
+  private prepareMemoryWrite(input: MemoryRecord): MemoryRecord {
+    const memory = validateMemoryRecord(input)
+    this.assertNotTombstoned('memory', memory.id)
+    this.assertBodyAvailable(memory.contentRef, 'memory.contentRef')
+    if (memory.quoteRef !== null) {
+      this.assertBodyAvailable(memory.quoteRef, 'memory.quoteRef')
+    }
+    return memory
+  }
+
+  private insertMemoryRow(memory: MemoryRecord): void {
+    let inserted = false
+    try {
+      this.db.prepare(
+        `INSERT INTO memories
+          (id, schema_version, kind, content_ref, quote_ref, source, created_at,
+           confidence, sensitivity, importance, last_recalled_at, status, previous_status,
+           replaced_by, deleted_at, purge_after, record_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
+      ).run(
+        memory.id,
+        memory.schemaVersion,
+        memory.kind,
+        memory.contentRef,
+        memory.quoteRef,
+        memory.source,
+        memory.createdAt,
+        memory.confidence,
+        memory.sensitivity,
+        memory.importance,
+        memory.lastRecalledAt,
+        memory.status,
+        memory.replacedBy,
+        memory.deletedAt,
+        memory.purgeAfter,
+        canonicalJson(memory),
+      )
+      inserted = true
+      this.syncMemorySearchRow(memory)
+    } catch (error) {
+      if (error instanceof StorageError) throw error
+      if (!inserted) throw mapInsertError(error, 'memory', memory.id)
+      throw new StorageError(
+        'IO',
+        `memory "${memory.id}" was inserted but its search row failed: ${messageOf(error)}`,
+        { cause: error, path: this.databasePath },
+      )
+    }
+  }
+
+  private syncMemorySearchRow(memory: MemoryRecord): void {
+    this.deleteMemorySearchRow(memory.id)
+    if (memory.status !== 'active') return
+    const body = this.getBody(memory.contentRef)
+    if (body === null) {
+      throw new StorageIntegrityError(
+        `active memory "${memory.id}" has no searchable body`,
+        ':memories:',
+      )
+    }
+    const columns = buildMemorySearchColumns(body.content)
+    this.db.prepare(
+      `INSERT INTO memory_search(memory_id, word_text, char_text)
+       VALUES (?, ?, ?)`,
+    ).run(memory.id, columns.wordText, columns.charText)
+  }
+
+  private deleteMemorySearchRow(memoryId: string): void {
+    this.db.prepare(
+      'DELETE FROM memory_search WHERE memory_id = ?',
+    ).run(memoryId)
+  }
+
+  private ensureMemorySearchIndex(): void {
+    const activeRows = this.db.prepare(
+      "SELECT * FROM memories WHERE status = 'active' ORDER BY id",
+    ).all() as Array<Record<string, unknown>>
+    const indexedRows = this.db.prepare(
+      'SELECT memory_id, word_text, char_text FROM memory_search',
+    ).all() as Array<Record<string, unknown>>
+    const indexed = new Map<string, { wordText: string; charText: string }>()
+    for (const row of indexedRows) {
+      if (
+        typeof row.memory_id !== 'string' ||
+        typeof row.word_text !== 'string' ||
+        typeof row.char_text !== 'string'
+      ) {
+        throw new StorageIntegrityError(
+          'memory search row has invalid column types',
+          ':memory_search:',
+        )
+      }
+      indexed.set(row.memory_id, {
+        wordText: row.word_text,
+        charText: row.char_text,
+      })
+    }
+
+    this.inTransaction(() => {
+      this.db.prepare(
+        `DELETE FROM memory_search
+         WHERE memory_id NOT IN (
+           SELECT id FROM memories WHERE status = 'active'
+         )`,
+      ).run()
+      for (const row of activeRows) {
+        const memory = memoryFromRow(row)
+        const body = this.getBody(memory.contentRef)
+        if (body === null) {
+          throw new StorageIntegrityError(
+            `active memory "${memory.id}" has no searchable body`,
+            ':memories:',
+          )
+        }
+        const expected = buildMemorySearchColumns(body.content)
+        const existing = indexed.get(memory.id)
+        if (
+          existing === undefined ||
+          existing.wordText !== expected.wordText ||
+          existing.charText !== expected.charText
+        ) {
+          this.syncMemorySearchRow(memory)
+        }
+      }
+    })
   }
 
   private checkpointAndVacuum(): void {

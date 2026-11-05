@@ -27,7 +27,7 @@ import {
   StorageIntegrityError,
 } from './errors.ts'
 
-export const STORAGE_SCHEMA_VERSION = 3
+export const STORAGE_SCHEMA_VERSION = 4
 export const TOMBSTONE_STORE_SCHEMA_VERSION = 1
 
 type DatabaseKind = 'main' | 'tombstones'
@@ -118,6 +118,11 @@ const MAIN_REQUIRED_COLUMNS_V3: Record<string, readonly string[]> = {
     'response_id',
     'error_code',
   ],
+}
+
+const MAIN_REQUIRED_COLUMNS_V4: Record<string, readonly string[]> = {
+  ...MAIN_REQUIRED_COLUMNS_V3,
+  memory_search: ['memory_id', 'word_text', 'char_text'],
 }
 
 const TOMBSTONE_REQUIRED_COLUMNS: Record<string, readonly string[]> = {
@@ -255,6 +260,16 @@ CREATE INDEX model_calls_user_message_index ON model_calls(user_message_id);
 CREATE INDEX model_calls_assistant_message_index ON model_calls(assistant_message_id);
 `
 
+const MEMORY_SEARCH_SCHEMA_V4 = `
+CREATE VIRTUAL TABLE memory_search USING fts5(
+  memory_id UNINDEXED,
+  word_text,
+  char_text,
+  tokenize = 'unicode61 remove_diacritics 0'
+);
+INSERT INTO memory_search(memory_search, rank) VALUES('secure-delete', 1);
+`
+
 const TOMBSTONE_SCHEMA = `
 CREATE TABLE schema_migrations (
   version INTEGER PRIMARY KEY,
@@ -377,7 +392,7 @@ function initializeDatabase(
     kind === 'main' ? STORAGE_SCHEMA_VERSION : TOMBSTONE_STORE_SCHEMA_VERSION
   const schema =
     kind === 'main'
-      ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}\n${MODEL_CALLS_SCHEMA_V3}`
+      ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}\n${MODEL_CALLS_SCHEMA_V3}\n${MEMORY_SEARCH_SCHEMA_V4}`
       : TOMBSTONE_SCHEMA
   db.exec('BEGIN IMMEDIATE')
   try {
@@ -491,7 +506,7 @@ function assertSchemaCompatible(
   const versions = readSchemaVersions(db, path, kind)
   const latest = versions.at(-1)
   const supported =
-    kind === 'main' ? [1, 2, 3] : [TOMBSTONE_STORE_SCHEMA_VERSION]
+    kind === 'main' ? [1, 2, 3, 4] : [TOMBSTONE_STORE_SCHEMA_VERSION]
   if (
     latest === undefined ||
     !supported.includes(latest) ||
@@ -510,7 +525,9 @@ function assertSchemaCompatible(
         ? MAIN_REQUIRED_COLUMNS_V1
         : latest === 2
           ? MAIN_REQUIRED_COLUMNS_V2
-          : MAIN_REQUIRED_COLUMNS_V3
+          : latest === 3
+            ? MAIN_REQUIRED_COLUMNS_V3
+            : MAIN_REQUIRED_COLUMNS_V4
   for (const [table, columns] of Object.entries(required)) {
     const tableRows = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -576,6 +593,12 @@ function migrateDatabaseIfNeeded(
       db.prepare(
         'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
       ).run(3, nowIso)
+    }
+    if (latest === 1 || latest === 2 || latest === 3) {
+      db.exec(MEMORY_SEARCH_SCHEMA_V4)
+      db.prepare(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+      ).run(4, nowIso)
     }
     db.exec(`PRAGMA user_version = ${STORAGE_SCHEMA_VERSION}`)
     db.exec('COMMIT')

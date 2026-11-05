@@ -61,6 +61,10 @@ test('purging a body cascades references and leaves no plaintext in database fil
     store.createSnapshot()
     assert.equal(store.currentState().commitments.length, 1)
     assert.equal(store.currentState().commitments[0].status, 'completed')
+    assert.equal(
+      store.searchMemories('PURGE', { markRecalled: false })[0]?.memory.id,
+      'memory-purge-1',
+    )
 
     const result = store.purge({
       targetType: 'body',
@@ -73,6 +77,10 @@ test('purging a body cascades references and leaves no plaintext in database fil
     assert.equal(store.getBody('body-purge-1'), null)
     assert.equal(store.getMemory('memory-purge-1'), null)
     assert.equal(store.getOutbox('outbox-purge-1'), null)
+    assert.equal(
+      store.searchMemories('PURGE', { markRecalled: false }).length,
+      0,
+    )
     assert.equal(store.lastSequence, 2)
     assert.deepEqual(
       new Set(store.listTombstones().map(item => item.targetType)),

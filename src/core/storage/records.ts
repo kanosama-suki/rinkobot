@@ -18,6 +18,7 @@ const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const KIND = /^[a-z][a-z0-9_.-]{0,63}$/
 const ERROR_CODE = /^[a-z][a-z0-9_.-]{0,127}$/
 export const MAX_CHAT_MESSAGE_CHARS = 4_000
+export const MAX_MEMORY_TEXT_CHARS = 4_000
 const OUTBOX_STATUSES: readonly OutboxStatus[] = [
   'pending',
   'delivered',
@@ -104,6 +105,21 @@ export function normalizeChatText(value: unknown, field = 'message.text'): strin
   const length = Array.from(text).length
   if (length === 0 || length > MAX_CHAT_MESSAGE_CHARS) {
     invalid(field, `expected 1..${MAX_CHAT_MESSAGE_CHARS} characters`)
+  }
+  return text
+}
+
+export function normalizeMemoryText(
+  value: unknown,
+  field = 'memory.text',
+): string {
+  if (typeof value !== 'string') {
+    invalid(field, 'expected a string')
+  }
+  const text = value.trim()
+  const length = Array.from(text).length
+  if (length === 0 || length > MAX_MEMORY_TEXT_CHARS) {
+    invalid(field, `expected 1..${MAX_MEMORY_TEXT_CHARS} characters`)
   }
   return text
 }

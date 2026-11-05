@@ -164,9 +164,11 @@ test('an M2 schema migrates in place and preserves existing records', () => {
 
   const db = new DatabaseSync(join(ws.root, 'kanobot.sqlite'))
   try {
+    db.exec('DROP TABLE memory_search')
     db.exec('DROP TABLE model_calls')
     db.exec('DROP TABLE messages')
     db.exec('DROP TABLE conversations')
+    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(4)
     db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(3)
     db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(2)
     db.prepare(
@@ -194,7 +196,7 @@ test('an M2 schema migrates in place and preserves existing records', () => {
       ).all() as Array<Record<string, unknown>>
       assert.deepEqual(
         versions.map(row => Number(row.version)),
-        [1, 2, 3],
+        [1, 2, 3, 4],
       )
       const modelCalls = check.prepare(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'model_calls'",
@@ -208,7 +210,7 @@ test('an M2 schema migrates in place and preserves existing records', () => {
   }
 })
 
-test('an M3.0 schema v2 migrates to v3 without losing chat records', () => {
+test('an M3.0 schema v2 migrates to the current schema without losing chat records', () => {
   const ws = createWorkspace(test)
   const store = ws.open()
   try {
@@ -223,7 +225,9 @@ test('an M3.0 schema v2 migrates to v3 without losing chat records', () => {
 
   const db = new DatabaseSync(join(ws.root, 'kanobot.sqlite'))
   try {
+    db.exec('DROP TABLE memory_search')
     db.exec('DROP TABLE model_calls')
+    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(4)
     db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(3)
     db.prepare(
       'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
@@ -243,7 +247,7 @@ test('an M3.0 schema v2 migrates to v3 without losing chat records', () => {
       ).all() as Array<Record<string, unknown>>
       assert.deepEqual(
         versions.map(row => Number(row.version)),
-        [2, 3],
+        [2, 3, 4],
       )
     } finally {
       check.close()

@@ -32,7 +32,9 @@ export {
 } from './paths.ts'
 export {
   MAX_CHAT_MESSAGE_CHARS,
+  MAX_MEMORY_TEXT_CHARS,
   normalizeChatText,
+  normalizeMemoryText,
 } from './records.ts'
 export {
   KanobotStorage,
@@ -50,6 +52,8 @@ export type {
   ConversationRecord,
   FinishModelCallInput,
   MemoryListOptions,
+  MemorySearchOptions,
+  MemorySearchResult,
   ModelCallRecord,
   ModelCallStatus,
   ModelPricingRecord,
