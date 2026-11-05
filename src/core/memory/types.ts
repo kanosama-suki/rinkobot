@@ -67,11 +67,6 @@ export interface MemoryExtractionSummary {
   errorCode: string | null
 }
 
-export interface MemoryExtractionResult {
-  summary: MemoryExtractionSummary
-  memories: MemoryView[]
-}
-
 export class MemoryInputError extends Error {
   readonly code: string
 

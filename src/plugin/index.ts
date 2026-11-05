@@ -19,7 +19,6 @@ import {
 } from '../core/chat/index.ts'
 import {
   KanobotMemoryService,
-  MemoryExtractionService,
 } from '../core/memory/index.ts'
 import { OwnerAuditService } from '../core/observability/index.ts'
 import { KanobotEmergencyService } from '../core/policy/index.ts'
@@ -92,16 +91,11 @@ export async function apply(
     )
     // 启动时把 STOP 文件同步进数据库；删除文件不会自动恢复。
     const emergencyStatus = emergency.status()
-    // 记忆抽取与聊天共用同一路由，但审计 purpose 独立，费用不会混在一起。
-    const memoryExtraction = new MemoryExtractionService(storage, memory, model, {
-      maxDailyCalls: loaded.system.resources.dailyModelCallLimit,
-    })
     const chat = new KanobotChatService(storage, model, {
       maxConcurrentModelCalls:
         loaded.system.resources.maxConcurrentModelCalls,
       dailyModelCallLimit: loaded.system.resources.dailyModelCallLimit,
       memory,
-      memoryExtraction,
     })
     disposeChatSurface = registerChatSurface({
       webServer: ctx.webServer,

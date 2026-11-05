@@ -17,6 +17,7 @@ import {
   type ChatStreamEvent,
 } from '../../src/core/chat/index.ts'
 import { createWorkspace } from '../helpers/storage-fixture.ts'
+import { chatEnvelopeText } from '../helpers/chat-envelope.ts'
 
 test('the daily model call limit rejects before storing another user message', async () => {
   const ws = createWorkspace(test)
@@ -95,7 +96,7 @@ class ImmediateChatModel implements ChatModel {
   async *stream(
     _request: ChatModelRequest,
   ): AsyncIterable<ChatModelStreamEvent> {
-    yield { type: 'text', text: '立即返回的虚构回复。' }
+    yield { type: 'text', text: chatEnvelopeText('立即返回的虚构回复。') }
     yield {
       type: 'result',
       result: {
@@ -117,7 +118,10 @@ class BlockingChatModel implements ChatModel {
   async *stream(
     request: ChatModelRequest,
   ): AsyncIterable<ChatModelStreamEvent> {
-    yield { type: 'text', text: '已开始但尚未结束的虚构回复。' }
+    yield {
+      type: 'text',
+      text: '{"schemaVersion":1,"reply":"已开始但尚未结束的虚构回复。',
+    }
     await new Promise<void>((_resolve, reject) => {
       const onAbort = (): void => {
         const error = new Error('aborted by test')

@@ -1,5 +1,5 @@
 /**
- * M3.4 聊天、记忆、审计与紧急停止面板。
+ * M3.5 聊天、记忆、状态、审计与紧急停止面板。
  *
  * 所有来自服务器和模型的文本都通过 textContent 渲染；SSE 只接受本页面
  * 固定的聊天流格式。记忆操作必须经过 DSH 登录态，页面不保存任何凭据。
@@ -22,6 +22,9 @@ const elements = {
   statusCost: document.querySelector('#status-cost'),
   statusLastCall: document.querySelector('#status-last-call'),
   statusMessages: document.querySelector('#status-messages'),
+  statusAffect: document.querySelector('#status-affect'),
+  statusRelationship: document.querySelector('#status-relationship'),
+  statusCommitments: document.querySelector('#status-commitments'),
   statusEvents: document.querySelector('#status-events'),
   emptyNote: document.querySelector('#empty-note'),
   tabStatus: document.querySelector('#tab-status'),
@@ -184,6 +187,7 @@ async function sendMessage() {
         applyUsage(event.modelUsage)
         appendMemoryOutcome(assistant, event.memory)
         appendStyleOutcome(assistant, event.styleCheck)
+        appendEnvelopeOutcome(assistant, event.envelope)
         assistant = null
         void loadMemories().catch(error => showMemoryError(errorMessage(error)))
       } else if (event.type === 'error') {
@@ -299,6 +303,10 @@ function finishAssistant(article, message) {
 
 function appendMemoryOutcome(article, memory) {
   if (!memory || typeof memory !== 'object') return
+  const skipped =
+    Number.isInteger(memory.skippedCount) && memory.skippedCount > 0
+      ? memory.skippedCount
+      : 0
   let text = ''
   if (memory.status === 'succeeded') {
     if (memory.createdCount > 0) {
@@ -308,6 +316,9 @@ function appendMemoryOutcome(article, memory) {
           : '')
     } else {
       text = '这轮没有新的长期记忆。'
+    }
+    if (skipped > 0) {
+      text += `另有 ${skipped} 条候选未通过门禁或未写入。`
     }
   } else if (memory.status === 'failed') {
     text = '这轮记忆整理失败；回复已经保存。'
@@ -335,6 +346,57 @@ function appendStyleOutcome(article, styleCheck) {
   article.append(note)
 }
 
+function appendEnvelopeOutcome(article, envelope) {
+  if (!envelope || typeof envelope !== 'object') return
+  const messages = []
+  if (typeof envelope.errorCode === 'string') {
+    messages.push(
+      envelope.errorCode === 'chat_envelope_invalid_json'
+        ? '结构化输出损坏，已保留正文但丢弃记忆和状态更新'
+        : '结构化输出不完整，已保留正文但丢弃元数据',
+    )
+  } else if (envelope.ok === false && Array.isArray(envelope.issueCodes)) {
+    const labels = []
+    for (const code of envelope.issueCodes) {
+      const label = envelopeIssueLabel(code)
+      if (label !== '' && !labels.includes(label)) labels.push(label)
+    }
+    if (labels.length > 0) {
+      messages.push(`部分结构化字段未写入：${labels.join('、')}`)
+    }
+  }
+  if (
+    typeof envelope.commitmentsCreated === 'number' &&
+    envelope.commitmentsCreated > 0
+  ) {
+    messages.push(`新增 ${envelope.commitmentsCreated} 条承诺`)
+  }
+  if (messages.length === 0) return
+  const note = document.createElement('p')
+  note.className = 'style-outcome'
+  note.textContent = messages.join('；')
+  article.append(note)
+}
+
+function envelopeIssueLabel(code) {
+  switch (code) {
+    case 'appraisal_missing':
+    case 'appraisal_invalid':
+      return '心情判断无效'
+    case 'appraisal_event_failed':
+      return '心情状态写入失败'
+    case 'memory_candidates_not_array':
+    case 'memory_candidates_skipped':
+      return '部分记忆候选未通过门禁'
+    case 'commitments_not_array':
+    case 'commitments_skipped':
+    case 'commitments_not_applied':
+      return '部分承诺未写入'
+    default:
+      return ''
+  }
+}
+
 function applyModel(model) {
   if (!model || typeof model.id !== 'string') return
   const isMock = model.mode === 'mock'
@@ -353,6 +415,26 @@ function applyState(value) {
   if (!value) return
   elements.statusMessages.textContent = String(value.messageCount)
   elements.statusEvents.textContent = String(value.lastSequence)
+  if (value.affect) {
+    elements.statusAffect.textContent =
+      `心情 ${formatDecimal(value.affect.valence)} · 唤醒 ${formatDecimal(value.affect.arousal)}`
+  }
+  if (value.relationship) {
+    const repair = value.relationship.repairNeeded ? ' · 需要修复' : ''
+    elements.statusRelationship.textContent =
+      `亲近 ${formatDecimal(value.relationship.closeness)}` +
+      ` · 受伤 ${formatDecimal(value.relationship.hurt)}${repair}`
+  }
+  if (value.commitments) {
+    elements.statusCommitments.textContent =
+      `${Number(value.commitments.open ?? 0)} 未完成 / ${Number(value.commitments.total ?? 0)}`
+  }
+}
+
+function formatDecimal(value) {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? value.toFixed(2)
+    : '—'
 }
 
 function applyUsage(value) {

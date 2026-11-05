@@ -231,6 +231,9 @@ export class MagpieChatModel implements ChatModel {
           max_tokens: this.maxOutputTokens,
           stream: true,
           stream_options: { include_usage: true },
+          ...(request.jsonMode === true
+            ? { response_format: { type: 'json_object' } }
+            : {}),
         }),
       })
       if (!response.ok) {

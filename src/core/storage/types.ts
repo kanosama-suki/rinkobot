@@ -60,6 +60,7 @@ export interface ChatMessageInput {
 }
 
 export type ModelCallStatus = 'running' | 'succeeded' | 'failed' | 'aborted'
+// memory_extraction 仅用于读取 M3.3 及更早的历史审计行。
 export type ModelCallPurpose = 'chat' | 'memory_extraction'
 
 export interface ModelUsageRecord {

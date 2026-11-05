@@ -121,7 +121,13 @@ test('Magpie streams fragmented UTF-8, ignores reasoning, and parses usage', asy
     assert.equal(chatBody?.max_tokens, 4096)
     assert.equal(chatBody?.stream, true)
     assert.deepEqual(chatBody?.stream_options, { include_usage: true })
+    assert.deepEqual(chatBody?.response_format, { type: 'json_object' })
     assert.equal(Array.isArray(chatBody?.messages), true)
+
+    // 视觉/普通文本调用不要求 JSON 输出，不能把 response_format 无条件带上。
+    await collect(model, new AbortController().signal, false)
+    assert.ok(chatBody !== null)
+    assert.equal(Object.hasOwn(chatBody, 'response_format'), false)
   } finally {
     await harness.close()
   }
@@ -351,10 +357,11 @@ async function checkedModel(
   return model
 }
 
-function requestFor(model: MagpieChatModel) {
+function requestFor(model: MagpieChatModel, jsonMode = true) {
   return {
     systemPrompt: '占位测试人格',
     messages: [{ role: 'user' as const, text: '虚构测试消息' }],
+    jsonMode,
     signal: new AbortController().signal,
   }
 }
@@ -362,10 +369,11 @@ function requestFor(model: MagpieChatModel) {
 async function collect(
   model: MagpieChatModel,
   signal: AbortSignal = new AbortController().signal,
+  jsonMode = true,
 ): Promise<ChatModelStreamEvent[]> {
   const events: ChatModelStreamEvent[] = []
   for await (const event of model.stream({
-    ...requestFor(model),
+    ...requestFor(model, jsonMode),
     signal,
   })) {
     events.push(event)

@@ -26,6 +26,9 @@ export interface ModelMessage {
 export interface ChatModelRequest {
   systemPrompt: string
   messages: readonly ModelMessage[]
+  // 本地 mock 可以忽略；Magpie 驱动会把 true 转成 OpenAI-compatible
+  // response_format=json_object，但最终结构仍由服务端严格校验。
+  jsonMode?: boolean
   signal: AbortSignal
 }
 
@@ -77,6 +80,19 @@ export interface ChatStateView {
   lastSequence: number
   eventCount: number
   messageCount: number
+  affect: {
+    valence: number
+    arousal: number
+  }
+  relationship: {
+    closeness: number
+    hurt: number
+    repairNeeded: boolean
+  }
+  commitments: {
+    total: number
+    open: number
+  }
 }
 
 export interface ConversationView {
@@ -107,6 +123,16 @@ export interface ChatModelUsageView {
   dailyCallLimit: number
 }
 
+export interface ChatEnvelopeView {
+  // ok 只在信封本身和所有声明字段都有效时为 true；部分字段被门禁丢弃时，
+  // errorCode 为 null，但 issueCodes 会列出降级原因。
+  ok: boolean
+  issueCodes: string[]
+  errorCode: string | null
+  commitmentsCreated: number
+  commitmentsSkipped: number
+}
+
 export type ChatStreamEvent =
   | {
       type: 'ready'
@@ -127,6 +153,7 @@ export type ChatStreamEvent =
       modelUsage: ChatModelUsageView
       memory: MemoryExtractionSummary | null
       styleCheck: StyleCheckResult
+      envelope: ChatEnvelopeView
     }
 
 export class ChatInputError extends Error {

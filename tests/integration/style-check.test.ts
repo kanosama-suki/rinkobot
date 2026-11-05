@@ -16,6 +16,7 @@ import {
   type ChatStreamEvent,
 } from '../../src/core/chat/index.ts'
 import { createWorkspace } from '../helpers/storage-fixture.ts'
+import { chatEnvelopeText } from '../helpers/chat-envelope.ts'
 
 test('a banned phrase is recorded as a style violation without copying text', async t => {
   const ws = createWorkspace(t)
@@ -65,7 +66,10 @@ class BannedReplyModel implements ChatModel {
   async *stream(
     _request: ChatModelRequest,
   ): AsyncIterable<ChatModelStreamEvent> {
-    yield { type: 'text', text: '作为AI，你应该早点休息。' }
+    yield {
+      type: 'text',
+      text: chatEnvelopeText('作为AI，你应该早点休息。'),
+    }
     yield {
       type: 'result',
       result: {

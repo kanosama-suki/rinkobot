@@ -21,6 +21,7 @@ import {
   type ChatStreamEvent,
 } from '../../src/core/chat/index.ts'
 import { createWorkspace, tickEvent } from '../helpers/storage-fixture.ts'
+import { chatEnvelopeText } from '../helpers/chat-envelope.ts'
 
 test('mock chat streams and survives a clean reopen', async () => {
   const ws = createWorkspace(test)
@@ -39,22 +40,29 @@ test('mock chat streams and survives a clean reopen', async () => {
     )
     const view = chat.conversation()
     assert.equal(view.messages.length, 2)
-    assert.equal(view.state.lastSequence, 1)
-    assert.equal(view.state.eventCount, 1)
+    assert.equal(view.state.lastSequence, 2)
+    assert.equal(view.state.eventCount, 2)
+    assert.ok(Math.abs(view.state.affect.valence - 0.1275) < 1e-9)
+    assert.equal(view.state.commitments.total, 0)
     assert.ok(view.messages.every(message => message.bodyId.startsWith('body-')))
 
     const db = new DatabaseSync(join(ws.root, 'kanobot.sqlite'), {
       readOnly: true,
     })
     try {
-      const row = db.prepare(
+      const rows = db.prepare(
         `SELECT event_type, payload_json, evidence_refs_json
-         FROM events`,
-      ).get() as Record<string, unknown> | undefined
-      assert.equal(row?.event_type, 'interaction.recorded')
-      const stored = JSON.stringify(row)
+         FROM events ORDER BY seq`,
+      ).all() as Array<Record<string, unknown>>
+      assert.deepEqual(
+        rows.map(row => row.event_type),
+        ['interaction.recorded', 'appraisal.recorded'],
+      )
+      const stored = JSON.stringify(rows)
       assert.equal(stored.includes('这是一条虚构的 M3 测试消息'), false)
-      const evidenceRefs = JSON.parse(String(row?.evidence_refs_json)) as string[]
+      const evidenceRefs = JSON.parse(
+        String(rows[0]?.evidence_refs_json),
+      ) as string[]
       assert.deepEqual(
         evidenceRefs,
         view.messages.map(message => message.bodyId),
@@ -76,7 +84,7 @@ test('mock chat streams and survives a clean reopen', async () => {
       ['user', 'assistant'],
     )
     assert.equal(view.state.messageCount, 2)
-    assert.equal(view.state.lastSequence, 1)
+    assert.equal(view.state.lastSequence, 2)
   } finally {
     store.close()
   }
@@ -280,6 +288,7 @@ test('successful model usage is audited and survives reopen', async () => {
     assert.equal(done.modelCall.usage?.inputTokens, 42)
     assert.equal(done.modelCall.estimatedCost, 0.00000738)
     assert.equal(done.modelUsage.todayCallCount, 1)
+    assert.equal(done.envelope.ok, true)
 
     const call = store.latestModelCall()
     assert.equal(call?.status, 'succeeded')
@@ -358,7 +367,10 @@ class UsageChatModel implements ChatModel {
   async *stream(
     _request: ChatModelRequest,
   ): AsyncIterable<ChatModelStreamEvent> {
-    yield { type: 'text', text: '这是带用量的虚构回复。' }
+    yield {
+      type: 'text',
+      text: chatEnvelopeText('这是带用量的虚构回复。'),
+    }
     yield {
       type: 'result',
       result: {

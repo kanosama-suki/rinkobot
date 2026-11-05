@@ -17,6 +17,7 @@ import {
   type ChatStreamEvent,
 } from '../../src/core/chat/index.ts'
 import { createWorkspace } from '../helpers/storage-fixture.ts'
+import { chatEnvelopeText } from '../helpers/chat-envelope.ts'
 
 interface ScenarioCase {
   id: string
@@ -134,7 +135,7 @@ class ScriptedChatModel implements ChatModel {
   async *stream(
     _request: ChatModelRequest,
   ): AsyncIterable<ChatModelStreamEvent> {
-    yield { type: 'text', text: this.reply }
+    yield { type: 'text', text: chatEnvelopeText(this.reply) }
     yield {
       type: 'result',
       result: {

@@ -24,22 +24,6 @@ export class MockChatModel implements ChatModel {
   async *stream(
     request: ChatModelRequest,
   ): AsyncIterable<ChatModelStreamEvent> {
-    // 记忆抽取使用同一模型的第二个调用；mock 明确返回空列表，
-    // 让本地演示看到“成功的无候选”，而不是每轮都报 JSON 解析失败。
-    if (request.systemPrompt.includes('记忆抽取器')) {
-      yield { type: 'text', text: '{"memories":[]}' }
-      yield {
-        type: 'result',
-        result: {
-          attempts: 1,
-          usage: null,
-          estimatedCost: null,
-          pricing: null,
-          responseId: null,
-        },
-      }
-      return
-    }
     const latest = [...request.messages]
       .reverse()
       .find(message => message.role === 'user')
@@ -48,8 +32,19 @@ export class MockChatModel implements ChatModel {
     const reply =
       `[M3 mock] 我收到了：「${excerpt}」。` +
       '当前是本地占位回复，没有连接真实模型；它只用于验证聊天和持久化。'
+    const envelope = JSON.stringify({
+      schemaVersion: 1,
+      reply,
+      memoryCandidates: [],
+      appraisal: {
+        valence: 0.15,
+        arousal: 0.32,
+        confidence: 0.55,
+      },
+      commitments: [],
+    })
 
-    const characters = Array.from(reply)
+    const characters = Array.from(envelope)
     for (let offset = 0; offset < characters.length; offset += CHUNK_CHARS) {
       if (request.signal.aborted) {
         throw abortError()

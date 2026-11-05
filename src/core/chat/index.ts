@@ -7,6 +7,19 @@ export type { MagpieChatModelOptions } from './magpie-model.ts'
 export { MockChatModel, MOCK_MODEL_ID } from './mock-model.ts'
 export { KanobotChatService } from './service.ts'
 export type { ChatServiceOptions } from './service.ts'
+export {
+  CHAT_ENVELOPE_SCHEMA_VERSION,
+  ChatEnvelopeError,
+  MAX_ENVELOPE_COMMITMENTS,
+  MAX_ENVELOPE_MEMORY_CANDIDATES,
+  ReplyEnvelopeStream,
+  parseChatEnvelope,
+} from './envelope.ts'
+export type {
+  ChatEnvelopeAppraisal,
+  ChatEnvelopeCommitment,
+  ParsedChatEnvelope,
+} from './envelope.ts'
 export { checkReplyStyle } from './style.ts'
 export type {
   StyleCheckOptions,
@@ -32,6 +45,7 @@ export type {
   ChatStateView,
   ChatStreamEvent,
   ChatUsage,
+  ChatEnvelopeView,
   ConversationView,
   ModelCallView,
   ModelMessage,

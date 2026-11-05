@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>Kanobot · M3.4 聊天、记忆与控制</title>
+    <title>Kanobot · M3.5 聊天、记忆与状态</title>
     <link rel="stylesheet" href="/kanobot/app.css">
   </head>
   <body>
@@ -13,8 +13,8 @@
         <div class="brand-block">
           <span class="brand-mark" aria-hidden="true">K</span>
           <div>
-            <p class="eyebrow">Kanobot / M3.4</p>
-            <h1>聊天、记忆与控制</h1>
+            <p class="eyebrow">Kanobot / M3.5</p>
+            <h1>聊天、记忆与状态</h1>
           </div>
         </div>
         <div class="topbar-actions">
@@ -118,6 +118,18 @@
                   <dd id="status-messages">—</dd>
                 </div>
                 <div>
+                  <dt>心情</dt>
+                  <dd id="status-affect">—</dd>
+                </div>
+                <div>
+                  <dt>关系</dt>
+                  <dd id="status-relationship">—</dd>
+                </div>
+                <div>
+                  <dt>承诺</dt>
+                  <dd id="status-commitments">—</dd>
+                </div>
+                <div>
                   <dt>事件序号</dt>
                   <dd id="status-events">—</dd>
                 </div>
@@ -126,15 +138,15 @@
 
             <section class="panel-card subtle-card">
               <p class="eyebrow">当前边界</p>
-              <h2>M3.4 控制与检查</h2>
+              <h2>M3.5 对话与状态</h2>
               <ul class="boundary-list">
                 <li>复用 DSH 浏览器登录态</li>
-                <li>回复后执行确定性风格检查</li>
-                <li>检查结果单独持久化，不复制正文</li>
-                <li>所有者记忆操作写入审计表</li>
-                <li>紧急停止同时落数据库和 STOP 文件</li>
-                <li>停止后仍可回复你主动发来的消息</li>
-                <li>仍是占位人格；主动消息尚未接入</li>
+                <li>单次模型调用返回一个 JSON 信封</li>
+                <li>正文仍然逐字流式显示</li>
+                <li>记忆候选复用引用、敏感和去重门禁</li>
+                <li>心情与承诺写入版本化状态事件</li>
+                <li>字段损坏时保留正文并反馈降级原因</li>
+                <li>仍是占位人格；视觉与主动消息尚未接入</li>
               </ul>
             </section>
 

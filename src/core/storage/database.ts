@@ -298,8 +298,9 @@ INSERT INTO memory_search(memory_search, rank) VALUES('secure-delete', 1);
 `
 
 /**
- * 记忆抽取是独立的上游调用，必须有自己的费用和状态审计行。
- * 旧行一律视为聊天调用，保持 v4 数据可解释。
+ * M3.3 曾用 memory_extraction 记录独立抽取调用；M3.5 已把它合并到
+ * 单次 chat 调用。保留枚举是为了解释旧数据，新的聊天流程不得再写这个
+ * purpose。旧行一律视为聊天调用，保持 v4 数据可解释。
  */
 const MODEL_CALL_PURPOSE_SCHEMA_V5 = `
 ALTER TABLE model_calls
