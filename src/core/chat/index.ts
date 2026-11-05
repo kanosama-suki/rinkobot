@@ -7,6 +7,8 @@ export type { MagpieChatModelOptions } from './magpie-model.ts'
 export { MockChatModel, MOCK_MODEL_ID } from './mock-model.ts'
 export { KanobotChatService } from './service.ts'
 export type { ChatServiceOptions } from './service.ts'
+export { EMPTY_IMAGE_MESSAGE_TEXT, parseChatTurnInput } from './input.ts'
+export type { ChatTurn, ChatTurnLimits } from './input.ts'
 export {
   assembleChatContext,
   ChatContextError,
@@ -57,6 +59,7 @@ export type {
   ChatStateView,
   ChatStreamEvent,
   ChatUsage,
+  ChatVisionView,
   ChatEnvelopeView,
   ConversationView,
   ModelCallView,

@@ -662,6 +662,12 @@ export class KanobotStorage {
         'a memory extraction call does not produce an assistant message',
       )
     }
+    if (current.purpose === 'vision' && assistantMessageId !== null) {
+      throw new StorageError(
+        'RECORD_INVALID',
+        'a vision call does not produce an assistant message',
+      )
+    }
     if (assistantMessageId !== null) {
       this.assertMessageRole(
         assistantMessageId,
@@ -2236,6 +2242,12 @@ function modelCallFromRow(row: Record<string, unknown>): ModelCallRecord {
       ':model_calls:',
     )
   }
+  if (purpose === 'vision' && row.assistant_message_id !== null) {
+    throw new StorageIntegrityError(
+      'a vision call must not reference an assistant message',
+      ':model_calls:',
+    )
+  }
 
   let pricing: ModelPricingRecord | null = null
   if (row.pricing_json !== null) {
@@ -2520,8 +2532,11 @@ function validateModelLabel(value: unknown, field: string): string {
 }
 
 function validateModelCallPurpose(value: unknown): ModelCallPurpose {
-  if (value !== 'chat' && value !== 'memory_extraction') {
-    invalid('modelCall.purpose', 'expected "chat" or "memory_extraction"')
+  if (value !== 'chat' && value !== 'memory_extraction' && value !== 'vision') {
+    invalid(
+      'modelCall.purpose',
+      'expected "chat", "memory_extraction" or "vision"',
+    )
   }
   return value
 }

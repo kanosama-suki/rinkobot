@@ -179,6 +179,7 @@ test('an M2 schema migrates in place and preserves existing records', () => {
     db.exec('DROP TABLE model_calls')
     db.exec('DROP TABLE messages')
     db.exec('DROP TABLE conversations')
+    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(7)
     db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(6)
     db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(5)
     db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(4)
@@ -209,7 +210,7 @@ test('an M2 schema migrates in place and preserves existing records', () => {
       ).all() as Array<Record<string, unknown>>
       assert.deepEqual(
         versions.map(row => Number(row.version)),
-        [1, 2, 3, 4, 5, 6],
+        [1, 2, 3, 4, 5, 6, 7],
       )
       const modelCalls = check.prepare(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'model_calls'",
@@ -243,6 +244,7 @@ test('an M3.0 schema v2 migrates to the current schema without losing chat recor
     db.exec('DROP TABLE emergency_state')
     db.exec('DROP TABLE memory_search')
     db.exec('DROP TABLE model_calls')
+    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(7)
     db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(6)
     db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(5)
     db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(4)
@@ -265,7 +267,7 @@ test('an M3.0 schema v2 migrates to the current schema without losing chat recor
       ).all() as Array<Record<string, unknown>>
       assert.deepEqual(
         versions.map(row => Number(row.version)),
-        [2, 3, 4, 5, 6],
+        [2, 3, 4, 5, 6, 7],
       )
     } finally {
       check.close()

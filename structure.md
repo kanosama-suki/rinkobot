@@ -1,6 +1,6 @@
 # 项目文件结构
 
-以下路径相对于项目根目录 `a/`。当前仓库处于 M3.6 上下文预算与时间感知完成、完整 M3 进行中的状态：已有 DSH Host 插件、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、复用 DSH 登录态的网页聊天和 SSE、连接本地 Magpie 的精确模型网关和调用审计、长期记忆候选规则、纠正和 FTS5 双列中文检索、聊天前记忆召回注入、单次聊天调用返回的 JSON 信封、正文流式显示、记忆/appraisal/commitments 写入、所有者记忆面板、确定性回复风格检查、所有者操作审计、紧急停止、角色/记忆/历史分块字符预算、当前时间/星期/沉默时长和定性状态描述；可配置视觉模型、不经过 DSH 的本地开发入口、真实模型场景比较和主动消息仍不存在。本文中的“目标结构”是后续实现的约束，不是已经存在的目录。
+以下路径相对于项目根目录 `a/`。当前仓库处于 M3.7 可配置视觉输入完成、完整 M3 进行中的状态：已有 DSH Host 插件、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、复用 DSH 登录态的网页聊天和 SSE、连接本地 Magpie 的精确模型网关和调用审计、长期记忆候选规则、纠正和 FTS5 双列中文检索、聊天前记忆召回注入、单次聊天调用返回的 JSON 信封、正文流式显示、记忆/appraisal/commitments 写入、所有者记忆面板、确定性回复风格检查、所有者操作审计、紧急停止、角色/记忆/历史分块字符预算、当前时间/星期/沉默时长、定性状态描述，以及独立可配置的视觉模型和单图转述闭环；不经过 DSH 的本地开发入口、统一审计视图、真实模型场景比较和主动消息仍不存在。本文中的“目标结构”是后续实现的约束，不是已经存在的目录。
 
 ## 1. 当前结构
 
@@ -40,9 +40,10 @@ kanobot/a/
 │   │   ├── chat/
 │   │   │   ├── index.ts              聊天领域公开导出
 │   │   │   ├── types.ts              模型、SSE 事件和会话视图契约
+│   │   │   ├── input.ts              文本/单图输入边界和纯图片占位正文
 │   │   │   ├── envelope.ts           单次 JSON 信封解析和 reply 增量提取
 │   │   │   ├── context.ts            时间/状态/记忆/历史的分块预算和确定性裁剪
-│   │   │   ├── service.ts            校验、模型流、正文/记忆/appraisal/承诺写入
+│   │   │   ├── service.ts            校验、视觉/聊天模型流、正文/记忆/appraisal/承诺写入
 │   │   │   ├── style.ts              确定性回复风格检查和违规代码
 │   │   │   ├── mock-model.ts         不联网的明确占位模型
 │   │   │   └── magpie-model.ts       Magpie OpenAI-compatible 流式网关
@@ -64,27 +65,32 @@ kanobot/a/
 │   │   ├── policy/
 │   │   │   ├── index.ts              策略模块公开导出
 │   │   │   └── emergency.ts          紧急停止数据库状态和 STOP 文件
-│   │   └── storage/
-│   │       ├── database.ts           打开、完整性、迁移和表 schema
-│   │       ├── store.ts              事务、回放、独立墓碑级联、清除、回收站和恢复
-│   │       ├── snapshots.ts          快照构造、写入和严格读取
-│   │       ├── backup.ts             VACUUM INTO、quick_check、保留和恢复
-│   │       ├── paths.ts              数据目录内的安全路径解析
-│   │       ├── records.ts            正文/outbox 壳记录校验
-│   │       ├── memory-search.ts      中文分词、单字列和 FTS5 查询构造
-│   │       ├── errors.ts             带 code 和 path 的存储错误
-│   │       ├── types.ts              存储公开类型
-│   │       └── index.ts              存储模块公开导出
+│   │   ├── storage/
+│   │   │   ├── database.ts           打开、完整性、迁移和表 schema
+│   │   │   ├── store.ts              事务、回放、独立墓碑级联、清除、回收站和恢复
+│   │   │   ├── snapshots.ts          快照构造、写入和严格读取
+│   │   │   ├── backup.ts             VACUUM INTO、quick_check、保留和恢复
+│   │   │   ├── paths.ts              数据目录内的安全路径解析
+│   │   │   ├── records.ts            正文/outbox 壳记录校验
+│   │   │   ├── memory-search.ts      中文分词、单字列和 FTS5 查询构造
+│   │   │   ├── errors.ts             带 code 和 path 的存储错误
+│   │   │   ├── types.ts              存储公开类型
+│   │   │   └── index.ts              存储模块公开导出
+│   │   ├── vision/
+│   │   │   ├── index.ts              视觉领域公开导出
+│   │   │   ├── types.ts              视觉模型、输入和能力声明契约
+│   │   │   ├── input.ts              格式、大小、base64 和魔数校验
+│   │   │   └── magpie-vision.ts       Magpie 精确视觉模型转述驱动
 │   └── web/
 │       ├── index.ts                  Web 适配层公开导出
 │       ├── chat-http.ts              DSH 鉴权、聊天 API、SSE、记忆 API 和静态资源路由
 │       └── assets/
-│           ├── index.html            聊天页、状态/记忆双页签和记忆编辑对话框
-│           ├── app.js                SSE 消费、记忆 API、DOM 渲染和状态刷新
+│           ├── index.html            聊天页、状态/记忆双页签、记忆编辑和图片选择
+│           ├── app.js                SSE 消费、记忆 API、图片预览、DOM 渲染和状态刷新
 │           └── app.css               响应式浅色/深色样式
 ├── tests/
 │   ├── unit/                         配置、上下文组装和纯 reducer
-│   ├── integration/                  插件、聊天/SSE、上下文预算、对话信封、记忆面板、存储、清除、备份、强杀和 fail-closed
+│   ├── integration/                  插件、聊天/SSE、视觉、上下文预算、对话信封、记忆面板、存储、清除、备份、强杀和 fail-closed
 │   ├── scenarios/                    人格场景规格和脚本化管线验证
 │   ├── replay/                       同一事件流快照逐字节一致性
 │   ├── fixtures/                     崩溃写入子进程等测试夹具
@@ -101,6 +107,7 @@ kanobot/a/
     ├── m3.4-acceptance.md            M3.4 风格检查、所有者审计和紧急停止验收
     ├── m3.5-acceptance.md            M3.5 单次对话信封、状态与承诺闭环验收
     ├── m3.6-acceptance.md            M3.6 上下文预算、时间/状态注入和相对时间验收
+    ├── m3.7-acceptance.md            M3.7 独立视觉模型、单图输入和失败闭环验收
     ├── plugin-research.md            第三方插件源码调研与取舍
     ├── plugin-catalog.zh.md          第三方 DSH 插件汇总表（只读参考）
     ├── mods.md                       第三方插件与改动的记录模板
@@ -125,6 +132,7 @@ kanobot/a/
 - `docs/m3.4-acceptance.md` 记录 M3.4 的确定性风格检查、7 个场景规格、schema v6 所有者审计/紧急状态、控制页面和真实 4100 验收边界。
 - `docs/m3.5-acceptance.md` 记录 M3.5 的单次 JSON 信封、逐字正文、记忆/appraisal/commitments 写入、自动测试和真实 4100 验收边界。
 - `docs/m3.6-acceptance.md` 记录 M3.6 的上下文分块预算、时间/星期/沉默时长、定性状态、相对时间 `dueAt`、自动测试和真实 4100 验收边界。
+- `docs/m3.7-acceptance.md` 记录 M3.7 的独立视觉模型、图片输入校验、视觉调用审计、失败闭环、不落库保证、自动测试和真实 4100 验收边界。
 
 ## 2. 目标结构
 
@@ -179,7 +187,7 @@ F:\kanobot\dsh\                       本地 DSH 安装、测试脚本和证据�
 DSH 数据目录                          M2 之后：数据库、快照、日志和备份
 ```
 
-M2/M3.0/M3.1/M3.2/M3.3/M3.4/M3.5/M3.6 的实际数据布局：
+M2/M3.0/M3.1/M3.2/M3.3/M3.4/M3.5/M3.6/M3.7 的实际数据布局：
 
 ```text
 <dataDir>/
@@ -222,7 +230,7 @@ ui.toml
 
 `channels.toml` 是群列表、私聊白名单、@ 规则和投递策略的唯一配置来源。配置加载器统一做 schema 校验、默认值、跨文件引用检查和 fail-closed，不把参数散落到各模块。
 
-`system.toml` 的 `[context]` 保存单轮上下文的字符预算和分块上限；`[storage]` 只写相对数据目录的路径。主库、墓碑库和备份目录的实际绝对路径由 `dataDir` 解析并在存储层再次检查目录逃逸。
+`system.toml` 的 `[context]` 保存单轮上下文的字符预算和分块上限；`[vision]` 保存独立视觉模型的开关、精确模型名和请求上限。视觉模型默认关闭，开启后必须通过本机回环 Magpie `/v1` 启动检查。`[storage]` 只写相对数据目录的路径；主库、墓碑库和备份目录的实际绝对路径由 `dataDir` 解析并在存储层再次检查目录逃逸。
 
 ## 5. 暂时不拆的东西
 

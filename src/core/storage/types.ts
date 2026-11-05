@@ -60,8 +60,9 @@ export interface ChatMessageInput {
 }
 
 export type ModelCallStatus = 'running' | 'succeeded' | 'failed' | 'aborted'
-// memory_extraction 仅用于读取 M3.3 及更早的历史审计行。
-export type ModelCallPurpose = 'chat' | 'memory_extraction'
+// memory_extraction 仅用于读取 M3.3 及更早的历史审计行；
+// vision 是 M3.7 独立图片转述调用，不产生 assistant message。
+export type ModelCallPurpose = 'chat' | 'memory_extraction' | 'vision'
 
 export interface ModelUsageRecord {
   inputTokens: number

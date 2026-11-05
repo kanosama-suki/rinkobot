@@ -168,6 +168,10 @@ test('loads the checked-in example configuration', () => {
   assert.equal(config.system.storage.snapshotEveryEvents, 100)
   assert.equal(config.lifeState.limits.maxCommitments, 32)
   assert.equal(config.memory.trash.retentionDays, 30)
+  assert.equal(config.system.vision.enabled, false)
+  assert.equal(config.system.vision.provider, null)
+  assert.equal(config.system.vision.maxImageBytes, 5 * 1024 * 1024)
+  assert.equal(config.system.vision.maxDescriptionChars, 2_000)
 })
 
 test('maps snake_case TOML fields to typed runtime fields', () => {
@@ -586,6 +590,126 @@ test('rejects an invalid API key environment variable name', () => {
     expectIssue(
       () => loadConfigFromDirectory(dir),
       'model.api_key_env',
+      'system.toml',
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('maps a complete optional vision section and normalizes its base URL', () => {
+  const visionSection = `
+
+[vision]
+enabled = true
+provider = "magpie"
+name = "test/vision-model"
+base_url = "http://127.0.0.1:3425/v1/"
+api_key_env = "MAGPIE_API_KEY"
+timeout_ms = 90000
+max_retries = 1
+max_output_tokens = 2048
+max_image_bytes = 1048576
+max_description_chars = 1500
+`
+  const dir = writeConfigs({ system: `${validSystem}${visionSection}` })
+  try {
+    const config = loadConfigFromDirectory(dir)
+    assert.deepEqual(config.system.vision, {
+      enabled: true,
+      provider: 'magpie',
+      name: 'test/vision-model',
+      baseUrl: 'http://127.0.0.1:3425/v1',
+      apiKeyEnv: 'MAGPIE_API_KEY',
+      timeoutMs: 90_000,
+      maxRetries: 1,
+      maxOutputTokens: 2048,
+      maxImageBytes: 1_048_576,
+      maxDescriptionChars: 1_500,
+    })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rejects an unknown vision field', () => {
+  const dir = writeConfigs({
+    system: `${validSystem}
+
+[vision]
+enabled = false
+surprise = true
+`,
+  })
+  try {
+    expectIssue(
+      () => loadConfigFromDirectory(dir),
+      'vision.surprise',
+      'system.toml',
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rejects an out-of-range vision image limit', () => {
+  const dir = writeConfigs({
+    system: `${validSystem}
+
+[vision]
+enabled = false
+max_image_bytes = 0
+`,
+  })
+  try {
+    expectIssue(
+      () => loadConfigFromDirectory(dir),
+      'vision.max_image_bytes',
+      'system.toml',
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rejects a non-loopback vision base URL', () => {
+  const dir = writeConfigs({
+    system: `${validSystem}
+
+[vision]
+enabled = true
+provider = "magpie"
+name = "test/vision-model"
+base_url = "http://192.168.1.20:3425/v1"
+max_output_tokens = 2048
+`,
+  })
+  try {
+    expectIssue(
+      () => loadConfigFromDirectory(dir),
+      'vision.base_url',
+      'system.toml',
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('requires complete vision settings only when vision is enabled', () => {
+  const dir = writeConfigs({
+    system: `${validSystem}
+
+[vision]
+enabled = true
+provider = "magpie"
+name = "test/vision-model"
+max_output_tokens = 2048
+`,
+  })
+  try {
+    expectIssue(
+      () => loadConfigFromDirectory(dir),
+      'vision.base_url',
       'system.toml',
     )
   } finally {

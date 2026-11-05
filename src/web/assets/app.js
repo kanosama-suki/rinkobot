@@ -1,5 +1,5 @@
 /**
- * M3.5 聊天、记忆、状态、审计与紧急停止面板。
+ * M3.7 聊天、记忆、状态、视觉、审计与紧急停止面板。
  *
  * 所有来自服务器和模型的文本都通过 textContent 渲染；SSE 只接受本页面
  * 固定的聊天流格式。记忆操作必须经过 DSH 登录态，页面不保存任何凭据。
@@ -12,6 +12,14 @@ const elements = {
   form: document.querySelector('#composer'),
   input: document.querySelector('#message-input'),
   send: document.querySelector('#send-button'),
+  imageInput: document.querySelector('#image-input'),
+  imageButton: document.querySelector('#image-button'),
+  imageRemove: document.querySelector('#image-remove'),
+  imagePreview: document.querySelector('#image-preview'),
+  imagePreviewImg: document.querySelector('#image-preview-img'),
+  imagePreviewName: document.querySelector('#image-preview-name'),
+  visionStatus: document.querySelector('#vision-status'),
+  statusVision: document.querySelector('#status-vision'),
   modelBadge: document.querySelector('#model-badge'),
   controlBadge: document.querySelector('#control-badge'),
   statusModel: document.querySelector('#status-model'),
@@ -62,8 +70,13 @@ const elements = {
   auditError: document.querySelector('#audit-error'),
 }
 
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
+
 const state = {
   sending: false,
+  image: null,
+  maxImageBytes: MAX_IMAGE_BYTES,
   messageIds: new Set(),
   activeTab: 'status',
   memoryStatus: 'active',
@@ -112,6 +125,7 @@ function renderConversation(view) {
   elements.messages.replaceChildren()
   state.messageIds.clear()
   applyModel(view.model)
+  applyVision(view.vision)
   applyState(view.state)
   applyUsage(view.modelUsage)
   for (const message of view.messages) {
@@ -131,12 +145,34 @@ elements.input.addEventListener('keydown', event => {
   elements.form.requestSubmit()
 })
 
+elements.imageButton.addEventListener('click', () => {
+  if (state.image === null) elements.imageInput.click()
+})
+
+elements.imageInput.addEventListener('change', () => {
+  const file = elements.imageInput.files?.[0]
+  if (file === undefined) return
+  // 先复位选择器，校验失败或稍后重选同一文件时仍能触发 change。
+  elements.imageInput.value = ''
+  void setImageFile(file).catch(error => showNotice(errorMessage(error)))
+})
+
+elements.imageRemove.addEventListener('click', () => {
+  clearImage()
+  elements.input.focus({ preventScroll: true })
+})
+
 async function sendMessage() {
   if (state.sending) return
   const text = elements.input.value.trim()
-  if (text === '') {
+  const image = state.image
+  if (text === '' && image === null) {
     showNotice('消息不能为空。')
     return
+  }
+  const payload = { text }
+  if (image !== null) {
+    payload.images = [{ mimeType: image.mimeType, data: image.data }]
   }
 
   state.sending = true
@@ -152,7 +188,7 @@ async function sendMessage() {
         accept: 'text/event-stream',
         'content-type': 'application/json',
       },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify(payload),
     })
     if (!response.ok) {
       throw new Error(await responseMessage(response, '发送消息失败'))
@@ -160,8 +196,10 @@ async function sendMessage() {
     if (!response.body) throw new Error('浏览器没有收到可读取的聊天流。')
 
     elements.input.value = ''
+    clearImage()
     await consumeEvents(response.body, event => {
       if (event.type === 'ready') {
+        hideVisionStatus()
         applyModel(event.model)
         appendMessage(
           event.userMessage.role,
@@ -170,6 +208,10 @@ async function sendMessage() {
           event.userMessage.id,
         )
         assistant = appendPendingAssistant(event.recalledMemoryCount)
+      } else if (event.type === 'vision') {
+        showVisionStatus(
+          `正在读取图片（${event.model.provider} · ${event.model.id}）…`,
+        )
       } else if (event.type === 'delta') {
         if (assistant === null) throw new Error('聊天流顺序错误：缺少 ready 事件。')
         appendDelta(assistant, event.text)
@@ -198,6 +240,7 @@ async function sendMessage() {
       throw new Error('聊天流在完成前结束了。')
     }
   } catch (error) {
+    hideVisionStatus()
     if (assistant !== null) {
       assistant.classList.remove('pending')
       assistant.querySelector('.message-text').textContent ||= '回复中断。'
@@ -209,11 +252,63 @@ async function sendMessage() {
       // 初始错误已经展示，刷新失败不再覆盖它。
     }
   } finally {
+    hideVisionStatus()
     state.sending = false
     elements.send.disabled = false
     updateEmptyState()
     focusComposer()
   }
+}
+
+async function setImageFile(file) {
+  if (!IMAGE_TYPES.has(file.type)) {
+    showNotice('图片只支持 PNG、JPEG 或 WebP。')
+    return
+  }
+  if (file.size === 0 || file.size > state.maxImageBytes) {
+    showNotice(
+      `图片不能为空，且不能超过 ${formatBytes(state.maxImageBytes)}。`,
+    )
+    return
+  }
+  const dataUrl = await readFileAsDataUrl(file)
+  const comma = dataUrl.indexOf(',')
+  if (comma < 0 || !dataUrl.slice(0, comma).includes(';base64')) {
+    showNotice('浏览器没有生成可用的图片数据。')
+    return
+  }
+  state.image = {
+    mimeType: file.type,
+    data: dataUrl.slice(comma + 1),
+    dataUrl,
+    name: file.name || '图片',
+  }
+  elements.imagePreviewImg.src = dataUrl
+  elements.imagePreviewName.textContent = state.image.name
+  elements.imagePreview.hidden = false
+}
+
+function clearImage() {
+  state.image = null
+  elements.imagePreview.hidden = true
+  elements.imagePreviewImg.removeAttribute('src')
+  elements.imagePreviewName.textContent = ''
+  elements.imageInput.value = ''
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('读取图片失败。'))
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result)
+      } else {
+        reject(new Error('浏览器没有返回图片数据。'))
+      }
+    }
+    reader.readAsDataURL(file)
+  })
 }
 
 async function consumeEvents(stream, onEvent) {
@@ -402,13 +497,47 @@ function applyModel(model) {
   const isMock = model.mode === 'mock'
   elements.modelBadge.textContent = isMock
     ? 'mock · 未连接真实模型'
-    : `Magpie · ${model.id}`
+    : `${model.provider || '模型'} · ${model.id}`
   elements.statusModel.textContent = `${model.id} (${model.mode})`
   elements.statusProvider.textContent =
     typeof model.provider === 'string' ? model.provider : model.mode
   elements.emptyNote.textContent = isMock
     ? '这是占位人格和本地 mock 回复，不会调用真实模型。'
     : '这是占位人格；回复来自本地 Magpie 路由中的精确模型。'
+}
+
+function applyVision(value) {
+  if (!value || typeof value !== 'object') return
+  state.maxImageBytes =
+    Number.isSafeInteger(value.maxImageBytes) && value.maxImageBytes > 0
+      ? value.maxImageBytes
+      : MAX_IMAGE_BYTES
+  const enabled = value.enabled === true && value.model &&
+    typeof value.model.id === 'string'
+  if (!enabled) {
+    elements.statusVision.textContent = '未配置（只支持文字）'
+    elements.imageButton.hidden = true
+    clearImage()
+    return
+  }
+  elements.statusVision.textContent =
+    `${value.model.id} (${value.model.provider || value.model.mode})`
+  elements.imageButton.hidden = false
+}
+
+function formatBytes(value) {
+  if (value % (1024 * 1024) === 0) return `${value / (1024 * 1024)} MiB`
+  return `${Math.ceil(value / 1024)} KiB`
+}
+
+function showVisionStatus(message) {
+  elements.visionStatus.textContent = message
+  elements.visionStatus.hidden = false
+}
+
+function hideVisionStatus() {
+  elements.visionStatus.hidden = true
+  elements.visionStatus.textContent = ''
 }
 
 function applyState(value) {

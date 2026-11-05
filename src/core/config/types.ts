@@ -10,6 +10,19 @@ export const CONFIG_SCHEMA_VERSION = 1
 
 export type Environment = 'development' | 'production'
 
+export interface VisionConfig {
+  enabled: boolean
+  provider: string | null
+  name: string | null
+  baseUrl: string | null
+  apiKeyEnv: string | null
+  timeoutMs: number
+  maxRetries: number
+  maxOutputTokens: number | null
+  maxImageBytes: number
+  maxDescriptionChars: number
+}
+
 export interface SystemConfig {
   schemaVersion: 1
   environment: Environment
@@ -37,6 +50,11 @@ export interface SystemConfig {
     maxRetries: number
     maxOutputTokens: number | null
   }
+  /**
+   * 视觉模型完全独立于聊天模型。`enabled=false` 时只允许纯文字聊天；
+   * 一旦接入图片就必须调用这个模型，不静默退回主模型或丢弃图片。
+   */
+  vision: VisionConfig
   resources: {
     maxConcurrentModelCalls: number
     dailyModelCallLimit: number

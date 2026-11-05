@@ -30,7 +30,9 @@ import {
 
 export const CHAT_BASE_PATH = '/kanobot'
 
-const MAX_BODY_BYTES = 64 * 1024
+const MAX_JSON_BODY_BYTES = 64 * 1024
+// 单张图片上限 5 MiB；base64 和 JSON 包装会额外膨胀，留出 8 MiB 边界。
+const MAX_CHAT_BODY_BYTES = 8 * 1024 * 1024
 const MAX_LIMIT = 100
 
 const SECURITY_HEADERS = {
@@ -642,15 +644,25 @@ async function handleChatStream(
   options: ChatSurfaceOptions,
   activeStreams: Set<ServerResponse>,
 ): Promise<void> {
-  const body = await readJsonBody(req)
+  const body = await readJsonBody(req, MAX_CHAT_BODY_BYTES)
   if (
     typeof body !== 'object' ||
     body === null ||
-    Array.isArray(body) ||
-    Object.keys(body).length !== 1 ||
-    !Object.hasOwn(body, 'text')
+    Array.isArray(body)
   ) {
-    throw new RequestError(400, 'invalid_body', '请求体必须只包含 text 字段')
+    throw new RequestError(400, 'invalid_body', '请求体必须是 JSON 对象')
+  }
+  const keys = Object.keys(body)
+  if (
+    keys.length === 0 ||
+    keys.some(key => key !== 'text' && key !== 'images') ||
+    (!Object.hasOwn(body, 'text') && !Object.hasOwn(body, 'images'))
+  ) {
+    throw new RequestError(
+      400,
+      'invalid_body',
+      '请求体只能包含 text 和可选的 images 字段',
+    )
   }
 
   const controller = new AbortController()
@@ -662,7 +674,7 @@ async function handleChatStream(
 
   try {
     for await (const event of options.chat.streamMessage(
-      (body as { text: unknown }).text,
+      body,
       controller.signal,
     )) {
       if (res.writableEnded || controller.signal.aborted) break
@@ -794,7 +806,10 @@ function writeMethodNotAllowed(
   writeError(res, 405, 'method_not_allowed', '请求方法不被允许', api)
 }
 
-async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+async function readJsonBody(
+  req: IncomingMessage,
+  maxBytes = MAX_JSON_BODY_BYTES,
+): Promise<unknown> {
   const contentType = String(req.headers['content-type'] ?? '')
     .split(';', 1)[0]
     .trim()
@@ -803,7 +818,7 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
     throw new RequestError(415, 'unsupported_media_type', 'Content-Type 必须是 application/json')
   }
   const declaredLength = Number(req.headers['content-length'])
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     throw new RequestError(413, 'body_too_large', '请求体过大')
   }
 
@@ -812,7 +827,7 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   for await (const chunk of req) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     total += buffer.byteLength
-    if (total > MAX_BODY_BYTES) {
+    if (total > maxBytes) {
       throw new RequestError(413, 'body_too_large', '请求体过大')
     }
     chunks.push(buffer)

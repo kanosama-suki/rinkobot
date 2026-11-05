@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>Kanobot · M3.5 聊天、记忆与状态</title>
+    <title>Kanobot · M3.7 聊天、记忆与视觉</title>
     <link rel="stylesheet" href="/kanobot/app.css">
   </head>
   <body>
@@ -13,8 +13,8 @@
         <div class="brand-block">
           <span class="brand-mark" aria-hidden="true">K</span>
           <div>
-            <p class="eyebrow">Kanobot / M3.5</p>
-            <h1>聊天、记忆与状态</h1>
+            <p class="eyebrow">Kanobot / M3.7</p>
+            <h1>聊天、记忆与视觉</h1>
           </div>
         </div>
         <div class="topbar-actions">
@@ -27,25 +27,49 @@
       <main class="workspace">
         <section class="chat-panel" aria-label="聊天">
           <div id="notice" class="notice" role="alert" hidden></div>
+          <p id="vision-status" class="vision-status" role="status" hidden></p>
           <div id="empty-state" class="empty-state" hidden>
             <p>这里还没有消息。</p>
             <span id="empty-note">这是占位人格；发送消息后才会调用配置的模型路由。</span>
           </div>
           <div id="messages" class="messages" role="log" aria-live="polite"></div>
           <form id="composer" class="composer">
-            <label class="sr-only" for="message-input">输入消息</label>
-            <textarea
-              id="message-input"
-              name="message"
-              rows="2"
-              maxlength="4000"
-              placeholder="说点什么…… Enter 发送，Shift + Enter 换行"
-              autocomplete="off"
-            ></textarea>
-            <button id="send-button" type="submit">发送</button>
+            <div class="composer-entry">
+              <div id="image-preview" class="image-preview" hidden>
+                <img id="image-preview-img" alt="待发送的图片预览">
+                <div class="image-preview-meta">
+                  <span id="image-preview-name">图片</span>
+                  <button id="image-remove" class="image-remove" type="button">
+                    移除
+                  </button>
+                </div>
+              </div>
+              <label class="sr-only" for="message-input">输入消息</label>
+              <textarea
+                id="message-input"
+                name="message"
+                rows="2"
+                maxlength="4000"
+                placeholder="说点什么…… Enter 发送，Shift + Enter 换行"
+                autocomplete="off"
+              ></textarea>
+            </div>
+            <div class="composer-actions">
+              <input
+                id="image-input"
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                hidden
+              >
+              <button id="image-button" class="attach-button" type="button" hidden>
+                图片
+              </button>
+              <button id="send-button" type="submit">发送</button>
+            </div>
           </form>
           <p class="composer-hint">
             聊天会保存到测试数据库；相关长期记忆会作为只读参考进入模型上下文。
+            图片只在当轮交给独立视觉模型，不写入数据库。
           </p>
         </section>
 
@@ -88,6 +112,10 @@
                 <div>
                   <dt>模型</dt>
                   <dd id="status-model">—</dd>
+                </div>
+                <div>
+                  <dt>视觉模型</dt>
+                  <dd id="status-vision">—</dd>
                 </div>
                 <div>
                   <dt>路由</dt>
@@ -138,7 +166,7 @@
 
             <section class="panel-card subtle-card">
               <p class="eyebrow">当前边界</p>
-              <h2>M3.5 对话与状态</h2>
+              <h2>M3.7 对话、状态与视觉</h2>
               <ul class="boundary-list">
                 <li>复用 DSH 浏览器登录态</li>
                 <li>单次模型调用返回一个 JSON 信封</li>
@@ -146,7 +174,10 @@
                 <li>记忆候选复用引用、敏感和去重门禁</li>
                 <li>心情与承诺写入版本化状态事件</li>
                 <li>字段损坏时保留正文并反馈降级原因</li>
-                <li>仍是占位人格；视觉与主动消息尚未接入</li>
+                <li>图片由独立、可配置的视觉模型转述</li>
+                <li>图片字节不写入正文、事件或长期记忆</li>
+                <li>视觉模型不可用时带图消息明确失败</li>
+                <li>仍是占位人格；主动消息尚未接入</li>
               </ul>
             </section>
 

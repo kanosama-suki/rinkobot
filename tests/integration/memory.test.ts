@@ -228,6 +228,7 @@ test('active memory search survives restart and a v3 to v6 migration', () => {
     db.exec('DROP TABLE memory_search')
     db.exec('DROP INDEX model_calls_purpose_index')
     db.exec('ALTER TABLE model_calls DROP COLUMN purpose')
+    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(7)
     db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(6)
     db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(5)
     db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(4)
@@ -253,7 +254,7 @@ test('active memory search survives restart and a v3 to v6 migration', () => {
       ).all() as Array<Record<string, unknown>>
       assert.deepEqual(
         versions.map(row => Number(row.version)),
-        [3, 4, 5, 6],
+        [3, 4, 5, 6, 7],
       )
     } finally {
       check.close()

@@ -16,5 +16,6 @@ export type {
   MemoryConfig,
   PolicyConfig,
   SystemConfig,
+  VisionConfig,
 } from './types.ts'
 export { CONFIG_SCHEMA_VERSION } from './types.ts'

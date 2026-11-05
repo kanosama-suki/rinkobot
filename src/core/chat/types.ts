@@ -12,6 +12,7 @@ import type {
   ModelCallPurpose,
 } from '../storage/index.ts'
 import type { MemoryExtractionSummary } from '../memory/index.ts'
+import type { VisionModelIdentity } from '../vision/types.ts'
 import type { StyleCheckResult } from './style.ts'
 
 export const CHAT_CONVERSATION_ID = 'main'
@@ -76,6 +77,16 @@ export interface ChatModelIdentity {
   provider: string
 }
 
+/**
+ * 视觉能力只暴露可用性与模型身份；未配置时不显示任何伪装的成功状态。
+ */
+export interface ChatVisionView {
+  enabled: boolean
+  model: VisionModelIdentity | null
+  maxImages: number
+  maxImageBytes: number
+}
+
 export interface ChatStateView {
   lastSequence: number
   eventCount: number
@@ -98,6 +109,7 @@ export interface ChatStateView {
 export interface ConversationView {
   conversationId: string
   model: ChatModelIdentity
+  vision: ChatVisionView
   state: ChatStateView
   modelUsage: ChatModelUsageView
   messages: ChatMessageRecord[]
@@ -140,6 +152,12 @@ export type ChatStreamEvent =
       model: ChatModelIdentity
       userMessage: ChatMessageRecord
       recalledMemoryCount: number
+    }
+  | {
+      // 只在真的调用独立视觉模型时出现；提醒页面等待图片转述，而不是误以为聊天模型卡住。
+      type: 'vision'
+      phase: 'started'
+      model: VisionModelIdentity
     }
   | {
       type: 'delta'

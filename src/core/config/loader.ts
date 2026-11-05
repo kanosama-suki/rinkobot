@@ -21,6 +21,7 @@ import type {
   MemoryConfig,
   PolicyConfig,
   SystemConfig,
+  VisionConfig,
 } from './types.ts'
 import {
   asTable,
@@ -194,6 +195,7 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
       'time',
       'context',
       'model',
+      'vision',
       'resources',
       'storage',
     ],
@@ -323,6 +325,10 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
     }
   }
 
+  // 视觉段是可选的，保证已有纯文字配置无需迁移就能继续启动。
+  // 只有 enabled=true 时才要求完整模型信息；任何已填写的字段仍然严格校验。
+  const vision = validateVision(table)
+
   const resources = requiredTable(table, 'resources', 'resources')
   knownKeys(
     resources,
@@ -443,6 +449,7 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
       maxRetries,
       maxOutputTokens,
     },
+    vision,
     resources: {
       maxConcurrentModelCalls,
       dailyModelCallLimit,
@@ -473,6 +480,124 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
         30,
       ),
     },
+  }
+}
+
+function validateVision(table: TomlTable): VisionConfig {
+  const defaults: VisionConfig = {
+    enabled: false,
+    provider: null,
+    name: null,
+    baseUrl: null,
+    apiKeyEnv: null,
+    timeoutMs: 120_000,
+    maxRetries: 2,
+    maxOutputTokens: null,
+    maxImageBytes: 5 * 1024 * 1024,
+    maxDescriptionChars: 2_000,
+  }
+  if (!('vision' in table)) return defaults
+
+  const section = requiredTable(table, 'vision', 'vision')
+  knownKeys(
+    section,
+    [
+      'enabled',
+      'provider',
+      'name',
+      'base_url',
+      'api_key_env',
+      'timeout_ms',
+      'max_retries',
+      'max_output_tokens',
+      'max_image_bytes',
+      'max_description_chars',
+    ],
+    'vision',
+  )
+  const enabled = 'enabled' in section
+    ? requiredBoolean(section, 'enabled', 'vision.enabled')
+    : false
+  const provider = optionalString(section, 'provider', 'vision.provider', 1, 128)
+  if (provider !== null && provider !== 'magpie') {
+    fail('vision.provider', 'only the local "magpie" router is supported')
+  }
+  const name = optionalString(section, 'name', 'vision.name', 1, 128)
+  const rawBaseUrl = optionalString(section, 'base_url', 'vision.base_url', 1, 512)
+  const baseUrl = rawBaseUrl === null
+    ? null
+    : requireLoopbackBaseUrl(rawBaseUrl, 'vision.base_url')
+  const apiKeyEnv = optionalString(
+    section,
+    'api_key_env',
+    'vision.api_key_env',
+    1,
+    128,
+  )
+  if (apiKeyEnv !== null && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(apiKeyEnv)) {
+    fail('vision.api_key_env', 'expected an environment variable name')
+  }
+  const timeoutMs = optionalInteger(
+    section,
+    'timeout_ms',
+    'vision.timeout_ms',
+    1_000,
+    600_000,
+  ) ?? defaults.timeoutMs
+  const maxRetries = optionalInteger(
+    section,
+    'max_retries',
+    'vision.max_retries',
+    0,
+    5,
+  ) ?? defaults.maxRetries
+  const maxOutputTokens = optionalInteger(
+    section,
+    'max_output_tokens',
+    'vision.max_output_tokens',
+    1,
+    65_536,
+  )
+  const maxImageBytes = optionalInteger(
+    section,
+    'max_image_bytes',
+    'vision.max_image_bytes',
+    1,
+    5 * 1024 * 1024,
+  ) ?? defaults.maxImageBytes
+  const maxDescriptionChars = optionalInteger(
+    section,
+    'max_description_chars',
+    'vision.max_description_chars',
+    200,
+    4_000,
+  ) ?? defaults.maxDescriptionChars
+
+  if (enabled) {
+    if (provider === null) {
+      fail('vision.provider', 'required when vision.enabled is true')
+    }
+    if (name === null) {
+      fail('vision.name', 'required when vision.enabled is true')
+    }
+    if (baseUrl === null) {
+      fail('vision.base_url', 'required when vision.enabled is true')
+    }
+    if (maxOutputTokens === null) {
+      fail('vision.max_output_tokens', 'required when vision.enabled is true')
+    }
+  }
+  return {
+    enabled,
+    provider,
+    name,
+    baseUrl,
+    apiKeyEnv,
+    timeoutMs,
+    maxRetries,
+    maxOutputTokens,
+    maxImageBytes,
+    maxDescriptionChars,
   }
 }
 

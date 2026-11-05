@@ -7,6 +7,8 @@
 
 import assert from 'node:assert/strict'
 import {
+  cpSync,
+  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -134,6 +136,47 @@ test('plugin configuration failures happen before a timer is registered', async 
   fake.dispose()
 })
 
+test('enabled vision rejects mock mode before opening storage or registering a timer', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kanobot-vision-mock-'))
+  const configDir = join(dir, 'config')
+  const dataDir = join(dir, 'data')
+  const baseline = timeoutCount()
+  const fake = createFakeContext()
+
+  try {
+    cpSync(examplesDir, configDir, { recursive: true })
+    const systemPath = join(configDir, 'system.toml')
+    const system = readFileSync(systemPath, 'utf8').replace(
+      'enabled = false',
+      [
+        'enabled = true',
+        'provider = "magpie"',
+        'name = "test/vision-model"',
+        'base_url = "http://127.0.0.1:3425/v1"',
+        'max_output_tokens = 2048',
+      ].join('\n'),
+    )
+    writeFileSync(systemPath, system, 'utf8')
+
+    await assert.rejects(
+      () =>
+        apply(fake.ctx, {
+          configDir,
+          dataDir,
+          heartbeatMs: 60_000,
+          modelMode: 'mock',
+        }),
+      /vision\.enabled requires modelMode "magpie"/,
+    )
+    assert.equal(timeoutCount(), baseline)
+    // 视觉模式校验先于存储初始化，失败时不应生成数据目录或数据库。
+    assert.equal(existsSync(dataDir), false)
+  } finally {
+    fake.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('an explicit startup report proves successful activation', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'kanobot-startup-report-'))
   const reportPath = join(dir, 'startup.json')
@@ -168,6 +211,9 @@ test('an explicit startup report proves successful activation', async () => {
     assert.equal(report.tombstones, join(dataDir, 'tombstones.sqlite'))
     assert.equal(report.chatPath, '/kanobot/')
     assert.equal(report.modelMode, 'mock')
+    assert.equal(report.visionEnabled, false)
+    assert.equal(report.visionProvider, null)
+    assert.equal(report.visionModel, null)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

@@ -17,6 +17,7 @@ import {
   MockChatModel,
   type ChatModel,
 } from '../core/chat/index.ts'
+import { MagpieVisionModel } from '../core/vision/index.ts'
 import {
   KanobotMemoryService,
 } from '../core/memory/index.ts'
@@ -82,6 +83,8 @@ export async function apply(
     // 真实模型模式必须在打开数据库和注册定时器之前完成精确模型检查。
     // 检查失败时拒绝激活，不自动降级到 mock 或另一个模型。
     const model = await createChatModel(loaded, modelMode)
+    // 视觉模型独立配置；未启用时保持为 null，带图请求会在落库前明确失败。
+    const visionModel = await createVisionModel(loaded, modelMode)
     // 数据库损坏、schema 不兼容或路径逃逸都会在这里阻止插件继续激活。
     storage = KanobotStorage.openFromConfig(loaded, dataDir, clock)
     // 备份失败也应阻止“看似启动成功”：日备份是 M2 的数据安全边界。
@@ -101,6 +104,13 @@ export async function apply(
       dailyModelCallLimit: loaded.system.resources.dailyModelCallLimit,
       memory,
       context: loaded.system.context,
+      vision: visionModel === null
+        ? undefined
+        : {
+            model: visionModel,
+            maxImageBytes: loaded.system.vision.maxImageBytes,
+            maxDescriptionChars: loaded.system.vision.maxDescriptionChars,
+          },
       timezone: loaded.system.time.timezone,
       clock,
     })
@@ -149,6 +159,9 @@ export async function apply(
         model: chat.identity().id,
         configuredProvider: loaded.system.model.provider,
         configuredModel: loaded.system.model.name,
+        visionEnabled: visionModel !== null,
+        visionProvider: visionModel?.provider ?? null,
+        visionModel: visionModel?.id ?? null,
         maxConcurrentModelCalls:
           loaded.system.resources.maxConcurrentModelCalls,
         dailyModelCallLimit: loaded.system.resources.dailyModelCallLimit,
@@ -169,6 +182,7 @@ export async function apply(
         `chat=${CHAT_BASE_PATH}/; modelMode=${modelMode}; ` +
         `provider=${chat.identity().provider}; ` +
         `model=${chat.identity().id}; identity=${loaded.identity.mode}; ` +
+        `vision=${visionModel === null ? 'disabled' : `${visionModel.provider}:${visionModel.id}`}; ` +
         `emergencyStopped=${emergencyStatus.stopped}`,
     )
 
@@ -222,19 +236,50 @@ async function createChatModel(
     maxOutputTokens: model.maxOutputTokens,
     timeoutMs: model.timeoutMs,
     maxRetries: model.maxRetries,
-    apiKey: resolveApiKey(model.apiKeyEnv),
+    apiKey: resolveApiKey(model.apiKeyEnv, 'model.api_key_env'),
   })
   await magpie.checkAvailable()
   return magpie
 }
 
-function resolveApiKey(apiKeyEnv: string | null): string | null {
+async function createVisionModel(
+  loaded: LoadedConfig,
+  modelMode: 'mock' | 'magpie',
+): Promise<MagpieVisionModel | null> {
+  const vision = loaded.system.vision
+  if (!vision.enabled) return null
+  if (modelMode !== 'magpie') {
+    // mock 模式承诺不调用真实模型；带图配置必须显式切到真实路由，
+    // 不能一边显示 mock 一边偷偷发起视觉请求。
+    throw new Error('vision.enabled requires modelMode "magpie"')
+  }
+  if (
+    vision.provider !== 'magpie' ||
+    vision.baseUrl === null ||
+    vision.name === null ||
+    vision.maxOutputTokens === null
+  ) {
+    throw new Error('vision configuration is incomplete')
+  }
+  const model = new MagpieVisionModel({
+    baseUrl: vision.baseUrl,
+    model: vision.name,
+    maxOutputTokens: vision.maxOutputTokens,
+    timeoutMs: vision.timeoutMs,
+    maxRetries: vision.maxRetries,
+    apiKey: resolveApiKey(vision.apiKeyEnv, 'vision.api_key_env'),
+  })
+  await model.checkAvailable()
+  return model
+}
+
+function resolveApiKey(apiKeyEnv: string | null, field: string): string | null {
   if (apiKeyEnv === null) return null
   const value = process.env[apiKeyEnv]
   if (value === undefined || value.trim() === '') {
     // 只报告变量名，不打印或回显变量值。
     throw new Error(
-      `model.api_key_env "${apiKeyEnv}" is configured but the environment variable is empty or missing`,
+      `${field} "${apiKeyEnv}" is configured but the environment variable is empty or missing`,
     )
   }
   return value

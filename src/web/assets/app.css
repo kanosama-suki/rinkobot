@@ -265,6 +265,12 @@ h2 {
   background: var(--surface-strong);
 }
 
+.composer-entry {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .composer textarea {
   width: 100%;
   min-height: 54px;
@@ -282,7 +288,13 @@ h2 {
   color: var(--muted);
 }
 
-.composer button {
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer-actions button {
   min-width: 80px;
   padding: 11px 17px;
   border: 0;
@@ -292,9 +304,79 @@ h2 {
   cursor: pointer;
 }
 
-.composer button:disabled {
+.composer-actions button:disabled {
   cursor: wait;
   opacity: 0.55;
+}
+
+.composer-actions .attach-button {
+  min-width: 70px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+.image-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 4px 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.image-preview[hidden] {
+  display: none;
+}
+
+.image-preview img {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+}
+
+.image-preview-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.image-preview-meta span {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-remove {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--danger);
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.74rem;
+}
+
+.vision-status {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--accent-strong) 8%, transparent);
+  font-size: 0.8rem;
+}
+
+.vision-status[hidden] {
+  display: none;
 }
 
 .composer-hint {
@@ -896,7 +978,11 @@ code {
     grid-template-columns: 1fr;
   }
 
-  .composer button {
+  .composer-actions {
+    width: 100%;
+  }
+
+  .composer-actions button {
     width: 100%;
   }
 

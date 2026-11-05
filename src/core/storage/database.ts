@@ -27,7 +27,7 @@ import {
   StorageIntegrityError,
 } from './errors.ts'
 
-export const STORAGE_SCHEMA_VERSION = 6
+export const STORAGE_SCHEMA_VERSION = 7
 export const TOMBSTONE_STORE_SCHEMA_VERSION = 1
 
 type DatabaseKind = 'main' | 'tombstones'
@@ -356,6 +356,59 @@ CREATE TABLE emergency_state (
 ) STRICT;
 `
 
+/**
+ * M3.7 增加独立视觉调用。SQLite 不能原地修改列上的 CHECK，因此重建
+ * model_calls，保留全部历史行和索引；视觉调用没有 assistant message。
+ */
+const MODEL_CALL_PURPOSE_SCHEMA_V7 = `
+CREATE TABLE model_calls_v7 (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  user_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  assistant_message_id TEXT REFERENCES messages(id) ON DELETE CASCADE,
+  purpose TEXT NOT NULL DEFAULT 'chat'
+    CHECK (purpose IN ('chat', 'memory_extraction', 'vision')),
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  completed_at TEXT,
+  local_day TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'aborted')),
+  attempts INTEGER NOT NULL CHECK (attempts >= 0),
+  input_tokens INTEGER CHECK (input_tokens IS NULL OR input_tokens >= 0),
+  output_tokens INTEGER CHECK (output_tokens IS NULL OR output_tokens >= 0),
+  cache_read_tokens INTEGER CHECK (cache_read_tokens IS NULL OR cache_read_tokens >= 0),
+  cache_write_tokens INTEGER CHECK (cache_write_tokens IS NULL OR cache_write_tokens >= 0),
+  reasoning_tokens INTEGER CHECK (reasoning_tokens IS NULL OR reasoning_tokens >= 0),
+  total_tokens INTEGER CHECK (total_tokens IS NULL OR total_tokens >= 0),
+  estimated_cost REAL CHECK (estimated_cost IS NULL OR estimated_cost >= 0),
+  pricing_json TEXT,
+  response_id TEXT,
+  error_code TEXT
+) STRICT;
+INSERT INTO model_calls_v7
+  (id, conversation_id, user_message_id, assistant_message_id, purpose,
+   provider, model, started_at, completed_at, local_day, status, attempts,
+   input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+   reasoning_tokens, total_tokens, estimated_cost, pricing_json, response_id,
+   error_code)
+SELECT
+  id, conversation_id, user_message_id, assistant_message_id, purpose,
+  provider, model, started_at, completed_at, local_day, status, attempts,
+  input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+  reasoning_tokens, total_tokens, estimated_cost, pricing_json, response_id,
+  error_code
+FROM model_calls;
+DROP TABLE model_calls;
+ALTER TABLE model_calls_v7 RENAME TO model_calls;
+CREATE INDEX model_calls_conversation_started_index
+  ON model_calls(conversation_id, started_at);
+CREATE INDEX model_calls_local_day_index ON model_calls(local_day);
+CREATE INDEX model_calls_user_message_index ON model_calls(user_message_id);
+CREATE INDEX model_calls_assistant_message_index ON model_calls(assistant_message_id);
+CREATE INDEX model_calls_purpose_index ON model_calls(purpose);
+`
+
 const TOMBSTONE_SCHEMA = `
 CREATE TABLE schema_migrations (
   version INTEGER PRIMARY KEY,
@@ -478,7 +531,7 @@ function initializeDatabase(
     kind === 'main' ? STORAGE_SCHEMA_VERSION : TOMBSTONE_STORE_SCHEMA_VERSION
   const schema =
     kind === 'main'
-      ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}\n${MODEL_CALLS_SCHEMA_V3}\n${MEMORY_SEARCH_SCHEMA_V4}\n${MODEL_CALL_PURPOSE_SCHEMA_V5}\n${CONTROL_SCHEMA_V6}`
+      ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}\n${MODEL_CALLS_SCHEMA_V3}\n${MEMORY_SEARCH_SCHEMA_V4}\n${MODEL_CALL_PURPOSE_SCHEMA_V5}\n${CONTROL_SCHEMA_V6}\n${MODEL_CALL_PURPOSE_SCHEMA_V7}`
       : TOMBSTONE_SCHEMA
   db.exec('BEGIN IMMEDIATE')
   try {
@@ -598,7 +651,7 @@ function assertSchemaCompatible(
   const versions = readSchemaVersions(db, path, kind)
   const latest = versions.at(-1)
   const supported =
-    kind === 'main' ? [1, 2, 3, 4, 5, 6] : [TOMBSTONE_STORE_SCHEMA_VERSION]
+    kind === 'main' ? [1, 2, 3, 4, 5, 6, 7] : [TOMBSTONE_STORE_SCHEMA_VERSION]
   if (
     latest === undefined ||
     !supported.includes(latest) ||
@@ -717,6 +770,19 @@ function migrateDatabaseIfNeeded(
       db.prepare(
         'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
       ).run(6, nowIso)
+    }
+    if (
+      latest === 1 ||
+      latest === 2 ||
+      latest === 3 ||
+      latest === 4 ||
+      latest === 5 ||
+      latest === 6
+    ) {
+      db.exec(MODEL_CALL_PURPOSE_SCHEMA_V7)
+      db.prepare(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+      ).run(7, nowIso)
     }
     db.exec(`PRAGMA user_version = ${STORAGE_SCHEMA_VERSION}`)
     db.exec('COMMIT')

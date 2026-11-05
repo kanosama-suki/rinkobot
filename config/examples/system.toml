@@ -34,6 +34,20 @@ timeout_ms = 120000
 max_retries = 2
 max_output_tokens = 4096
 
+[vision]
+# 视觉模型独立于聊天模型，默认关闭；开启后必须填写精确模型名。
+# 不支持任意远程 URL，只允许本机 Magpie 的回环 /v1 端点。
+enabled = false
+# provider = "magpie"
+# name = "<exact vision model id>"
+# base_url = "http://127.0.0.1:3425/v1"
+# api_key_env = "MAGPIE_API_KEY"
+# timeout_ms = 120000
+# max_retries = 2
+# max_output_tokens = 2048
+# max_image_bytes = 5242880
+# max_description_chars = 2000
+
 [resources]
 # 并发和每日调用额度用于成本与资源熔断。
 max_concurrent_model_calls = 2
