@@ -134,10 +134,55 @@ export interface MemoryConfig {
   }
 }
 
+export interface InitiativeConfig {
+  schemaVersion: 1
+  schedule: {
+    tickSeconds: number
+    dailyPlanAt: string
+    dailyReviewAt: string
+  }
+  proactive: {
+    enabled: boolean
+    minIntervalMinutes: number
+    maxIntervalMinutes: number
+    chatCooldownMinutes: number
+    circuitWindowMinutes: number
+    circuitMaxMessages: number
+    morningGreeting: boolean
+    longSilenceHours: number
+    unansweredSlowdownMultiplier: number
+    followUpsEnabled: boolean
+    followUpWindowHours: number
+    followUpMaxDaysAhead: number
+  }
+  reminders: {
+    enabled: boolean
+    maxDaysAhead: number
+  }
+  outbox: {
+    maxAttempts: number
+    retryBackoffMinutes: number
+    expireAfterMinutes: number
+  }
+  life: {
+    enabled: boolean
+    maxPlanItems: number
+    dayStartAt: string
+    dayEndAt: string
+    itemGapMinutes: number
+  }
+  review: {
+    enabled: boolean
+    maxMessages: number
+    maxAttemptsPerDay: number
+  }
+}
+
 export interface LoadedConfig {
   system: SystemConfig
   identity: IdentityConfig
   lifeState: LifeStateConfig
   memory: MemoryConfig
+  initiative: InitiativeConfig
   policy: PolicyConfig
 }

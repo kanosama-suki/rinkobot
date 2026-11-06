@@ -426,7 +426,7 @@ h2 {
 
 .panel-tabs {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 6px;
   padding: 5px;
   border: 1px solid var(--line);
@@ -483,6 +483,100 @@ h2 {
 .audit-panel {
   flex: 1;
   overflow: hidden;
+}
+
+.initiative-panel {
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.initiative-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.initiative-note {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.73rem;
+  line-height: 1.55;
+}
+
+.initiative-status-list {
+  margin-top: 10px;
+}
+
+.initiative-warning {
+  margin-top: 12px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 38%, transparent);
+  border-radius: 13px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+}
+
+.initiative-warning p {
+  margin: 0 0 9px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.initiative-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 11px;
+}
+
+.initiative-item {
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+}
+
+.initiative-item.pending {
+  border-color: color-mix(in srgb, #b27b2e 42%, transparent);
+}
+
+.initiative-item-text {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.initiative-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.initiative-item-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.summary-item summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.summary-item p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .memory-card {
@@ -1035,6 +1129,10 @@ code {
 
   .field-row {
     grid-template-columns: 1fr;
+  }
+
+  .panel-tabs {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 

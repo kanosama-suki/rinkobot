@@ -14,7 +14,10 @@ import {
   StorageError,
   type ModelCallRecord,
 } from '../../src/core/storage/index.ts'
-import { createWorkspace } from '../helpers/storage-fixture.ts'
+import {
+  createWorkspace,
+  dropCurrentInitiativeTables,
+} from '../helpers/storage-fixture.ts'
 
 test('a v6 model_calls table migrates to v7 without losing history', () => {
   const ws = createWorkspace(test)
@@ -101,7 +104,7 @@ test('a v6 model_calls table migrates to v7 without losing history', () => {
       ).all() as Array<Record<string, unknown>>
       assert.deepEqual(
         versions.map(row => Number(row.version)),
-        [1, 2, 3, 4, 5, 6, 7, 8],
+        [1, 2, 3, 4, 5, 6, 7, 8, 9],
       )
       const ddl = db.prepare(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'model_calls'",
@@ -184,6 +187,7 @@ function downgradeToV6(databasePath: string): void {
       CREATE INDEX reply_style_checks_checked_at_index
         ON reply_style_checks(checked_at);
     `)
+    dropCurrentInitiativeTables(db)
     db.exec('DELETE FROM schema_migrations')
     const migration = db.prepare(
       'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',

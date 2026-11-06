@@ -11,6 +11,7 @@ export type {
   Environment,
   IdentityConfig,
   IdentityMode,
+  InitiativeConfig,
   LifeStateConfig,
   LoadedConfig,
   MemoryConfig,

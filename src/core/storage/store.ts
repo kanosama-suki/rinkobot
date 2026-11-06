@@ -76,12 +76,21 @@ import type {
   BackupRecord,
   BeginModelCallInput,
   BodyRecord,
+  CareItemRecord,
+  CareItemStatus,
   ChatMessageInput,
   ChatMessageRecord,
   ChatTurnAuditRecord,
+  ConfirmReminderCandidateResult,
   ConversationRecord,
+  DailyPlanRecord,
+  DailyPlanItemRecord,
+  DailySummaryRecord,
   EmergencyStateRecord,
+  EnqueueOutboxInput,
   FinishModelCallInput,
+  InitiativeRunRecord,
+  InitiativeStateRecord,
   MemoryListOptions,
   MemorySearchOptions,
   MemorySearchResult,
@@ -90,17 +99,31 @@ import type {
   ModelPricingRecord,
   ModelUsageRecord,
   OutboxRecord,
+  OutboxDeliveryResult,
+  OutboxKind,
+  OutboxStatus,
   OwnerAuditAction,
   OwnerAuditRecord,
   OwnerAuditTargetType,
   PurgeResult,
   PurgeTarget,
+  PutCareItemInput,
+  PutDailyPlanInput,
+  PutDailySummaryInput,
   PutReplyStyleCheckInput,
+  PutReminderCandidateInput,
+  PutReminderInput,
   RecordOwnerAuditInput,
+  RecordInitiativeRunInput,
+  ReminderCandidateRecord,
+  ReminderCandidateStatus,
+  ReminderRecord,
+  ReminderStatus,
   ReplyStyleCheckRecord,
   SetEmergencyStateInput,
   SnapshotResult,
   StorageOptions,
+  UpdateInitiativeStateInput,
 } from './types.ts'
 
 interface TombstoneEnforcement {
@@ -133,6 +156,13 @@ const OWNER_AUDIT_ACTIONS: readonly OwnerAuditAction[] = [
 const OWNER_AUDIT_TARGET_TYPES: readonly OwnerAuditTargetType[] = [
   'memory',
   'system',
+]
+
+const OUTBOX_KINDS: readonly OutboxKind[] = [
+  'proactive',
+  'reminder',
+  'system',
+  'legacy',
 ]
 
 export class KanobotStorage {
@@ -540,6 +570,67 @@ export class KanobotStorage {
     return row === undefined ? null : chatMessageFromRow(row)
   }
 
+  latestChatMessage(
+    conversationId = 'main',
+  ): ChatMessageRecord | null {
+    this.assertOpen()
+    const id = validateIdentifier(conversationId, 'message.conversationId')
+    const row = this.db.prepare(
+      `SELECT m.id, m.body_id, m.conversation_id, m.role,
+              b.content AS body_text, m.created_at
+       FROM messages m
+       JOIN bodies b ON b.id = m.body_id
+       WHERE m.conversation_id = ?
+       ORDER BY m.seq DESC
+       LIMIT 1`,
+    ).get(id) as Record<string, unknown> | undefined
+    return row === undefined ? null : chatMessageFromRow(row)
+  }
+
+  /**
+   * 返回本地日范围内的消息，按时间升序。用于每日整理；上限在 SQL 层
+   * 生效，避免一次把整段历史读入内存。
+   */
+  listChatMessagesBetween(
+    conversationId: string,
+    start: string,
+    end: string,
+    limit = 200,
+  ): ChatMessageRecord[] {
+    this.assertOpen()
+    const id = validateIdentifier(conversationId, 'message.conversationId')
+    const from = validateInstant(start, 'message.range.start')
+    const until = validateInstant(end, 'message.range.end')
+    if (Date.parse(until) <= Date.parse(from)) {
+      throw new StorageError(
+        'RECORD_INVALID',
+        'message range end must be later than start',
+      )
+    }
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
+      throw new StorageError(
+        'RECORD_INVALID',
+        'message range limit must be an integer between 1 and 1000',
+      )
+    }
+    const rows = this.db.prepare(
+      `SELECT id, body_id, conversation_id, role, body_text, created_at
+       FROM (
+         SELECT m.seq, m.id, m.body_id, m.conversation_id, m.role,
+                b.content AS body_text, m.created_at
+         FROM messages m
+         JOIN bodies b ON b.id = m.body_id
+         WHERE m.conversation_id = ?
+           AND m.created_at >= ?
+           AND m.created_at < ?
+         ORDER BY m.seq DESC
+         LIMIT ?
+       )
+       ORDER BY seq ASC`,
+    ).all(id, from, until, limit) as Array<Record<string, unknown>>
+    return rows.map(chatMessageFromRow)
+  }
+
   chatMessageCount(conversationId = 'main'): number {
     this.assertOpen()
     const id = validateIdentifier(conversationId, 'message.conversationId')
@@ -555,10 +646,13 @@ export class KanobotStorage {
       input.conversationId,
       'modelCall.conversationId',
     )
-    const userMessageId = validateIdentifier(
-      input.userMessageId,
-      'modelCall.userMessageId',
-    )
+    const userMessageId =
+      input.userMessageId === undefined || input.userMessageId === null
+        ? null
+        : validateIdentifier(
+            input.userMessageId,
+            'modelCall.userMessageId',
+          )
     const provider = validateModelLabel(input.provider, 'modelCall.provider')
     const model = validateModelLabel(input.model, 'modelCall.model')
     const purpose = validateModelCallPurpose(input.purpose ?? 'chat')
@@ -570,7 +664,26 @@ export class KanobotStorage {
       input.startedAt ?? this.nowIso(),
       'modelCall.startedAt',
     )
-    this.assertMessageRole(userMessageId, conversationId, 'user')
+    if (purpose === 'chat' && userMessageId === null) {
+      throw new StorageError(
+        'RECORD_INVALID',
+        'a chat model call requires a user message anchor',
+      )
+    }
+    if (
+      (purpose === 'initiative' || purpose === 'daily_review') &&
+      userMessageId !== null
+    ) {
+      throw new StorageError(
+        'RECORD_INVALID',
+        'an internal initiative call must not claim a user message anchor',
+      )
+    }
+    if (userMessageId !== null) {
+      this.assertMessageRole(userMessageId, conversationId, 'user')
+    } else {
+      this.ensureConversationRow(conversationId, startedAt)
+    }
     const localDay = localDateKey(
       new Date(startedAt),
       this.options.timezone,
@@ -667,6 +780,16 @@ export class KanobotStorage {
       throw new StorageError(
         'RECORD_INVALID',
         'a vision call does not produce an assistant message',
+      )
+    }
+    if (
+      (current.purpose === 'initiative' ||
+        current.purpose === 'daily_review') &&
+      assistantMessageId !== null
+    ) {
+      throw new StorageError(
+        'RECORD_INVALID',
+        'an internal initiative call does not produce an assistant message',
       )
     }
     if (assistantMessageId !== null) {
@@ -781,6 +904,14 @@ export class KanobotStorage {
     const row = this.db.prepare(
       'SELECT COUNT(*) AS count FROM model_calls WHERE local_day = ?',
     ).get(localDay) as Record<string, unknown> | undefined
+    return Number(row?.count ?? 0)
+  }
+
+  runningModelCallCount(): number {
+    this.assertOpen()
+    const row = this.db.prepare(
+      "SELECT COUNT(*) AS count FROM model_calls WHERE status = 'running'",
+    ).get() as Record<string, unknown> | undefined
     return Number(row?.count ?? 0)
   }
 
@@ -1400,17 +1531,23 @@ export class KanobotStorage {
     try {
       this.db.prepare(
         `INSERT INTO outbox
-          (id, target, payload_ref, status, due_at, created_at, attempts, last_error_code)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          (id, target, payload_ref, kind, status, due_at, created_at,
+           updated_at, attempts, max_attempts, last_error_code,
+           delivered_message_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         record.id,
         record.target,
         record.payloadRef,
+        record.kind,
         record.status,
         record.dueAt,
         record.createdAt,
+        record.updatedAt,
         record.attempts,
+        record.maxAttempts,
         record.lastErrorCode,
+        record.deliveredMessageId,
       )
     } catch (error) {
       throw mapInsertError(error, 'outbox', record.id)
@@ -1425,6 +1562,1224 @@ export class KanobotStorage {
       | Record<string, unknown>
       | undefined
     return row === undefined ? null : outboxFromRow(row)
+  }
+
+  getInitiativeState(): InitiativeStateRecord {
+    this.assertOpen()
+    const row = this.db.prepare(
+      'SELECT * FROM initiative_state WHERE id = 1',
+    ).get() as Record<string, unknown> | undefined
+    if (row === undefined) {
+      throw new StorageIntegrityError(
+        'initiative_state singleton row is missing',
+        ':initiative_state:',
+      )
+    }
+    return initiativeStateFromRow(row)
+  }
+
+  updateInitiativeState(
+    input: UpdateInitiativeStateInput,
+  ): InitiativeStateRecord {
+    this.assertOpen()
+    const current = this.getInitiativeState()
+    const updatedAt = validateInstant(
+      input.updatedAt ?? this.nowIso(),
+      'initiativeState.updatedAt',
+    )
+    const next: InitiativeStateRecord = {
+      lastTickAt: input.lastTickAt === undefined
+        ? current.lastTickAt
+        : nullableInstant(input.lastTickAt, 'initiativeState.lastTickAt'),
+      nextProactiveAt: input.nextProactiveAt === undefined
+        ? current.nextProactiveAt
+        : nullableInstant(
+            input.nextProactiveAt,
+            'initiativeState.nextProactiveAt',
+          ),
+      lastProactiveAt: input.lastProactiveAt === undefined
+        ? current.lastProactiveAt
+        : nullableInstant(
+            input.lastProactiveAt,
+            'initiativeState.lastProactiveAt',
+          ),
+      consecutiveUnanswered:
+        input.consecutiveUnanswered === undefined
+          ? current.consecutiveUnanswered
+          : validateNonNegativeInteger(
+              input.consecutiveUnanswered,
+              'initiativeState.consecutiveUnanswered',
+            ),
+      circuitOpenedAt: input.circuitOpenedAt === undefined
+        ? current.circuitOpenedAt
+        : nullableInstant(
+            input.circuitOpenedAt,
+            'initiativeState.circuitOpenedAt',
+          ),
+      lastDailyPlanDay: input.lastDailyPlanDay === undefined
+        ? current.lastDailyPlanDay
+        : nullableLocalDay(
+            input.lastDailyPlanDay,
+            'initiativeState.lastDailyPlanDay',
+          ),
+      lastDailyReviewDay: input.lastDailyReviewDay === undefined
+        ? current.lastDailyReviewDay
+        : nullableLocalDay(
+            input.lastDailyReviewDay,
+            'initiativeState.lastDailyReviewDay',
+          ),
+      lastReviewAttemptDay: input.lastReviewAttemptDay === undefined
+        ? current.lastReviewAttemptDay
+        : nullableLocalDay(
+            input.lastReviewAttemptDay,
+            'initiativeState.lastReviewAttemptDay',
+          ),
+      dailyReviewAttempts: input.dailyReviewAttempts === undefined
+        ? current.dailyReviewAttempts
+        : validateNonNegativeInteger(
+            input.dailyReviewAttempts,
+            'initiativeState.dailyReviewAttempts',
+          ),
+      lastTrashPurgeDay: input.lastTrashPurgeDay === undefined
+        ? current.lastTrashPurgeDay
+        : nullableLocalDay(
+            input.lastTrashPurgeDay,
+            'initiativeState.lastTrashPurgeDay',
+          ),
+      updatedAt,
+    }
+    this.db.prepare(
+      `UPDATE initiative_state SET
+         last_tick_at = ?, next_proactive_at = ?, last_proactive_at = ?,
+         consecutive_unanswered = ?, circuit_opened_at = ?,
+         last_daily_plan_day = ?, last_daily_review_day = ?,
+         last_review_attempt_day = ?, daily_review_attempts = ?,
+         last_trash_purge_day = ?, updated_at = ?
+       WHERE id = 1`,
+    ).run(
+      next.lastTickAt,
+      next.nextProactiveAt,
+      next.lastProactiveAt,
+      next.consecutiveUnanswered,
+      next.circuitOpenedAt,
+      next.lastDailyPlanDay,
+      next.lastDailyReviewDay,
+      next.lastReviewAttemptDay,
+      next.dailyReviewAttempts,
+      next.lastTrashPurgeDay,
+      next.updatedAt,
+    )
+    return this.getInitiativeState()
+  }
+
+  putDailyPlan(input: PutDailyPlanInput): DailyPlanRecord {
+    this.assertOpen()
+    const localDay = validateLocalDay(input.localDay, 'dailyPlan.localDay')
+    const createdAt = validateInstant(
+      input.createdAt ?? this.nowIso(),
+      'dailyPlan.createdAt',
+    )
+    if (!Array.isArray(input.items) || input.items.length < 1) {
+      invalid('dailyPlan.items', 'expected at least one plan item')
+    }
+    if (input.items.length > 12) {
+      invalid('dailyPlan.items', 'expected at most 12 plan items')
+    }
+    const positions = new Set<number>()
+    const prepared = input.items.map((item, index) => {
+      const id = validateIdentifier(item.id, `dailyPlan.items[${index}].id`)
+      validatePositiveInteger(
+        item.position,
+        `dailyPlan.items[${index}].position`,
+      )
+      if (positions.has(item.position)) {
+        invalid(
+          `dailyPlan.items[${index}].position`,
+          'duplicate plan position',
+        )
+      }
+      positions.add(item.position)
+      if (!/^[a-z][a-z0-9_.-]{0,63}$/.test(item.kind)) {
+        invalid(
+          `dailyPlan.items[${index}].kind`,
+          'expected a lowercase kind',
+        )
+      }
+      const startsAt = validateInstant(
+        item.startsAt,
+        `dailyPlan.items[${index}].startsAt`,
+      )
+      const endsAt = validateInstant(
+        item.endsAt,
+        `dailyPlan.items[${index}].endsAt`,
+      )
+      if (Date.parse(endsAt) <= Date.parse(startsAt)) {
+        invalid(
+          `dailyPlan.items[${index}].endsAt`,
+          'must be later than startsAt',
+        )
+      }
+      if (
+        localDateKey(new Date(startsAt), this.options.timezone) !== localDay ||
+        localDateKey(new Date(endsAt), this.options.timezone) !== localDay
+      ) {
+        invalid(
+          `dailyPlan.items[${index}].startsAt`,
+          'plan item must stay inside its local day',
+        )
+      }
+      return {
+        id,
+        position: item.position,
+        kind: item.kind,
+        title: normalizeChatText(
+          item.title,
+          `dailyPlan.items[${index}].title`,
+        ),
+        startsAt,
+        endsAt,
+      }
+    })
+
+    this.inTransaction(() => {
+      try {
+        for (const item of prepared) {
+          const bodyId = `body-plan-${randomUUID()}`
+          this.db.prepare(
+            'INSERT INTO bodies (id, kind, content, created_at) VALUES (?, ?, ?, ?)',
+          ).run(bodyId, 'daily_plan_item', item.title, createdAt)
+          this.db.prepare(
+            `INSERT INTO life_plan_items
+              (id, local_day, position, kind, title_ref, starts_at, ends_at,
+               status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'planned', ?)`,
+          ).run(
+            item.id,
+            localDay,
+            item.position,
+            item.kind,
+            bodyId,
+            item.startsAt,
+            item.endsAt,
+            createdAt,
+          )
+        }
+      } catch (error) {
+        throw mapInsertError(error, 'daily plan', localDay)
+      }
+    })
+    const plan = this.getDailyPlan(localDay)
+    if (plan === null) {
+      throw new StorageIntegrityError(
+        `daily plan "${localDay}" disappeared during creation`,
+        ':life_plan_items:',
+      )
+    }
+    return plan
+  }
+
+  getDailyPlan(localDay: string): DailyPlanRecord | null {
+    this.assertOpen()
+    const day = validateLocalDay(localDay, 'dailyPlan.localDay')
+    const rows = this.db.prepare(
+      `SELECT id, local_day, position, kind, title_ref, starts_at, ends_at,
+              status, created_at
+       FROM life_plan_items
+       WHERE local_day = ?
+       ORDER BY position`,
+    ).all(day) as Array<Record<string, unknown>>
+    if (rows.length === 0) return null
+    const items = rows.map(dailyPlanItemFromRow)
+    return {
+      localDay: day,
+      createdAt: items[0]?.createdAt ?? this.nowIso(),
+      items,
+    }
+  }
+
+  setDailyPlanItemStatus(
+    id: string,
+    status: 'planned' | 'active' | 'completed' | 'skipped',
+  ): DailyPlanItemRecord {
+    this.assertOpen()
+    const itemId = validateIdentifier(id, 'dailyPlanItem.id')
+    if (
+      status !== 'planned' &&
+      status !== 'active' &&
+      status !== 'completed' &&
+      status !== 'skipped'
+    ) {
+      invalid('dailyPlanItem.status', 'unsupported status')
+    }
+    const result = this.db.prepare(
+      'UPDATE life_plan_items SET status = ? WHERE id = ?',
+    ).run(status, itemId)
+    if (Number(result.changes) !== 1) {
+      throw new StorageError(
+        'REFERENCE_MISSING',
+        `daily plan item "${itemId}" does not exist`,
+      )
+    }
+    const row = this.db.prepare(
+      `SELECT id, local_day, position, kind, title_ref, starts_at, ends_at,
+              status, created_at
+       FROM life_plan_items WHERE id = ?`,
+    ).get(itemId) as Record<string, unknown> | undefined
+    if (row === undefined) {
+      throw new StorageIntegrityError(
+        `daily plan item "${itemId}" disappeared after update`,
+        ':life_plan_items:',
+      )
+    }
+    return dailyPlanItemFromRow(row)
+  }
+
+  putReminderCandidate(
+    input: PutReminderCandidateInput,
+  ): ReminderCandidateRecord {
+    this.assertOpen()
+    const text = normalizeChatText(input.text, 'reminderCandidate.text')
+    const dueAt = validateInstant(input.dueAt, 'reminderCandidate.dueAt')
+    const sourceMessageId = validateIdentifier(
+      input.sourceMessageId,
+      'reminderCandidate.sourceMessageId',
+    )
+    const source = this.getChatMessage(sourceMessageId)
+    if (source === null || source.role !== 'user') {
+      throw new StorageError(
+        'REFERENCE_MISSING',
+        'reminder candidate source must be an existing user message',
+      )
+    }
+    const createdAt = validateInstant(
+      input.createdAt ?? this.nowIso(),
+      'reminderCandidate.createdAt',
+    )
+    const id = validateIdentifier(
+      input.id ?? `reminder-candidate-${randomUUID()}`,
+      'reminderCandidate.id',
+    )
+    const bodyRef = `body-reminder-candidate-${randomUUID()}`
+
+    this.inTransaction(() => {
+      try {
+        this.db.prepare(
+          'INSERT INTO bodies (id, kind, content, created_at) VALUES (?, ?, ?, ?)',
+        ).run(bodyRef, 'reminder_candidate', text, createdAt)
+        this.db.prepare(
+          `INSERT INTO reminder_candidates
+            (id, body_ref, due_at, status, created_at, source_message_id,
+             confirmed_reminder_id)
+           VALUES (?, ?, ?, 'pending', ?, ?, NULL)`,
+        ).run(id, bodyRef, dueAt, createdAt, sourceMessageId)
+      } catch (error) {
+        throw mapInsertError(error, 'reminder candidate', id)
+      }
+    })
+    const created = this.getReminderCandidate(id)
+    if (created === null) {
+      throw new StorageIntegrityError(
+        `reminder candidate "${id}" disappeared during creation`,
+        ':reminder_candidates:',
+      )
+    }
+    return created
+  }
+
+  getReminderCandidate(id: string): ReminderCandidateRecord | null {
+    this.assertOpen()
+    const candidateId = validateIdentifier(id, 'reminderCandidate.id')
+    const row = this.db.prepare(
+      'SELECT * FROM reminder_candidates WHERE id = ?',
+    ).get(candidateId) as Record<string, unknown> | undefined
+    return row === undefined ? null : reminderCandidateFromRow(row)
+  }
+
+  listReminderCandidates(
+    status: ReminderCandidateStatus | 'all' = 'pending',
+    limit = 50,
+  ): ReminderCandidateRecord[] {
+    this.assertOpen()
+    assertAuditLimit(limit, 'reminder candidate')
+    if (
+      status !== 'pending' &&
+      status !== 'confirmed' &&
+      status !== 'rejected' &&
+      status !== 'all'
+    ) {
+      invalid('reminderCandidate.status', 'unsupported status')
+    }
+    const rows = status === 'all'
+      ? this.db.prepare(
+          `SELECT * FROM reminder_candidates
+           ORDER BY created_at DESC LIMIT ?`,
+        ).all(limit)
+      : this.db.prepare(
+          `SELECT * FROM reminder_candidates
+           WHERE status = ? ORDER BY created_at DESC LIMIT ?`,
+        ).all(status, limit)
+    return (rows as Array<Record<string, unknown>>).map(
+      reminderCandidateFromRow,
+    )
+  }
+
+  confirmReminderCandidate(
+    id: string,
+    at: string = this.nowIso(),
+  ): ConfirmReminderCandidateResult {
+    this.assertOpen()
+    const candidateId = validateIdentifier(id, 'reminderCandidate.id')
+    const confirmedAt = validateInstant(at, 'reminder.confirmedAt')
+    const reminderId = `reminder-${randomUUID()}`
+    this.inTransaction(() => {
+      const candidate = this.getReminderCandidate(candidateId)
+      if (candidate === null) {
+        throw new StorageError(
+          'REFERENCE_MISSING',
+          `reminder candidate "${candidateId}" does not exist`,
+        )
+      }
+      if (candidate.status !== 'pending') {
+        throw new StorageError(
+          'RECORD_INVALID',
+          `reminder candidate is already ${candidate.status}`,
+        )
+      }
+      this.db.prepare(
+        `INSERT INTO reminders
+          (id, body_ref, due_at, status, created_at, confirmed_at,
+           delivered_at, outbox_id)
+         VALUES (?, ?, ?, 'confirmed', ?, ?, NULL, NULL)`,
+      ).run(
+        reminderId,
+        candidate.bodyRef,
+        candidate.dueAt,
+        confirmedAt,
+        confirmedAt,
+      )
+      this.db.prepare(
+        `UPDATE reminder_candidates
+         SET status = 'confirmed', confirmed_reminder_id = ?
+         WHERE id = ? AND status = 'pending'`,
+      ).run(reminderId, candidateId)
+    })
+    const candidate = this.getReminderCandidate(candidateId)
+    const reminder = this.getReminder(reminderId)
+    if (
+      candidate === null ||
+      candidate.status !== 'confirmed' ||
+      reminder === null
+    ) {
+      throw new StorageIntegrityError(
+        'reminder candidate confirmation did not commit consistently',
+        ':reminder_candidates:',
+      )
+    }
+    return { candidate, reminder }
+  }
+
+  rejectReminderCandidate(id: string): ReminderCandidateRecord {
+    this.assertOpen()
+    const candidateId = validateIdentifier(id, 'reminderCandidate.id')
+    const result = this.db.prepare(
+      `UPDATE reminder_candidates SET status = 'rejected'
+       WHERE id = ? AND status = 'pending'`,
+    ).run(candidateId)
+    if (Number(result.changes) !== 1) {
+      throw new StorageError(
+        'RECORD_INVALID',
+        'reminder candidate is missing or is no longer pending',
+      )
+    }
+    const candidate = this.getReminderCandidate(candidateId)
+    if (candidate === null) {
+      throw new StorageIntegrityError(
+        `reminder candidate "${candidateId}" disappeared after rejection`,
+        ':reminder_candidates:',
+      )
+    }
+    return candidate
+  }
+
+  getReminder(id: string): ReminderRecord | null {
+    this.assertOpen()
+    const reminderId = validateIdentifier(id, 'reminder.id')
+    const row = this.db.prepare(
+      'SELECT * FROM reminders WHERE id = ?',
+    ).get(reminderId) as Record<string, unknown> | undefined
+    return row === undefined ? null : reminderFromRow(row)
+  }
+
+  listReminders(
+    status: ReminderStatus | 'all' = 'all',
+    limit = 50,
+  ): ReminderRecord[] {
+    this.assertOpen()
+    assertAuditLimit(limit, 'reminder')
+    if (
+      status !== 'confirmed' &&
+      status !== 'queued' &&
+      status !== 'delivered' &&
+      status !== 'cancelled' &&
+      status !== 'failed' &&
+      status !== 'all'
+    ) {
+      invalid('reminder.status', 'unsupported status')
+    }
+    const rows = status === 'all'
+      ? this.db.prepare(
+          `SELECT * FROM reminders
+           ORDER BY due_at DESC LIMIT ?`,
+        ).all(limit)
+      : this.db.prepare(
+          `SELECT * FROM reminders
+           WHERE status = ? ORDER BY due_at ASC LIMIT ?`,
+        ).all(status, limit)
+    return (rows as Array<Record<string, unknown>>).map(reminderFromRow)
+  }
+
+  listDueReminders(
+    now: string = this.nowIso(),
+    limit = 50,
+  ): ReminderRecord[] {
+    this.assertOpen()
+    const timestamp = validateInstant(now, 'reminder.now')
+    assertAuditLimit(limit, 'reminder')
+    const rows = this.db.prepare(
+      `SELECT * FROM reminders
+       WHERE status = 'confirmed' AND due_at <= ?
+       ORDER BY due_at ASC LIMIT ?`,
+    ).all(timestamp, limit) as Array<Record<string, unknown>>
+    return rows.map(reminderFromRow)
+  }
+
+  queueReminderOutbox(
+    id: string,
+    at: string = this.nowIso(),
+    maxAttempts = 5,
+  ): OutboxRecord {
+    this.assertOpen()
+    const reminderId = validateIdentifier(id, 'reminder.id')
+    const createdAt = validateInstant(at, 'reminder.queueAt')
+    validatePositiveInteger(maxAttempts, 'outbox.maxAttempts')
+    const outboxId = `outbox-reminder-${randomUUID()}`
+    this.inTransaction(() => {
+      const reminder = this.getReminder(reminderId)
+      if (reminder === null) {
+        throw new StorageError(
+          'REFERENCE_MISSING',
+          `reminder "${reminderId}" does not exist`,
+        )
+      }
+      if (reminder.status !== 'confirmed') {
+        throw new StorageError(
+          'RECORD_INVALID',
+          `reminder is already ${reminder.status}`,
+        )
+      }
+      this.db.prepare(
+        `INSERT INTO outbox
+          (id, target, payload_ref, kind, status, due_at, created_at,
+           updated_at, attempts, max_attempts, last_error_code,
+           delivered_message_id)
+         VALUES (?, 'web:owner', ?, 'reminder', 'pending', ?, ?, ?,
+                 0, ?, NULL, NULL)`,
+      ).run(
+        outboxId,
+        reminder.bodyRef,
+        createdAt,
+        createdAt,
+        createdAt,
+        maxAttempts,
+      )
+      this.db.prepare(
+        `UPDATE reminders
+         SET status = 'queued', outbox_id = ?
+         WHERE id = ? AND status = 'confirmed'`,
+      ).run(outboxId, reminderId)
+    })
+    const outbox = this.getOutbox(outboxId)
+    if (outbox === null) {
+      throw new StorageIntegrityError(
+        `reminder outbox "${outboxId}" disappeared during creation`,
+        ':outbox:',
+      )
+    }
+    return outbox
+  }
+
+  cancelReminder(id: string): ReminderRecord {
+    this.assertOpen()
+    const reminderId = validateIdentifier(id, 'reminder.id')
+    this.inTransaction(() => {
+      const reminder = this.getReminder(reminderId)
+      if (reminder === null) {
+        throw new StorageError(
+          'REFERENCE_MISSING',
+          `reminder "${reminderId}" does not exist`,
+        )
+      }
+      if (reminder.status === 'delivered' || reminder.status === 'cancelled') {
+        throw new StorageError(
+          'RECORD_INVALID',
+          `reminder is already ${reminder.status}`,
+        )
+      }
+      if (reminder.outboxId !== null) {
+        const outbox = this.getOutbox(reminder.outboxId)
+        if (outbox?.status === 'sending') {
+          throw new StorageError(
+            'RECORD_INVALID',
+            'reminder is currently being delivered',
+          )
+        }
+        this.db.prepare(
+          `UPDATE outbox SET status = 'cancelled', updated_at = ?
+           WHERE id = ? AND status IN ('pending', 'failed', 'unknown')`,
+        ).run(this.nowIso(), reminder.outboxId)
+      }
+      this.db.prepare(
+        `UPDATE reminders SET status = 'cancelled' WHERE id = ?`,
+      ).run(reminderId)
+    })
+    const cancelled = this.getReminder(reminderId)
+    if (cancelled === null) {
+      throw new StorageIntegrityError(
+        `reminder "${reminderId}" disappeared after cancellation`,
+        ':reminders:',
+      )
+    }
+    return cancelled
+  }
+
+  putCareItem(input: PutCareItemInput): CareItemRecord {
+    this.assertOpen()
+    const text = normalizeChatText(input.text, 'careItem.text')
+    const sourceMessageId = validateIdentifier(
+      input.sourceMessageId,
+      'careItem.sourceMessageId',
+    )
+    const source = this.getChatMessage(sourceMessageId)
+    if (source === null || source.role !== 'user') {
+      throw new StorageError(
+        'REFERENCE_MISSING',
+        'care item source must be an existing user message',
+      )
+    }
+    const dueFrom = validateInstant(input.dueFrom, 'careItem.dueFrom')
+    const dueUntil = validateInstant(input.dueUntil, 'careItem.dueUntil')
+    if (Date.parse(dueUntil) <= Date.parse(dueFrom)) {
+      invalid('careItem.dueUntil', 'must be later than dueFrom')
+    }
+    const createdAt = validateInstant(
+      input.createdAt ?? this.nowIso(),
+      'careItem.createdAt',
+    )
+    const id = validateIdentifier(
+      input.id ?? `care-${randomUUID()}`,
+      'careItem.id',
+    )
+    const bodyRef = `body-care-${randomUUID()}`
+    this.inTransaction(() => {
+      try {
+        this.db.prepare(
+          'INSERT INTO bodies (id, kind, content, created_at) VALUES (?, ?, ?, ?)',
+        ).run(bodyRef, 'care_item', text, createdAt)
+        this.db.prepare(
+          `INSERT INTO care_items
+            (id, source_message_id, body_ref, due_from, due_until, status,
+             created_at, delivered_at, outbox_id)
+           VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL, NULL)`,
+        ).run(id, sourceMessageId, bodyRef, dueFrom, dueUntil, createdAt)
+      } catch (error) {
+        throw mapInsertError(error, 'care item', id)
+      }
+    })
+    const created = this.getCareItem(id)
+    if (created === null) {
+      throw new StorageIntegrityError(
+        `care item "${id}" disappeared during creation`,
+        ':care_items:',
+      )
+    }
+    return created
+  }
+
+  getCareItem(id: string): CareItemRecord | null {
+    this.assertOpen()
+    const careId = validateIdentifier(id, 'careItem.id')
+    const row = this.db.prepare(
+      'SELECT * FROM care_items WHERE id = ?',
+    ).get(careId) as Record<string, unknown> | undefined
+    return row === undefined ? null : careItemFromRow(row)
+  }
+
+  listCareItems(
+    status: CareItemStatus | 'all' = 'all',
+    limit = 50,
+  ): CareItemRecord[] {
+    this.assertOpen()
+    assertAuditLimit(limit, 'care item')
+    if (
+      status !== 'pending' &&
+      status !== 'queued' &&
+      status !== 'delivered' &&
+      status !== 'dismissed' &&
+      status !== 'expired' &&
+      status !== 'all'
+    ) {
+      invalid('careItem.status', 'unsupported status')
+    }
+    const rows = status === 'all'
+      ? this.db.prepare(
+          `SELECT * FROM care_items
+           ORDER BY created_at DESC LIMIT ?`,
+        ).all(limit)
+      : this.db.prepare(
+          `SELECT * FROM care_items
+           WHERE status = ? ORDER BY due_from ASC LIMIT ?`,
+        ).all(status, limit)
+    return (rows as Array<Record<string, unknown>>).map(careItemFromRow)
+  }
+
+  listDueCareItems(
+    now: string = this.nowIso(),
+    limit = 50,
+  ): CareItemRecord[] {
+    this.assertOpen()
+    const timestamp = validateInstant(now, 'careItem.now')
+    assertAuditLimit(limit, 'care item')
+    const rows = this.db.prepare(
+      `SELECT * FROM care_items
+       WHERE status = 'pending' AND due_from <= ? AND due_until > ?
+       ORDER BY due_from ASC LIMIT ?`,
+    ).all(timestamp, timestamp, limit) as Array<Record<string, unknown>>
+    return rows.map(careItemFromRow)
+  }
+
+  expireCareItems(now: string = this.nowIso()): number {
+    this.assertOpen()
+    const timestamp = validateInstant(now, 'careItem.now')
+    const result = this.db.prepare(
+      `UPDATE care_items SET status = 'expired'
+       WHERE status = 'pending' AND due_until <= ?`,
+    ).run(timestamp)
+    return Number(result.changes)
+  }
+
+  putDailySummary(input: PutDailySummaryInput): DailySummaryRecord {
+    this.assertOpen()
+    const localDay = validateLocalDay(input.localDay, 'dailySummary.localDay')
+    const summary = normalizeChatText(input.summary, 'dailySummary.summary')
+    if (!Array.isArray(input.sourceMessageIds)) {
+      invalid('dailySummary.sourceMessageIds', 'expected an array')
+    }
+    const sourceIds = [...new Set(input.sourceMessageIds)]
+    if (sourceIds.length > 1_000) {
+      invalid(
+        'dailySummary.sourceMessageIds',
+        'expected at most 1000 source messages',
+      )
+    }
+    for (const sourceId of sourceIds) {
+      validateIdentifier(sourceId, 'dailySummary.sourceMessageIds')
+    }
+    const createdAt = validateInstant(
+      input.createdAt ?? this.nowIso(),
+      'dailySummary.createdAt',
+    )
+    const id = `daily-summary-${randomUUID()}`
+    const bodyRef = `body-daily-summary-${randomUUID()}`
+    this.inTransaction(() => {
+      try {
+        this.db.prepare(
+          'INSERT INTO bodies (id, kind, content, created_at) VALUES (?, ?, ?, ?)',
+        ).run(bodyRef, 'daily_summary', summary, createdAt)
+        this.db.prepare(
+          `INSERT INTO daily_summaries
+            (id, local_day, body_ref, source_refs_json, created_at)
+           VALUES (?, ?, ?, ?, ?)`,
+        ).run(
+          id,
+          localDay,
+          bodyRef,
+          canonicalJson(sourceIds),
+          createdAt,
+        )
+      } catch (error) {
+        throw mapInsertError(error, 'daily summary', localDay)
+      }
+    })
+    const created = this.getDailySummary(localDay)
+    if (created === null) {
+      throw new StorageIntegrityError(
+        `daily summary "${localDay}" disappeared during creation`,
+        ':daily_summaries:',
+      )
+    }
+    return created
+  }
+
+  getDailySummary(localDay: string): DailySummaryRecord | null {
+    this.assertOpen()
+    const day = validateLocalDay(localDay, 'dailySummary.localDay')
+    const row = this.db.prepare(
+      'SELECT * FROM daily_summaries WHERE local_day = ?',
+    ).get(day) as Record<string, unknown> | undefined
+    return row === undefined ? null : dailySummaryFromRow(row)
+  }
+
+  listDailySummaries(limit = 30): DailySummaryRecord[] {
+    this.assertOpen()
+    assertAuditLimit(limit, 'daily summary')
+    const rows = this.db.prepare(
+      `SELECT * FROM daily_summaries
+       ORDER BY local_day DESC LIMIT ?`,
+    ).all(limit) as Array<Record<string, unknown>>
+    return rows.map(dailySummaryFromRow)
+  }
+
+  recordInitiativeRun(
+    input: RecordInitiativeRunInput,
+  ): InitiativeRunRecord {
+    this.assertOpen()
+    const kind = input.kind
+    if (
+      kind !== 'tick' &&
+      kind !== 'daily_plan' &&
+      kind !== 'daily_review' &&
+      kind !== 'proactive' &&
+      kind !== 'reminder' &&
+      kind !== 'outbox' &&
+      kind !== 'circuit'
+    ) {
+      invalid('initiativeRun.kind', 'unsupported kind')
+    }
+    const outcome = input.outcome
+    if (
+      outcome !== 'allowed' &&
+      outcome !== 'sent' &&
+      outcome !== 'skipped' &&
+      outcome !== 'failed'
+    ) {
+      invalid('initiativeRun.outcome', 'unsupported outcome')
+    }
+    const occurredAt = validateInstant(
+      input.occurredAt ?? this.nowIso(),
+      'initiativeRun.occurredAt',
+    )
+    const detailCode = validateReasonCode(
+      input.detailCode,
+      'initiativeRun.detailCode',
+    )
+    const targetId = input.targetId === undefined || input.targetId === null
+      ? null
+      : validateIdentifier(input.targetId, 'initiativeRun.targetId')
+    const id = validateIdentifier(
+      input.id ?? `initiative-run-${randomUUID()}`,
+      'initiativeRun.id',
+    )
+    try {
+      this.db.prepare(
+        `INSERT INTO initiative_runs
+          (id, occurred_at, kind, outcome, detail_code, target_id)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(id, occurredAt, kind, outcome, detailCode, targetId)
+    } catch (error) {
+      throw mapInsertError(error, 'initiative run', id)
+    }
+    const row = this.db.prepare(
+      'SELECT * FROM initiative_runs WHERE id = ?',
+    ).get(id) as Record<string, unknown> | undefined
+    if (row === undefined) {
+      throw new StorageIntegrityError(
+        `initiative run "${id}" disappeared during creation`,
+        ':initiative_runs:',
+      )
+    }
+    return initiativeRunFromRow(row)
+  }
+
+  listInitiativeRuns(limit = 50): InitiativeRunRecord[] {
+    this.assertOpen()
+    assertAuditLimit(limit, 'initiative run')
+    const rows = this.db.prepare(
+      `SELECT * FROM initiative_runs
+       ORDER BY occurred_at DESC LIMIT ?`,
+    ).all(limit) as Array<Record<string, unknown>>
+    return rows.map(initiativeRunFromRow)
+  }
+
+  enqueueOutbox(input: EnqueueOutboxInput): OutboxRecord {
+    this.assertOpen()
+    const text = normalizeChatText(input.text, 'outbox.text')
+    if (!OUTBOX_KINDS.includes(input.kind)) {
+      invalid('outbox.kind', 'unsupported kind')
+    }
+    if (input.kind === 'legacy') {
+      invalid('outbox.kind', 'new outbox rows cannot use the legacy kind')
+    }
+    if (
+      input.target.length === 0 ||
+      input.target.length > 512 ||
+      input.target.includes('\0')
+    ) {
+      invalid('outbox.target', 'expected 1..512 characters without NUL')
+    }
+    validatePositiveInteger(input.maxAttempts, 'outbox.maxAttempts')
+    const createdAt = validateInstant(
+      input.createdAt ?? this.nowIso(),
+      'outbox.createdAt',
+    )
+    const dueAt = input.dueAt === undefined || input.dueAt === null
+      ? null
+      : validateInstant(input.dueAt, 'outbox.dueAt')
+    const id = validateIdentifier(
+      input.id ?? `outbox-${randomUUID()}`,
+      'outbox.id',
+    )
+    const careItemIds = [...new Set(input.careItemIds ?? [])]
+    for (const careItemId of careItemIds) {
+      validateIdentifier(careItemId, 'outbox.careItemIds')
+    }
+    const payloadRef = `body-outbox-${randomUUID()}`
+
+    this.inTransaction(() => {
+      try {
+        this.db.prepare(
+          'INSERT INTO bodies (id, kind, content, created_at) VALUES (?, ?, ?, ?)',
+        ).run(payloadRef, `outbox_${input.kind}`, text, createdAt)
+        this.db.prepare(
+          `INSERT INTO outbox
+            (id, target, payload_ref, kind, status, due_at, created_at,
+             updated_at, attempts, max_attempts, last_error_code,
+             delivered_message_id)
+           VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, 0, ?, NULL, NULL)`,
+        ).run(
+          id,
+          input.target,
+          payloadRef,
+          input.kind,
+          dueAt,
+          createdAt,
+          createdAt,
+          input.maxAttempts,
+        )
+        for (const careItemId of careItemIds) {
+          const result = this.db.prepare(
+            `UPDATE care_items SET status = 'queued', outbox_id = ?
+             WHERE id = ? AND status = 'pending'`,
+          ).run(id, careItemId)
+          if (Number(result.changes) !== 1) {
+            throw new StorageError(
+              'RECORD_INVALID',
+              `care item "${careItemId}" is missing or not pending`,
+            )
+          }
+        }
+      } catch (error) {
+        if (error instanceof StorageError) throw error
+        throw mapInsertError(error, 'outbox', id)
+      }
+    })
+    const outbox = this.getOutbox(id)
+    if (outbox === null) {
+      throw new StorageIntegrityError(
+        `outbox "${id}" disappeared during creation`,
+        ':outbox:',
+      )
+    }
+    return outbox
+  }
+
+  listDueOutbox(
+    now: string = this.nowIso(),
+    limit = 50,
+    kind?: OutboxKind,
+  ): OutboxRecord[] {
+    this.assertOpen()
+    const timestamp = validateInstant(now, 'outbox.now')
+    assertAuditLimit(limit, 'outbox')
+    if (kind !== undefined && !OUTBOX_KINDS.includes(kind)) {
+      invalid('outbox.kind', 'unsupported kind')
+    }
+    const rows = kind === undefined
+      ? this.db.prepare(
+          `SELECT * FROM outbox
+           WHERE status IN ('pending', 'failed')
+             AND attempts < max_attempts
+             AND (due_at IS NULL OR due_at <= ?)
+           ORDER BY created_at ASC LIMIT ?`,
+        ).all(timestamp, limit)
+      : this.db.prepare(
+          `SELECT * FROM outbox
+           WHERE status IN ('pending', 'failed')
+             AND kind = ?
+             AND attempts < max_attempts
+             AND (due_at IS NULL OR due_at <= ?)
+           ORDER BY created_at ASC LIMIT ?`,
+        ).all(kind, timestamp, limit)
+    return (rows as Array<Record<string, unknown>>).map(outboxFromRow)
+  }
+
+  claimOutbox(id: string, at: string = this.nowIso()): OutboxRecord {
+    this.assertOpen()
+    const outboxId = validateIdentifier(id, 'outbox.id')
+    const claimedAt = validateInstant(at, 'outbox.claimedAt')
+    const result = this.db.prepare(
+      `UPDATE outbox
+       SET status = 'sending', attempts = attempts + 1, updated_at = ?
+       WHERE id = ?
+         AND status IN ('pending', 'failed')
+         AND attempts < max_attempts
+         AND (due_at IS NULL OR due_at <= ?)`,
+    ).run(claimedAt, outboxId, claimedAt)
+    if (Number(result.changes) !== 1) {
+      throw new StorageError(
+        'RECORD_INVALID',
+        `outbox "${outboxId}" is not claimable`,
+      )
+    }
+    const claimed = this.getOutbox(outboxId)
+    if (claimed === null) {
+      throw new StorageIntegrityError(
+        `outbox "${outboxId}" disappeared after claim`,
+        ':outbox:',
+      )
+    }
+    return claimed
+  }
+
+  markOutboxFailure(
+    id: string,
+    errorCode: string,
+    at: string = this.nowIso(),
+    retryAt: string | null = null,
+  ): OutboxRecord {
+    this.assertOpen()
+    const outboxId = validateIdentifier(id, 'outbox.id')
+    const code = validateReasonCode(errorCode, 'outbox.errorCode')
+    const updatedAt = validateInstant(at, 'outbox.updatedAt')
+    const nextDueAt = retryAt === null
+      ? null
+      : validateInstant(retryAt, 'outbox.retryAt')
+    this.inTransaction(() => {
+      const result = this.db.prepare(
+        `UPDATE outbox
+         SET status = 'failed', last_error_code = ?, updated_at = ?, due_at = ?
+         WHERE id = ? AND status = 'sending'`,
+      ).run(code, updatedAt, nextDueAt, outboxId)
+      if (Number(result.changes) !== 1) {
+        throw new StorageError(
+          'RECORD_INVALID',
+          `outbox "${outboxId}" is not sending`,
+        )
+      }
+      const failed = this.requireOutbox(outboxId)
+      if (failed.attempts >= failed.maxAttempts) {
+        this.releaseUndeliveredDependents(failed, updatedAt)
+      }
+    })
+    return this.requireOutbox(outboxId)
+  }
+
+  markOutboxUnknown(
+    id: string,
+    errorCode: string,
+    at: string = this.nowIso(),
+  ): OutboxRecord {
+    this.assertOpen()
+    const outboxId = validateIdentifier(id, 'outbox.id')
+    const code = validateReasonCode(errorCode, 'outbox.errorCode')
+    const updatedAt = validateInstant(at, 'outbox.updatedAt')
+    const result = this.db.prepare(
+      `UPDATE outbox
+       SET status = 'unknown', last_error_code = ?, updated_at = ?
+       WHERE id = ? AND status = 'sending'`,
+    ).run(code, updatedAt, outboxId)
+    if (Number(result.changes) !== 1) {
+      throw new StorageError(
+        'RECORD_INVALID',
+        `outbox "${outboxId}" is not sending`,
+      )
+    }
+    return this.requireOutbox(outboxId)
+  }
+
+  recoverStaleOutbox(
+    staleBefore: string,
+    at: string = this.nowIso(),
+  ): number {
+    this.assertOpen()
+    const before = validateInstant(staleBefore, 'outbox.staleBefore')
+    const updatedAt = validateInstant(at, 'outbox.updatedAt')
+    const result = this.db.prepare(
+      `UPDATE outbox
+       SET status = 'failed', last_error_code = 'stale_sending',
+           updated_at = ?, due_at = ?
+       WHERE status = 'sending' AND updated_at < ?`,
+    ).run(updatedAt, updatedAt, before)
+    return Number(result.changes)
+  }
+
+  expireOutbox(
+    createdBefore: string,
+    at: string = this.nowIso(),
+  ): number {
+    this.assertOpen()
+    const cutoff = validateInstant(createdBefore, 'outbox.createdBefore')
+    const updatedAt = validateInstant(at, 'outbox.updatedAt')
+    let expired = 0
+    this.inTransaction(() => {
+      const rows = this.db.prepare(
+        `SELECT * FROM outbox
+         WHERE status IN ('pending', 'failed') AND created_at < ?`,
+      ).all(cutoff) as Array<Record<string, unknown>>
+      for (const row of rows) {
+        const record = outboxFromRow(row)
+        const result = this.db.prepare(
+          `UPDATE outbox SET status = 'expired', updated_at = ?
+           WHERE id = ? AND status IN ('pending', 'failed')`,
+        ).run(updatedAt, record.id)
+        if (Number(result.changes) !== 1) continue
+        expired += 1
+        this.releaseUndeliveredDependents(record, updatedAt)
+      }
+    })
+    return expired
+  }
+
+  expireOutboxRecord(
+    id: string,
+    at: string = this.nowIso(),
+  ): OutboxRecord {
+    this.assertOpen()
+    const outboxId = validateIdentifier(id, 'outbox.id')
+    const updatedAt = validateInstant(at, 'outbox.updatedAt')
+    this.inTransaction(() => {
+      const result = this.db.prepare(
+        `UPDATE outbox SET status = 'expired', updated_at = ?
+         WHERE id = ? AND status IN ('pending', 'failed')`,
+      ).run(updatedAt, outboxId)
+      if (Number(result.changes) !== 1) {
+        throw new StorageError(
+          'RECORD_INVALID',
+          `outbox "${outboxId}" is not pending or failed`,
+        )
+      }
+      this.releaseUndeliveredDependents(
+        this.requireOutbox(outboxId),
+        updatedAt,
+      )
+    })
+    return this.requireOutbox(outboxId)
+  }
+
+  deliverOutbox(
+    id: string,
+    at: string = this.nowIso(),
+  ): OutboxDeliveryResult {
+    this.assertOpen()
+    const outboxId = validateIdentifier(id, 'outbox.id')
+    const createdAt = validateInstant(at, 'outbox.deliveredAt')
+    const existing = this.getOutbox(outboxId)
+    if (existing === null) {
+      throw new StorageError(
+        'REFERENCE_MISSING',
+        `outbox "${outboxId}" does not exist`,
+      )
+    }
+    if (existing.status === 'delivered') {
+      if (existing.deliveredMessageId === null) {
+        throw new StorageIntegrityError(
+          'delivered outbox has no delivered message',
+          ':outbox:',
+        )
+      }
+      const message = this.getChatMessage(existing.deliveredMessageId)
+      if (message === null) {
+        throw new StorageIntegrityError(
+          'delivered outbox message is missing',
+          ':outbox:',
+        )
+      }
+      return { outbox: existing, message }
+    }
+    if (existing.status !== 'sending') {
+      throw new StorageError(
+        'RECORD_INVALID',
+        `outbox is ${existing.status}, not sending`,
+      )
+    }
+
+    const messageId = `message-${randomUUID()}`
+    let message: ChatMessageRecord | undefined
+    this.inTransaction(() => {
+      const current = this.getOutbox(outboxId)
+      if (current === null || current.status !== 'sending') {
+        throw new StorageError(
+          'RECORD_INVALID',
+          'outbox changed while it was being delivered',
+        )
+      }
+      this.ensureConversationRow('main', createdAt)
+      try {
+        this.db.prepare(
+          `INSERT INTO messages
+            (id, conversation_id, role, body_id, created_at)
+           VALUES (?, 'main', 'assistant', ?, ?)`,
+        ).run(messageId, current.payloadRef, createdAt)
+        this.db.prepare(
+          `UPDATE conversations
+           SET updated_at = CASE WHEN updated_at < ? THEN ? ELSE updated_at END
+           WHERE id = 'main'`,
+        ).run(createdAt, createdAt)
+        this.db.prepare(
+          `UPDATE outbox
+           SET status = 'delivered', delivered_message_id = ?, updated_at = ?
+           WHERE id = ? AND status = 'sending'`,
+        ).run(messageId, createdAt, outboxId)
+        this.db.prepare(
+          `UPDATE reminders
+           SET status = 'delivered', delivered_at = ?
+           WHERE outbox_id = ? AND status = 'queued'`,
+        ).run(createdAt, outboxId)
+        this.db.prepare(
+          `UPDATE care_items
+           SET status = 'delivered', delivered_at = ?
+           WHERE outbox_id = ? AND status = 'queued'`,
+        ).run(createdAt, outboxId)
+      } catch (error) {
+        throw mapInsertError(error, 'outbox delivery', outboxId)
+      }
+      message = this.getChatMessage(messageId) ?? undefined
+    })
+    if (message === undefined) {
+      throw new StorageIntegrityError(
+        `delivered message "${messageId}" disappeared`,
+        ':messages:',
+      )
+    }
+    return {
+      outbox: this.requireOutbox(outboxId),
+      message,
+    }
+  }
+
+  countDeliveredOutboxSince(
+    kind: OutboxKind,
+    since: string,
+  ): number {
+    this.assertOpen()
+    if (!OUTBOX_KINDS.includes(kind)) {
+      invalid('outbox.kind', 'unsupported kind')
+    }
+    const timestamp = validateInstant(since, 'outbox.since')
+    const row = this.db.prepare(
+      `SELECT COUNT(*) AS count FROM outbox
+       WHERE kind = ? AND status = 'delivered' AND updated_at >= ?`,
+    ).get(kind, timestamp) as Record<string, unknown> | undefined
+    return Number(row?.count ?? 0)
   }
 
   listTombstones(): Tombstone[] {
@@ -1734,10 +3089,39 @@ export class KanobotStorage {
     }
 
     const tombstones = this.readLedgerTombstones()
-    let deletedBodies = 0
+    const bodyIds = tombstones
+      .filter(tombstone => tombstone.targetType === 'body')
+      .map(tombstone => tombstone.targetId)
+    const memoryIds = tombstones
+      .filter(tombstone => tombstone.targetType === 'memory')
+      .map(tombstone => tombstone.targetId)
+    const outboxIds = tombstones
+      .filter(tombstone => tombstone.targetType === 'outbox')
+      .map(tombstone => tombstone.targetId)
+    // 计数必须在删除前算：v9 的 outbox.payload_ref 有级联外键，删除正文时
+    // outbox 行可能先被 SQLite 自动删掉，事后再数 changes 会得到 0。
+    const deletedBodies = countExistingRows(
+      this.db,
+      'bodies',
+      bodyIds,
+    )
     let deletedMessages = 0
-    let deletedMemories = 0
-    let deletedOutbox = 0
+    for (const bodyId of bodyIds) {
+      const row = this.db.prepare(
+        'SELECT COUNT(*) AS count FROM messages WHERE body_id = ?',
+      ).get(bodyId) as Record<string, unknown> | undefined
+      deletedMessages += Number(row?.count ?? 0)
+    }
+    const deletedMemories = countExistingRows(
+      this.db,
+      'memories',
+      memoryIds,
+    )
+    const deletedOutbox = countExistingRows(
+      this.db,
+      'outbox',
+      outboxIds,
+    )
     let deletedSnapshots = 0
 
     this.inTransaction(() => {
@@ -1749,25 +3133,12 @@ export class KanobotStorage {
       }
       for (const tombstone of tombstones) {
         if (tombstone.targetType === 'body') {
-          const messageRow = this.db.prepare(
-            'SELECT COUNT(*) AS count FROM messages WHERE body_id = ?',
-          ).get(tombstone.targetId) as Record<string, unknown> | undefined
-          deletedMessages += Number(messageRow?.count ?? 0)
-          deletedBodies += Number(
-            this.db.prepare('DELETE FROM bodies WHERE id = ?').run(tombstone.targetId)
-              .changes,
-          )
+          this.db.prepare('DELETE FROM bodies WHERE id = ?').run(tombstone.targetId)
         } else if (tombstone.targetType === 'memory') {
           this.deleteMemorySearchRow(tombstone.targetId)
-          deletedMemories += Number(
-            this.db.prepare('DELETE FROM memories WHERE id = ?').run(tombstone.targetId)
-              .changes,
-          )
+          this.db.prepare('DELETE FROM memories WHERE id = ?').run(tombstone.targetId)
         } else if (tombstone.targetType === 'outbox') {
-          deletedOutbox += Number(
-            this.db.prepare('DELETE FROM outbox WHERE id = ?').run(tombstone.targetId)
-              .changes,
-          )
+          this.db.prepare('DELETE FROM outbox WHERE id = ?').run(tombstone.targetId)
         }
       }
       if (tombstones.length > 0) {
@@ -2145,6 +3516,43 @@ export class KanobotStorage {
     }
   }
 
+  private requireOutbox(id: string): OutboxRecord {
+    const record = this.getOutbox(id)
+    if (record === null) {
+      throw new StorageIntegrityError(
+        `outbox "${id}" disappeared during update`,
+        ':outbox:',
+      )
+    }
+    return record
+  }
+
+  /**
+   * outbox 未投递就终止时，不能把关联的关心项/提醒永久留在 queued。
+   * 关心项若仍在有效窗口内就退回 pending，下一条主动消息可以再尝试；
+   * 已过窗口则过期，提醒则显式失败。
+   */
+  private releaseUndeliveredDependents(
+    outbox: OutboxRecord,
+    at: string,
+  ): void {
+    if (outbox.kind === 'proactive') {
+      this.db.prepare(
+        `UPDATE care_items
+         SET status = CASE WHEN due_until <= ? THEN 'expired' ELSE 'pending' END,
+             outbox_id = NULL
+         WHERE outbox_id = ? AND status = 'queued'`,
+      ).run(at, outbox.id)
+      return
+    }
+    if (outbox.kind === 'reminder') {
+      this.db.prepare(
+        `UPDATE reminders SET status = 'failed'
+         WHERE outbox_id = ? AND status = 'queued'`,
+      ).run(outbox.id)
+    }
+  }
+
   private nowIso(): string {
     const now = this.options.clock.now()
     if (Number.isNaN(now.getTime())) {
@@ -2273,7 +3681,8 @@ function modelCallFromRow(row: Record<string, unknown>): ModelCallRecord {
   if (
     typeof row.id !== 'string' ||
     typeof row.conversation_id !== 'string' ||
-    typeof row.user_message_id !== 'string' ||
+    (row.user_message_id !== null &&
+      typeof row.user_message_id !== 'string') ||
     (row.assistant_message_id !== null &&
       typeof row.assistant_message_id !== 'string') ||
     typeof row.purpose !== 'string' ||
@@ -2294,7 +3703,9 @@ function modelCallFromRow(row: Record<string, unknown>): ModelCallRecord {
 
   validateIdentifier(row.id, 'modelCall.id')
   validateIdentifier(row.conversation_id, 'modelCall.conversationId')
-  validateIdentifier(row.user_message_id, 'modelCall.userMessageId')
+  if (row.user_message_id !== null) {
+    validateIdentifier(row.user_message_id, 'modelCall.userMessageId')
+  }
   if (row.assistant_message_id !== null) {
     validateIdentifier(row.assistant_message_id, 'modelCall.assistantMessageId')
   }
@@ -2342,6 +3753,15 @@ function modelCallFromRow(row: Record<string, unknown>): ModelCallRecord {
   if (purpose === 'vision' && row.assistant_message_id !== null) {
     throw new StorageIntegrityError(
       'a vision call must not reference an assistant message',
+      ':model_calls:',
+    )
+  }
+  if (
+    (purpose === 'initiative' || purpose === 'daily_review') &&
+    row.assistant_message_id !== null
+  ) {
+    throw new StorageIntegrityError(
+      'an internal initiative call must not reference an assistant message',
       ':model_calls:',
     )
   }
@@ -2507,13 +3927,323 @@ function outboxFromRow(row: Record<string, unknown>): OutboxRecord {
     id: String(row.id),
     target: String(row.target),
     payloadRef: String(row.payload_ref),
+    kind: row.kind as OutboxRecord['kind'],
     status: row.status as OutboxRecord['status'],
     dueAt: row.due_at === null ? null : String(row.due_at),
     createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
     attempts: Number(row.attempts),
+    maxAttempts: Number(row.max_attempts),
     lastErrorCode: row.last_error_code === null ? null : String(row.last_error_code),
+    deliveredMessageId:
+      row.delivered_message_id === null
+        ? null
+        : String(row.delivered_message_id),
   })
   return record
+}
+
+function initiativeStateFromRow(
+  row: Record<string, unknown>,
+): InitiativeStateRecord {
+  if (
+    Number(row.id) !== 1 ||
+    !nullableText(row.last_tick_at) ||
+    !nullableText(row.next_proactive_at) ||
+    !nullableText(row.last_proactive_at) ||
+    !nullableText(row.circuit_opened_at) ||
+    !nullableText(row.last_daily_plan_day) ||
+    !nullableText(row.last_daily_review_day) ||
+    !nullableText(row.last_review_attempt_day) ||
+    !nullableText(row.last_trash_purge_day) ||
+    typeof row.updated_at !== 'string'
+  ) {
+    throw new StorageIntegrityError(
+      'initiative_state row has invalid column types',
+      ':initiative_state:',
+    )
+  }
+  return {
+    lastTickAt: textOrNull(row.last_tick_at),
+    nextProactiveAt: textOrNull(row.next_proactive_at),
+    lastProactiveAt: textOrNull(row.last_proactive_at),
+    consecutiveUnanswered: validateNonNegativeInteger(
+      row.consecutive_unanswered,
+      'initiativeState.consecutiveUnanswered',
+    ),
+    circuitOpenedAt: textOrNull(row.circuit_opened_at),
+    lastDailyPlanDay: textOrNull(row.last_daily_plan_day),
+    lastDailyReviewDay: textOrNull(row.last_daily_review_day),
+    lastReviewAttemptDay: textOrNull(row.last_review_attempt_day),
+    dailyReviewAttempts: validateNonNegativeInteger(
+      row.daily_review_attempts,
+      'initiativeState.dailyReviewAttempts',
+    ),
+    lastTrashPurgeDay: textOrNull(row.last_trash_purge_day),
+    updatedAt: row.updated_at,
+  }
+}
+
+function dailyPlanItemFromRow(
+  row: Record<string, unknown>,
+): DailyPlanItemRecord {
+  if (
+    typeof row.id !== 'string' ||
+    typeof row.local_day !== 'string' ||
+    typeof row.kind !== 'string' ||
+    typeof row.title_ref !== 'string' ||
+    typeof row.starts_at !== 'string' ||
+    typeof row.ends_at !== 'string' ||
+    typeof row.status !== 'string' ||
+    typeof row.created_at !== 'string'
+  ) {
+    throw new StorageIntegrityError(
+      'life_plan_items row has invalid column types',
+      ':life_plan_items:',
+    )
+  }
+  if (
+    row.status !== 'planned' &&
+    row.status !== 'active' &&
+    row.status !== 'completed' &&
+    row.status !== 'skipped'
+  ) {
+    throw new StorageIntegrityError(
+      'life_plan_items row has an invalid status',
+      ':life_plan_items:',
+    )
+  }
+  return {
+    id: row.id,
+    localDay: validateLocalDay(row.local_day, 'dailyPlanItem.localDay'),
+    position: validatePositiveInteger(
+      row.position,
+      'dailyPlanItem.position',
+    ),
+    kind: row.kind,
+    titleRef: row.title_ref,
+    startsAt: validateInstant(row.starts_at, 'dailyPlanItem.startsAt'),
+    endsAt: validateInstant(row.ends_at, 'dailyPlanItem.endsAt'),
+    status: row.status,
+    createdAt: validateInstant(row.created_at, 'dailyPlanItem.createdAt'),
+  }
+}
+
+function reminderCandidateFromRow(
+  row: Record<string, unknown>,
+): ReminderCandidateRecord {
+  if (
+    typeof row.id !== 'string' ||
+    typeof row.body_ref !== 'string' ||
+    typeof row.due_at !== 'string' ||
+    typeof row.status !== 'string' ||
+    typeof row.created_at !== 'string' ||
+    typeof row.source_message_id !== 'string' ||
+    !nullableText(row.confirmed_reminder_id)
+  ) {
+    throw new StorageIntegrityError(
+      'reminder_candidates row has invalid column types',
+      ':reminder_candidates:',
+    )
+  }
+  if (
+    row.status !== 'pending' &&
+    row.status !== 'confirmed' &&
+    row.status !== 'rejected'
+  ) {
+    throw new StorageIntegrityError(
+      'reminder_candidates row has an invalid status',
+      ':reminder_candidates:',
+    )
+  }
+  return {
+    id: row.id,
+    bodyRef: row.body_ref,
+    dueAt: validateInstant(row.due_at, 'reminderCandidate.dueAt'),
+    status: row.status,
+    createdAt: validateInstant(row.created_at, 'reminderCandidate.createdAt'),
+    sourceMessageId: row.source_message_id,
+    confirmedReminderId: textOrNull(row.confirmed_reminder_id),
+  }
+}
+
+function reminderFromRow(row: Record<string, unknown>): ReminderRecord {
+  if (
+    typeof row.id !== 'string' ||
+    typeof row.body_ref !== 'string' ||
+    typeof row.due_at !== 'string' ||
+    typeof row.status !== 'string' ||
+    typeof row.created_at !== 'string' ||
+    typeof row.confirmed_at !== 'string' ||
+    !nullableText(row.delivered_at) ||
+    !nullableText(row.outbox_id)
+  ) {
+    throw new StorageIntegrityError(
+      'reminders row has invalid column types',
+      ':reminders:',
+    )
+  }
+  if (
+    row.status !== 'confirmed' &&
+    row.status !== 'queued' &&
+    row.status !== 'delivered' &&
+    row.status !== 'cancelled' &&
+    row.status !== 'failed'
+  ) {
+    throw new StorageIntegrityError(
+      'reminders row has an invalid status',
+      ':reminders:',
+    )
+  }
+  return {
+    id: row.id,
+    bodyRef: row.body_ref,
+    dueAt: validateInstant(row.due_at, 'reminder.dueAt'),
+    status: row.status,
+    createdAt: validateInstant(row.created_at, 'reminder.createdAt'),
+    confirmedAt: validateInstant(row.confirmed_at, 'reminder.confirmedAt'),
+    deliveredAt: nullableInstant(row.delivered_at, 'reminder.deliveredAt'),
+    outboxId: textOrNull(row.outbox_id),
+  }
+}
+
+function careItemFromRow(row: Record<string, unknown>): CareItemRecord {
+  if (
+    typeof row.id !== 'string' ||
+    typeof row.source_message_id !== 'string' ||
+    typeof row.body_ref !== 'string' ||
+    typeof row.due_from !== 'string' ||
+    typeof row.due_until !== 'string' ||
+    typeof row.status !== 'string' ||
+    typeof row.created_at !== 'string' ||
+    !nullableText(row.delivered_at) ||
+    !nullableText(row.outbox_id)
+  ) {
+    throw new StorageIntegrityError(
+      'care_items row has invalid column types',
+      ':care_items:',
+    )
+  }
+  if (
+    row.status !== 'pending' &&
+    row.status !== 'queued' &&
+    row.status !== 'delivered' &&
+    row.status !== 'dismissed' &&
+    row.status !== 'expired'
+  ) {
+    throw new StorageIntegrityError(
+      'care_items row has an invalid status',
+      ':care_items:',
+    )
+  }
+  return {
+    id: row.id,
+    sourceMessageId: row.source_message_id,
+    bodyRef: row.body_ref,
+    dueFrom: validateInstant(row.due_from, 'careItem.dueFrom'),
+    dueUntil: validateInstant(row.due_until, 'careItem.dueUntil'),
+    status: row.status,
+    createdAt: validateInstant(row.created_at, 'careItem.createdAt'),
+    deliveredAt: nullableInstant(row.delivered_at, 'careItem.deliveredAt'),
+    outboxId: textOrNull(row.outbox_id),
+  }
+}
+
+function dailySummaryFromRow(
+  row: Record<string, unknown>,
+): DailySummaryRecord {
+  if (
+    typeof row.id !== 'string' ||
+    typeof row.local_day !== 'string' ||
+    typeof row.body_ref !== 'string' ||
+    typeof row.source_refs_json !== 'string' ||
+    typeof row.created_at !== 'string'
+  ) {
+    throw new StorageIntegrityError(
+      'daily_summaries row has invalid column types',
+      ':daily_summaries:',
+    )
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(row.source_refs_json)
+  } catch {
+    throw new StorageIntegrityError(
+      'daily summary source refs are not valid JSON',
+      ':daily_summaries:',
+    )
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.some(item => typeof item !== 'string')
+  ) {
+    throw new StorageIntegrityError(
+      'daily summary source refs are invalid',
+      ':daily_summaries:',
+    )
+  }
+  const sourceRefs = parsed as string[]
+  for (const ref of sourceRefs) {
+    validateIdentifier(ref, 'dailySummary.sourceRefs')
+  }
+  return {
+    id: row.id,
+    localDay: validateLocalDay(row.local_day, 'dailySummary.localDay'),
+    bodyRef: row.body_ref,
+    sourceRefs,
+    createdAt: validateInstant(row.created_at, 'dailySummary.createdAt'),
+  }
+}
+
+function initiativeRunFromRow(
+  row: Record<string, unknown>,
+): InitiativeRunRecord {
+  if (
+    typeof row.id !== 'string' ||
+    typeof row.occurred_at !== 'string' ||
+    typeof row.kind !== 'string' ||
+    typeof row.outcome !== 'string' ||
+    typeof row.detail_code !== 'string' ||
+    !nullableText(row.target_id)
+  ) {
+    throw new StorageIntegrityError(
+      'initiative_runs row has invalid column types',
+      ':initiative_runs:',
+    )
+  }
+  const kinds = [
+    'tick',
+    'daily_plan',
+    'daily_review',
+    'proactive',
+    'reminder',
+    'outbox',
+    'circuit',
+  ] as const
+  const outcomes = ['allowed', 'sent', 'skipped', 'failed'] as const
+  if (!kinds.includes(row.kind as (typeof kinds)[number])) {
+    throw new StorageIntegrityError(
+      'initiative_runs row has an invalid kind',
+      ':initiative_runs:',
+    )
+  }
+  if (!outcomes.includes(row.outcome as (typeof outcomes)[number])) {
+    throw new StorageIntegrityError(
+      'initiative_runs row has an invalid outcome',
+      ':initiative_runs:',
+    )
+  }
+  return {
+    id: row.id,
+    occurredAt: validateInstant(row.occurred_at, 'initiativeRun.occurredAt'),
+    kind: row.kind as InitiativeRunRecord['kind'],
+    outcome: row.outcome as InitiativeRunRecord['outcome'],
+    detailCode: validateReasonCode(
+      row.detail_code,
+      'initiativeRun.detailCode',
+    ),
+    targetId: textOrNull(row.target_id),
+  }
 }
 
 function replyStyleCheckFromRow(
@@ -2728,10 +4458,16 @@ function assertAuditLimit(limit: number, kind: string): void {
 }
 
 function validateModelCallPurpose(value: unknown): ModelCallPurpose {
-  if (value !== 'chat' && value !== 'memory_extraction' && value !== 'vision') {
+  if (
+    value !== 'chat' &&
+    value !== 'memory_extraction' &&
+    value !== 'vision' &&
+    value !== 'initiative' &&
+    value !== 'daily_review'
+  ) {
     invalid(
       'modelCall.purpose',
-      'expected "chat", "memory_extraction" or "vision"',
+      'expected a supported model call purpose',
     )
   }
   return value
@@ -2820,6 +4556,56 @@ function validateModelErrorCode(value: unknown): string {
     !/^[a-z][a-z0-9_.-]{0,127}$/.test(value)
   ) {
     invalid('modelCall.errorCode', 'expected a lowercase error code')
+  }
+  return value
+}
+
+function nullableText(value: unknown): boolean {
+  return value === null || typeof value === 'string'
+}
+
+function textOrNull(value: unknown): string | null {
+  return value === null ? null : String(value)
+}
+
+function nullableInstant(value: unknown, field: string): string | null {
+  if (value === null) return null
+  if (typeof value !== 'string') {
+    invalid(field, 'expected a canonical UTC ISO timestamp or null')
+  }
+  return validateInstant(value, field)
+}
+
+function validateLocalDay(value: unknown, field: string): string {
+  if (
+    typeof value !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(value)
+  ) {
+    invalid(field, 'expected a YYYY-MM-DD local day')
+  }
+  const [year, month, day] = value.split('-').map(Number)
+  const parsed = new Date(Date.UTC(year, month - 1, day))
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() + 1 !== month ||
+    parsed.getUTCDate() !== day
+  ) {
+    invalid(field, 'expected a real calendar day')
+  }
+  return value
+}
+
+function nullableLocalDay(value: unknown, field: string): string | null {
+  return value === null ? null : validateLocalDay(value, field)
+}
+
+function validatePositiveInteger(value: unknown, field: string): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value < 1
+  ) {
+    invalid(field, 'expected a positive safe integer')
   }
   return value
 }
@@ -2968,4 +4754,17 @@ function computeSuppressedEvents(
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function countExistingRows(
+  db: DatabaseSync,
+  table: 'bodies' | 'memories' | 'outbox',
+  ids: readonly string[],
+): number {
+  if (ids.length === 0) return 0
+  const placeholders = ids.map(() => '?').join(', ')
+  const row = db.prepare(
+    `SELECT COUNT(*) AS count FROM ${table} WHERE id IN (${placeholders})`,
+  ).get(...ids) as Record<string, unknown> | undefined
+  return Number(row?.count ?? 0)
 }

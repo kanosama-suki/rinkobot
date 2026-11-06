@@ -1,6 +1,6 @@
 # 项目文件结构
 
-以下路径相对于项目根目录 `a/`。当前仓库处于 M4 已开始、第 0 步记忆质量门控已完成的状态：已有 DSH Host 插件和不经过 DSH 的本地开发入口、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、复用 DSH 登录态的网页聊天和 SSE、连接本地 Magpie 的精确模型网关和调用审计、长期记忆候选规则、纠正和 FTS5 双列中文检索、聊天前记忆召回注入、记忆问题意图/相关性门槛/重复抑制、显式记忆兜底、单次聊天调用返回的 JSON 信封、正文流式显示、记忆/appraisal/commitments 写入、所有者记忆面板、确定性回复风格检查与一次自动重写、五来源统一审计、紧急停止、分块字符预算、时间/状态注入、独立可配置的视觉模型和单图转述闭环；M4 调度器、生活事件、主动消息、每日整理、真实模型场景比较、QQ、浏览器 worker、VM 和自进化仍不存在。已确认的双形态是“同一核心 + DSH 插件 + 独立程序”，M4 先只做网页渠道，M4.5 才收口发行基础、模型 provider 设置页和独立正式入口；M3 的 `src/dev` 仍只是开发工具，不是产品。本文中的“目标结构”是后续实现的约束，不是已经存在的目录。
+以下路径相对于项目根目录 `a/`。当前仓库处于 M4 自动化实现与测试已完成、等待真实模型试用和日常观察的状态：已有 DSH Host 插件和不经过 DSH 的本地开发入口、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、网页聊天和 SSE、精确模型网关和调用审计、长期记忆与中文检索、单次 JSON 信封、所有者记忆/控制/审计面板、风格检查、上下文预算、独立视觉模型，以及 schema v9 的单一调度循环、软性生活计划、主动消息、outbox、提醒、一次性关心、每日摘要、回收站到期清除和浏览器通知。真实模型 M4 内容质量、真实浏览器后台通知、M4.5、QQ、浏览器 worker、VM、游戏、自进化和公开发送仍不存在。已确认的双形态是“同一核心 + DSH 插件 + 独立程序”，M4 先只做网页渠道，M4.5 才收口发行基础、模型 provider 设置页和独立正式入口；`src/dev` 仍只是开发工具，不是产品。本文中的“目标结构”是后续实现的约束，不是已经存在的目录。
 
 ## 1. 当前结构
 
@@ -18,7 +18,7 @@ kanobot/a/
 ├── package.json                      npm 包、DSH bundle 入口和开发命令
 ├── package-lock.json                 固定依赖版本
 ├── config/
-│   └── examples/                     可提交的占位 system/identity/life-state/memory/policy TOML
+│   └── examples/                     可提交的占位 system/identity/life-state/memory/initiative/policy TOML
 ├── scripts/
 │   ├── check-import-case.ts          相对 import 路径大小写检查
 │   ├── dev-server.ts                 不经过 DSH 的本地开发网页启动器
@@ -70,6 +70,14 @@ kanobot/a/
 │   │   ├── policy/
 │   │   │   ├── index.ts              策略模块公开导出
 │   │   │   └── emergency.ts          紧急停止数据库状态和 STOP 文件
+│   │   ├── initiative/
+│   │   │   ├── index.ts              主动性模块公开导出
+│   │   │   ├── types.ts              计划、主动草稿、提醒、关心和视图契约
+│   │   │   ├── time.ts               时区、安静时段和本地日边界
+│   │   │   ├── policy.ts             主动闸门、节奏和 outbox 状态转换
+│   │   │   ├── brain.ts              mock 与模型适配器、严格 JSON 解析和内部调用审计
+│   │   │   ├── service.ts            计划、主动消息、提醒、每日整理、维护和 outbox
+│   │   │   └── scheduler.ts          唯一后台 tick、重入保护和停用清理
 │   │   ├── storage/
 │   │   │   ├── database.ts           打开、完整性、迁移和表 schema
 │   │   │   ├── store.ts              事务、回放、独立墓碑级联、清除、回收站和恢复
@@ -93,8 +101,8 @@ kanobot/a/
 │       ├── index.ts                  Web 适配层公开导出
 │       ├── chat-http.ts              DSH 鉴权、聊天 API、SSE、记忆 API 和静态资源路由
 │       └── assets/
-│           ├── index.html            聊天页、状态/记忆/统一审计页签、记忆编辑和图片选择
-│           ├── app.js                SSE 消费（含风格重写）、记忆/审计 API、图片预览和 DOM 渲染
+│           ├── index.html            聊天页、状态/主动性/记忆/审计页签、提醒操作和图片选择
+│           ├── app.js                SSE、主动性轮询/操作/通知、记忆/审计 API 和 DOM 渲染
 │           └── app.css               响应式浅色/深色样式
 ├── tests/
 │   ├── unit/                         配置、上下文组装和纯 reducer
@@ -109,6 +117,7 @@ kanobot/a/
     ├── review-brief.md               交给高级模型的外部审查简报和可复制提示
     ├── memory-research.md             记忆插件源码调研和取舍
     ├── m4.0-memory-acceptance.md      M4 第 0 步记忆质量门控验收
+    ├── m4-acceptance.md               M4 主动性、提醒、每日整理和 schema v9 验收
     ├── m1-acceptance.md              M1 八项验收、证据和已知边界
     ├── m2-acceptance.md              M2 五项验收、运行证据和已知边界
     ├── m3-acceptance.md              M3.0 聊天骨架验收、证据和未完成项
@@ -148,6 +157,7 @@ kanobot/a/
 - `docs/m3-completion-acceptance.md` 记录 M3 收尾的本地开发入口、一次性 token/Cookie 边界、统一审计、风格自动重写、schema v8 和 171 项自动测试结果。
 - `docs/memory-research.md` 记录 `dsh-mnemon`、`dsh-engram`、`dsh-memento`、`dsh-meow-memory` 和 `dsh-dream` 的调研快照、许可证边界和可借鉴机制。
 - `docs/m4.0-memory-acceptance.md` 记录 M4 第 0 步的问题意图、相关性门槛、显式记忆兜底、配置和 181 项自动测试结果。
+- `docs/m4-acceptance.md` 记录 M4 的单一调度、软计划、主动消息、outbox、提醒、每日整理、浏览器通知、schema v9、201 项自动测试和未验证边界。
 
 ## 2. 目标结构
 
@@ -209,7 +219,7 @@ M2/M3 的实际数据布局：
 
 ```text
 <dataDir>/
-├── kanobot.sqlite                    主库（schema v8）：事件、快照、正文、对话/消息、模型调用审计、记忆、FTS5 记忆索引、风格检查（含重写审计）、所有者审计、紧急状态、outbox、墓碑投影
+├── kanobot.sqlite                    主库（schema v9）：事件、快照、正文、对话/消息、模型调用审计、记忆、FTS5、风格检查、所有者审计、紧急状态、主动性状态/计划/提醒/关心/摘要/运行记录、outbox、墓碑投影
 ├── tombstones.sqlite                 独立墓碑库，不进入主库备份
 └── backups/
     └── kanobot-backup-*.sqlite       最近 7 份主库一致性备份
@@ -232,7 +242,7 @@ M2/M3 的实际数据布局：
 
 ## 4. 配置拆分规则
 
-一个功能模块对应一个配置文件，规则在 `plan.md` 第 10.1 节；文件随对应里程碑逐步出现。M2 需要 `system`、`identity`、`life-state`、`memory`、`policy` 五个文件；M3.0 继续复用它们，完整 M3 再按网页渠道需要引入 `channels.toml`：
+一个功能模块对应一个配置文件，规则在 `plan.md` 第 10.1 节；文件随对应里程碑逐步出现。M2 需要 `system`、`identity`、`life-state`、`memory`、`policy` 五个文件；M3.0 继续复用它们；M4 新增 `initiative.toml`。完整网页渠道和 QQ 群配置仍按后续里程碑引入 `channels.toml`：
 
 ```text
 system.toml
@@ -251,7 +261,7 @@ ui.toml
 
 `channels.toml` 是群列表、私聊白名单、@ 规则和投递策略的唯一配置来源。配置加载器统一做 schema 校验、默认值、跨文件引用检查和 fail-closed，不把参数散落到各模块。
 
-`system.toml` 的 `[context]` 保存单轮上下文的字符预算和分块上限；`[vision]` 保存独立视觉模型的开关、精确模型名和请求上限。M3 基线仍只连接本机回环 Magpie `/v1`；M4.5 通过 provider 适配层增加 DSH `ctx.llm` 和受控的第三方 OpenAI-compatible 端点。`memory.toml` 的 `[trash]` 保存回收站期限，`[recall]` 保存相关性和候选上限。`[storage]` 只写相对数据目录的路径；主库、墓碑库和备份目录的实际绝对路径由 `dataDir` 解析并在存储层再次检查目录逃逸。
+`system.toml` 的 `[context]` 保存单轮上下文的字符预算和分块上限；`[vision]` 保存独立视觉模型的开关、精确模型名和请求上限。`initiative.toml` 保存 tick、软计划、主动消息、提醒、outbox 和每日整理参数。M3 基线仍只连接本机回环 Magpie `/v1`；M4.5 通过 provider 适配层增加 DSH `ctx.llm` 和受控的第三方 OpenAI-compatible 端点。`memory.toml` 的 `[trash]` 保存回收站期限，`[recall]` 保存相关性和候选上限。`[storage]` 只写相对数据目录的路径；主库、墓碑库和备份目录的实际绝对路径由 `dataDir` 解析并在存储层再次检查目录逃逸。
 
 模型来源、聊天/视觉模型、`separate`/`unified` 视觉模式、人格复核模式、主动渠道、QQ 聚合参数和记忆相关性门槛都属于可配置选项。示例配置只放脱敏默认值；M4.5 的 Web UI 修改 Git 忽略的运行时配置和 secret 引用，不回显密钥，不直接改仓库模板。
 

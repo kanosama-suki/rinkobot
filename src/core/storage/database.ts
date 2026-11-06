@@ -27,7 +27,7 @@ import {
   StorageIntegrityError,
 } from './errors.ts'
 
-export const STORAGE_SCHEMA_VERSION = 8
+export const STORAGE_SCHEMA_VERSION = 9
 export const TOMBSTONE_STORE_SCHEMA_VERSION = 1
 
 type DatabaseKind = 'main' | 'tombstones'
@@ -158,6 +158,94 @@ const MAIN_REQUIRED_COLUMNS_V8: Record<string, readonly string[]> = {
     ...MAIN_REQUIRED_COLUMNS_V6.reply_style_checks,
     'retry_count',
     'initial_violation_codes_json',
+  ],
+}
+
+const MAIN_REQUIRED_COLUMNS_V9: Record<string, readonly string[]> = {
+  ...MAIN_REQUIRED_COLUMNS_V8,
+  outbox: [
+    'id',
+    'target',
+    'payload_ref',
+    'kind',
+    'status',
+    'due_at',
+    'created_at',
+    'updated_at',
+    'attempts',
+    'max_attempts',
+    'last_error_code',
+    'delivered_message_id',
+  ],
+  initiative_state: [
+    'id',
+    'last_tick_at',
+    'next_proactive_at',
+    'last_proactive_at',
+    'consecutive_unanswered',
+    'circuit_opened_at',
+    'last_daily_plan_day',
+    'last_daily_review_day',
+    'last_review_attempt_day',
+    'daily_review_attempts',
+    'last_trash_purge_day',
+    'updated_at',
+  ],
+  life_plan_items: [
+    'id',
+    'local_day',
+    'position',
+    'kind',
+    'title_ref',
+    'starts_at',
+    'ends_at',
+    'status',
+    'created_at',
+  ],
+  reminders: [
+    'id',
+    'body_ref',
+    'due_at',
+    'status',
+    'created_at',
+    'confirmed_at',
+    'delivered_at',
+    'outbox_id',
+  ],
+  reminder_candidates: [
+    'id',
+    'body_ref',
+    'due_at',
+    'status',
+    'created_at',
+    'source_message_id',
+    'confirmed_reminder_id',
+  ],
+  care_items: [
+    'id',
+    'source_message_id',
+    'body_ref',
+    'due_from',
+    'due_until',
+    'status',
+    'created_at',
+    'delivered_at',
+    'outbox_id',
+  ],
+  daily_summaries: [
+    'id',
+    'local_day',
+    'body_ref',
+    'source_refs_json',
+    'created_at',
+  ],
+  initiative_runs: [
+    'id',
+    'occurred_at',
+    'kind',
+    'outcome',
+    'detail_code',
+    'target_id',
   ],
 }
 
@@ -430,6 +518,193 @@ ALTER TABLE reply_style_checks
   ADD COLUMN initial_violation_codes_json TEXT NOT NULL DEFAULT '[]';
 `
 
+/**
+ * M4 的主动性持久化。outbox 和 model_calls 都需要改写 CHECK 约束，
+ * 因此沿用重建表并复制历史行的做法；其余表只新增，不触碰 M2/M3 数据。
+ */
+const INITIATIVE_SCHEMA_V9 = `
+CREATE TABLE model_calls_v9 (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  user_message_id TEXT REFERENCES messages(id) ON DELETE CASCADE,
+  assistant_message_id TEXT REFERENCES messages(id) ON DELETE CASCADE,
+  purpose TEXT NOT NULL DEFAULT 'chat'
+    CHECK (purpose IN (
+      'chat', 'memory_extraction', 'vision', 'initiative', 'daily_review'
+    )),
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  completed_at TEXT,
+  local_day TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'aborted')),
+  attempts INTEGER NOT NULL CHECK (attempts >= 0),
+  input_tokens INTEGER CHECK (input_tokens IS NULL OR input_tokens >= 0),
+  output_tokens INTEGER CHECK (output_tokens IS NULL OR output_tokens >= 0),
+  cache_read_tokens INTEGER CHECK (cache_read_tokens IS NULL OR cache_read_tokens >= 0),
+  cache_write_tokens INTEGER CHECK (cache_write_tokens IS NULL OR cache_write_tokens >= 0),
+  reasoning_tokens INTEGER CHECK (reasoning_tokens IS NULL OR reasoning_tokens >= 0),
+  total_tokens INTEGER CHECK (total_tokens IS NULL OR total_tokens >= 0),
+  estimated_cost REAL CHECK (estimated_cost IS NULL OR estimated_cost >= 0),
+  pricing_json TEXT,
+  response_id TEXT,
+  error_code TEXT
+) STRICT;
+INSERT INTO model_calls_v9
+  (id, conversation_id, user_message_id, assistant_message_id, purpose,
+   provider, model, started_at, completed_at, local_day, status, attempts,
+   input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+   reasoning_tokens, total_tokens, estimated_cost, pricing_json, response_id,
+   error_code)
+SELECT
+  id, conversation_id, user_message_id, assistant_message_id, purpose,
+  provider, model, started_at, completed_at, local_day, status, attempts,
+  input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+  reasoning_tokens, total_tokens, estimated_cost, pricing_json, response_id,
+  error_code
+FROM model_calls;
+DROP TABLE model_calls;
+ALTER TABLE model_calls_v9 RENAME TO model_calls;
+CREATE INDEX model_calls_conversation_started_index
+  ON model_calls(conversation_id, started_at);
+CREATE INDEX model_calls_local_day_index ON model_calls(local_day);
+CREATE INDEX model_calls_user_message_index ON model_calls(user_message_id);
+CREATE INDEX model_calls_assistant_message_index ON model_calls(assistant_message_id);
+CREATE INDEX model_calls_purpose_index ON model_calls(purpose);
+
+CREATE TABLE outbox_v9 (
+  id TEXT PRIMARY KEY,
+  target TEXT NOT NULL,
+  payload_ref TEXT NOT NULL REFERENCES bodies(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('proactive', 'reminder', 'system', 'legacy')),
+  status TEXT NOT NULL CHECK (status IN (
+    'pending', 'sending', 'delivered', 'failed', 'unknown', 'cancelled', 'expired'
+  )),
+  due_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  max_attempts INTEGER NOT NULL DEFAULT 5 CHECK (max_attempts >= 1),
+  last_error_code TEXT,
+  delivered_message_id TEXT REFERENCES messages(id) ON DELETE CASCADE
+) STRICT;
+INSERT INTO outbox_v9
+  (id, target, payload_ref, kind, status, due_at, created_at, updated_at,
+   attempts, max_attempts, last_error_code, delivered_message_id)
+SELECT
+  id, target, payload_ref, 'legacy', status, due_at, created_at, created_at,
+  attempts, 5, last_error_code, NULL
+FROM outbox;
+DROP TABLE outbox;
+ALTER TABLE outbox_v9 RENAME TO outbox;
+CREATE INDEX outbox_payload_ref_index ON outbox(payload_ref);
+CREATE INDEX outbox_status_index ON outbox(status);
+CREATE INDEX outbox_due_index ON outbox(status, due_at);
+CREATE INDEX outbox_kind_created_index ON outbox(kind, created_at);
+CREATE INDEX outbox_delivered_message_index ON outbox(delivered_message_id);
+
+CREATE TABLE initiative_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  last_tick_at TEXT,
+  next_proactive_at TEXT,
+  last_proactive_at TEXT,
+  consecutive_unanswered INTEGER NOT NULL DEFAULT 0
+    CHECK (consecutive_unanswered >= 0),
+  circuit_opened_at TEXT,
+  last_daily_plan_day TEXT,
+  last_daily_review_day TEXT,
+  last_review_attempt_day TEXT,
+  daily_review_attempts INTEGER NOT NULL DEFAULT 0
+    CHECK (daily_review_attempts >= 0),
+  last_trash_purge_day TEXT,
+  updated_at TEXT NOT NULL
+) STRICT;
+INSERT INTO initiative_state
+  (id, last_tick_at, next_proactive_at, last_proactive_at, consecutive_unanswered,
+   circuit_opened_at, last_daily_plan_day, last_daily_review_day,
+   last_review_attempt_day, daily_review_attempts, last_trash_purge_day,
+   updated_at)
+VALUES (1, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, 0, NULL,
+        '1970-01-01T00:00:00.000Z');
+
+CREATE TABLE life_plan_items (
+  id TEXT PRIMARY KEY,
+  local_day TEXT NOT NULL,
+  position INTEGER NOT NULL CHECK (position >= 0),
+  kind TEXT NOT NULL,
+  title_ref TEXT NOT NULL REFERENCES bodies(id) ON DELETE CASCADE,
+  starts_at TEXT NOT NULL,
+  ends_at TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('planned', 'active', 'completed', 'skipped')),
+  created_at TEXT NOT NULL,
+  UNIQUE (local_day, position)
+) STRICT;
+CREATE INDEX life_plan_items_day_index ON life_plan_items(local_day, position);
+
+CREATE TABLE reminders (
+  id TEXT PRIMARY KEY,
+  body_ref TEXT NOT NULL REFERENCES bodies(id) ON DELETE CASCADE,
+  due_at TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN (
+    'confirmed', 'queued', 'delivered', 'cancelled', 'failed'
+  )),
+  created_at TEXT NOT NULL,
+  confirmed_at TEXT NOT NULL,
+  delivered_at TEXT,
+  outbox_id TEXT
+) STRICT;
+CREATE INDEX reminders_due_index ON reminders(status, due_at);
+
+CREATE TABLE reminder_candidates (
+  id TEXT PRIMARY KEY,
+  body_ref TEXT NOT NULL REFERENCES bodies(id) ON DELETE CASCADE,
+  due_at TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'confirmed', 'rejected')),
+  created_at TEXT NOT NULL,
+  source_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  confirmed_reminder_id TEXT REFERENCES reminders(id) ON DELETE SET NULL,
+  UNIQUE (confirmed_reminder_id)
+) STRICT;
+CREATE INDEX reminder_candidates_status_index
+  ON reminder_candidates(status, due_at);
+
+CREATE TABLE care_items (
+  id TEXT PRIMARY KEY,
+  source_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  body_ref TEXT NOT NULL REFERENCES bodies(id) ON DELETE CASCADE,
+  due_from TEXT NOT NULL,
+  due_until TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (
+    status IN ('pending', 'queued', 'delivered', 'dismissed', 'expired')
+  ),
+  created_at TEXT NOT NULL,
+  delivered_at TEXT,
+  outbox_id TEXT REFERENCES outbox(id) ON DELETE SET NULL
+) STRICT;
+CREATE INDEX care_items_due_index ON care_items(status, due_from, due_until);
+
+CREATE TABLE daily_summaries (
+  id TEXT PRIMARY KEY,
+  local_day TEXT NOT NULL UNIQUE,
+  body_ref TEXT NOT NULL REFERENCES bodies(id) ON DELETE CASCADE,
+  source_refs_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE initiative_runs (
+  id TEXT PRIMARY KEY,
+  occurred_at TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN (
+    'tick', 'daily_plan', 'daily_review', 'proactive', 'reminder',
+    'outbox', 'circuit'
+  )),
+  outcome TEXT NOT NULL CHECK (outcome IN ('allowed', 'sent', 'skipped', 'failed')),
+  detail_code TEXT NOT NULL,
+  target_id TEXT
+) STRICT;
+CREATE INDEX initiative_runs_occurred_index ON initiative_runs(occurred_at);
+`
+
 const TOMBSTONE_SCHEMA = `
 CREATE TABLE schema_migrations (
   version INTEGER PRIMARY KEY,
@@ -552,7 +827,7 @@ function initializeDatabase(
     kind === 'main' ? STORAGE_SCHEMA_VERSION : TOMBSTONE_STORE_SCHEMA_VERSION
   const schema =
     kind === 'main'
-      ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}\n${MODEL_CALLS_SCHEMA_V3}\n${MEMORY_SEARCH_SCHEMA_V4}\n${MODEL_CALL_PURPOSE_SCHEMA_V5}\n${CONTROL_SCHEMA_V6}\n${MODEL_CALL_PURPOSE_SCHEMA_V7}\n${STYLE_RETRY_SCHEMA_V8}`
+      ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}\n${MODEL_CALLS_SCHEMA_V3}\n${MEMORY_SEARCH_SCHEMA_V4}\n${MODEL_CALL_PURPOSE_SCHEMA_V5}\n${CONTROL_SCHEMA_V6}\n${MODEL_CALL_PURPOSE_SCHEMA_V7}\n${STYLE_RETRY_SCHEMA_V8}\n${INITIATIVE_SCHEMA_V9}`
       : TOMBSTONE_SCHEMA
   db.exec('BEGIN IMMEDIATE')
   try {
@@ -673,7 +948,7 @@ function assertSchemaCompatible(
   const latest = versions.at(-1)
   const supported =
     kind === 'main'
-      ? [1, 2, 3, 4, 5, 6, 7, 8]
+      ? [1, 2, 3, 4, 5, 6, 7, 8, 9]
       : [TOMBSTONE_STORE_SCHEMA_VERSION]
   if (
     latest === undefined ||
@@ -701,7 +976,9 @@ function assertSchemaCompatible(
                 ? MAIN_REQUIRED_COLUMNS_V5
                 : latest === 6 || latest === 7
                   ? MAIN_REQUIRED_COLUMNS_V6
-                  : MAIN_REQUIRED_COLUMNS_V8
+                  : latest === 8
+                    ? MAIN_REQUIRED_COLUMNS_V8
+                    : MAIN_REQUIRED_COLUMNS_V9
   for (const [table, columns] of Object.entries(required)) {
     const tableRows = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -822,6 +1099,21 @@ function migrateDatabaseIfNeeded(
       db.prepare(
         'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
       ).run(8, nowIso)
+    }
+    if (
+      latest === 1 ||
+      latest === 2 ||
+      latest === 3 ||
+      latest === 4 ||
+      latest === 5 ||
+      latest === 6 ||
+      latest === 7 ||
+      latest === 8
+    ) {
+      db.exec(INITIATIVE_SCHEMA_V9)
+      db.prepare(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+      ).run(9, nowIso)
     }
     db.exec(`PRAGMA user_version = ${STORAGE_SCHEMA_VERSION}`)
     db.exec('COMMIT')

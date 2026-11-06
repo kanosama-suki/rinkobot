@@ -21,6 +21,12 @@ import { fileURLToPath } from 'node:url'
 
 import { KanobotChatService } from '../core/chat/index.ts'
 import { loadConfigFromDirectory } from '../core/config/index.ts'
+import {
+  InitiativeScheduler,
+  KanobotInitiativeService,
+  MockInitiativeBrain,
+  ModelInitiativeBrain,
+} from '../core/initiative/index.ts'
 import { KanobotMemoryService } from '../core/memory/index.ts'
 import {
   AuditTimelineService,
@@ -126,6 +132,7 @@ export async function createDevServer(
   let storage: KanobotStorage | undefined
   let server: Server | undefined
   let disposeSurface: (() => void) | undefined
+  let scheduler: InitiativeScheduler | undefined
   try {
     storage = KanobotStorage.openFromConfig(loaded, dataDir, clock)
     storage.maybeCreateDailyBackup()
@@ -138,6 +145,29 @@ export async function createDevServer(
       storage,
       storage.dataDir,
       loaded.policy.emergency.stopFile,
+    )
+    const initiative = new KanobotInitiativeService(
+      storage,
+      modelMode === 'mock'
+        ? new MockInitiativeBrain()
+        : new ModelInitiativeBrain({
+            model,
+            storage,
+            clock,
+            dailyModelCallLimit:
+              loaded.system.resources.dailyModelCallLimit,
+            maxConcurrentModelCalls:
+              loaded.system.resources.maxConcurrentModelCalls,
+          }),
+      {
+        config: loaded.initiative,
+        timezone: loaded.system.time.timezone,
+        quietHoursStart: loaded.system.time.quietHoursStart,
+        quietHoursEnd: loaded.system.time.quietHoursEnd,
+        emergency,
+        memory,
+        clock,
+      },
     )
     const chat = new KanobotChatService(storage, model, {
       maxConcurrentModelCalls:
@@ -154,6 +184,15 @@ export async function createDevServer(
             maxDescriptionChars:
               loaded.system.vision.maxDescriptionChars,
           },
+      initiative: {
+        remindersEnabled: loaded.initiative.reminders.enabled,
+        maxReminderDaysAhead: loaded.initiative.reminders.maxDaysAhead,
+        followUpsEnabled: loaded.initiative.proactive.followUpsEnabled,
+        followUpWindowHours:
+          loaded.initiative.proactive.followUpWindowHours,
+        followUpMaxDaysAhead:
+          loaded.initiative.proactive.followUpMaxDaysAhead,
+      },
       timezone: loaded.system.time.timezone,
       clock,
     })
@@ -197,6 +236,7 @@ export async function createDevServer(
       audit,
       timeline,
       emergency,
+      initiative,
       logger,
       auth: {
         unauthenticatedMessage:
@@ -238,6 +278,12 @@ export async function createDevServer(
     }
     expectedHost = `127.0.0.1:${address.port}`
     const baseUrl = `http://${expectedHost}`
+    scheduler = new InitiativeScheduler({
+      service: initiative,
+      intervalMs: loaded.initiative.schedule.tickSeconds * 1_000,
+      logger,
+    })
+    scheduler.start()
 
     logger.info(
       `[kanobot-dev] listening on ${baseUrl}${CHAT_BASE_PATH}/; ` +
@@ -256,6 +302,8 @@ export async function createDevServer(
       async close(): Promise<void> {
         disposeSurface?.()
         disposeSurface = undefined
+        await scheduler?.dispose()
+        scheduler = undefined
         const activeServer = server
         server = undefined
         if (activeServer !== undefined) {
@@ -268,6 +316,7 @@ export async function createDevServer(
     return devServer
   } catch (error) {
     disposeSurface?.()
+    await scheduler?.dispose().catch(() => {})
     if (server !== undefined) {
       await closeHttpServer(server).catch(() => {})
     }

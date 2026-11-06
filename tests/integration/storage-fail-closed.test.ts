@@ -44,7 +44,7 @@ test('a database with an incompatible schema version is rejected', () => {
 
   const db = new DatabaseSync(path)
   try {
-    db.prepare('UPDATE schema_migrations SET version = 9').run()
+    db.prepare('UPDATE schema_migrations SET version = 99').run()
   } finally {
     db.close()
   }

@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TestContext } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import type { DatabaseSync } from 'node:sqlite'
 
 import { loadConfigFromDirectory } from '../../src/core/config/index.ts'
 import type { LoadedConfig } from '../../src/core/config/index.ts'
@@ -37,6 +38,22 @@ export interface WorkspaceOptions {
   snapshotIntervalHours?: number
   backupRetention?: number
   trashRetentionDays?: number
+}
+
+/**
+ * 测试需要把当前库降级成某个旧 schema；真实旧库当然没有 M4 表。
+ * 先移除这些表，避免“旧版本号 + 新表”这种现实里不存在的混合状态。
+ */
+export function dropCurrentInitiativeTables(db: DatabaseSync): void {
+  db.exec(`
+    DROP TABLE IF EXISTS care_items;
+    DROP TABLE IF EXISTS reminder_candidates;
+    DROP TABLE IF EXISTS daily_summaries;
+    DROP TABLE IF EXISTS reminders;
+    DROP TABLE IF EXISTS life_plan_items;
+    DROP TABLE IF EXISTS initiative_runs;
+    DROP TABLE IF EXISTS initiative_state;
+  `)
 }
 
 export function createWorkspace(
@@ -129,11 +146,15 @@ export function outboxFor(id: string, payloadRef: string) {
     id,
     target: 'web:owner',
     payloadRef,
+    kind: 'system' as const,
     status: 'pending' as const,
     dueAt: null,
     createdAt: '2026-11-05T00:00:00.000Z',
+    updatedAt: '2026-11-05T00:00:00.000Z',
     attempts: 0,
+    maxAttempts: 5,
     lastErrorCode: null,
+    deliveredMessageId: null,
   }
 }
 

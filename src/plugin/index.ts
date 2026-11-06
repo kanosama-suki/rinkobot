@@ -21,6 +21,12 @@ import {
   AuditTimelineService,
   OwnerAuditService,
 } from '../core/observability/index.ts'
+import {
+  InitiativeScheduler,
+  KanobotInitiativeService,
+  MockInitiativeBrain,
+  ModelInitiativeBrain,
+} from '../core/initiative/index.ts'
 import { KanobotEmergencyService } from '../core/policy/index.ts'
 import type { LoadedConfig } from '../core/config/index.ts'
 import {
@@ -34,7 +40,6 @@ import {
   type ChatConnection,
   type ChatWebServer,
 } from '../web/index.ts'
-import { createPluginLifecycle } from './lifecycle.ts'
 import { createChatModel, createVisionModel } from './models.ts'
 import { PLUGIN_NAME, PLUGIN_VERSION } from './version.ts'
 
@@ -69,7 +74,7 @@ export async function apply(
   const loaded = loadConfigFromDirectory(configDir)
   const dataDir = resolveDataDir(config)
   let storage: KanobotStorage | undefined
-  let lifecycle: ReturnType<typeof createPluginLifecycle> | undefined
+  let scheduler: InitiativeScheduler | undefined
   let disposeChatSurface: (() => void) | undefined
   const modelMode = config.modelMode ?? 'mock'
   if (modelMode !== 'mock' && modelMode !== 'magpie') {
@@ -99,6 +104,29 @@ export async function apply(
       storage.dataDir,
       loaded.policy.emergency.stopFile,
     )
+    const initiative = new KanobotInitiativeService(
+      storage,
+      modelMode === 'mock'
+        ? new MockInitiativeBrain()
+        : new ModelInitiativeBrain({
+            model,
+            storage,
+            clock,
+            dailyModelCallLimit:
+              loaded.system.resources.dailyModelCallLimit,
+            maxConcurrentModelCalls:
+              loaded.system.resources.maxConcurrentModelCalls,
+          }),
+      {
+        config: loaded.initiative,
+        timezone: loaded.system.time.timezone,
+        quietHoursStart: loaded.system.time.quietHoursStart,
+        quietHoursEnd: loaded.system.time.quietHoursEnd,
+        emergency,
+        memory,
+        clock,
+      },
+    )
     // 启动时把 STOP 文件同步进数据库；删除文件不会自动恢复。
     const emergencyStatus = emergency.status()
     const chat = new KanobotChatService(storage, model, {
@@ -114,6 +142,15 @@ export async function apply(
             maxImageBytes: loaded.system.vision.maxImageBytes,
             maxDescriptionChars: loaded.system.vision.maxDescriptionChars,
           },
+      initiative: {
+        remindersEnabled: loaded.initiative.reminders.enabled,
+        maxReminderDaysAhead: loaded.initiative.reminders.maxDaysAhead,
+        followUpsEnabled: loaded.initiative.proactive.followUpsEnabled,
+        followUpWindowHours:
+          loaded.initiative.proactive.followUpWindowHours,
+        followUpMaxDaysAhead:
+          loaded.initiative.proactive.followUpMaxDaysAhead,
+      },
       timezone: loaded.system.time.timezone,
       clock,
     })
@@ -125,32 +162,24 @@ export async function apply(
       audit,
       timeline,
       emergency,
+      initiative,
       logger: ctx.logger,
     })
-    lifecycle = createPluginLifecycle({
-      heartbeatMs: config.heartbeatMs,
-      onHeartbeat: () => {
-        if (storage === undefined) return
-        try {
-          storage.maybeCreateDailyBackup()
-        } catch (error) {
-          // 后台备份失败不能静默；记录后保留下一次重试机会。
-          const message = `[kanobot] daily backup failed: ${formatError(error)}`
-          if (ctx.logger.error) {
-            ctx.logger.error(message)
-          } else {
-            ctx.logger.info(message)
-          }
-        }
-      },
+    scheduler = new InitiativeScheduler({
+      service: initiative,
+      intervalMs:
+        config.heartbeatMs ??
+        loaded.initiative.schedule.tickSeconds * 1_000,
+      logger: ctx.logger,
     })
+    scheduler.start()
 
     if (config.startupReportPath !== undefined) {
       // 外部启动脚本用这份报告区分“插件真的激活了”和“宿主进程还在运行”。
       writeStartupReport(config.startupReportPath, {
         plugin: PLUGIN_NAME,
         version: PLUGIN_VERSION,
-        startedAt: lifecycle.startedAt,
+        startedAt: scheduler.startedAt,
         pid: process.pid,
         configDir,
         dataDir: storage.dataDir,
@@ -176,6 +205,8 @@ export async function apply(
         ownerAuditCount: audit.count(),
         emergencyStopped: emergencyStatus.stopped,
         stopFilePresent: emergencyStatus.stopFilePresent,
+        initiativeEnabled: loaded.initiative.proactive.enabled,
+        initiativeTickSeconds: loaded.initiative.schedule.tickSeconds,
         identity: loaded.identity.mode,
       })
     }
@@ -193,14 +224,29 @@ export async function apply(
     // DSH 卸载插件时会调用这个 disposer，所有需要释放的资源都从这里收口。
     ctx.effect(() => () => {
       disposeChatSurface?.()
-      lifecycle?.dispose()
-      storage?.close()
+      const activeStorage = storage
+      const activeScheduler = scheduler
+      scheduler = undefined
+      if (activeScheduler === undefined) {
+        activeStorage?.close()
+      } else {
+        const idle = activeScheduler.disposeSync()
+        if (idle) {
+          storage = undefined
+          activeStorage?.close()
+        } else {
+          void activeScheduler.dispose().finally(() => {
+            storage = undefined
+            activeStorage?.close()
+          })
+        }
+      }
       ctx.logger.info(`[kanobot] ${PLUGIN_NAME} ${PLUGIN_VERSION} unloaded`)
     })
   } catch (error) {
     // 初始化过程中任何一步失败都不能留下定时器或打开的数据库。
     disposeChatSurface?.()
-    lifecycle?.dispose()
+    await scheduler?.dispose()
     try {
       storage?.close()
     } catch (closeError) {

@@ -143,6 +143,10 @@ export interface ChatEnvelopeView {
   errorCode: string | null
   commitmentsCreated: number
   commitmentsSkipped: number
+  reminderCandidatesCreated: number
+  reminderCandidatesSkipped: number
+  careItemsCreated: number
+  careItemsSkipped: number
 }
 
 /**

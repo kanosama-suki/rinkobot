@@ -88,33 +88,54 @@ function timeoutCount(): number {
 test('the real plugin apply/dispose cycle leaves no timer behind', async () => {
   const baseline = timeoutCount()
   const dataDir = mkdtempSync(join(tmpdir(), 'kanobot-plugin-data-'))
+  const originalSetInterval = globalThis.setInterval
+  const originalClearInterval = globalThis.clearInterval
+  let created = 0
+  let cleared = 0
+
+  // 调度器的 timer 会 unref，因此不会出现在 getActiveResourcesInfo() 里。
+  // 监视 setInterval/clearInterval 才能验证插件确实创建并清理了唯一 timer。
+  globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => {
+    created += 1
+    return originalSetInterval(...args)
+  }) as typeof setInterval
+  globalThis.clearInterval = ((timer: Parameters<typeof clearInterval>[0]) => {
+    cleared += 1
+    originalClearInterval(timer)
+  }) as typeof clearInterval
 
   try {
     for (let cycle = 0; cycle < 10; cycle += 1) {
       const fake = createFakeContext()
-      await apply(fake.ctx, {
-        configDir: examplesDir,
-        dataDir,
-        heartbeatMs: 60_000,
-      })
+      try {
+        await apply(fake.ctx, {
+          configDir: examplesDir,
+          dataDir,
+          heartbeatMs: 60_000,
+        })
 
-      assert.ok(
-        fake.logs.some(
-          line =>
-            line.includes(PLUGIN_NAME) &&
-            line.includes(PLUGIN_VERSION) &&
-            line.includes('loaded'),
-        ),
-      )
-      assert.ok(timeoutCount() >= baseline + 1)
+        assert.ok(
+          fake.logs.some(
+            line =>
+              line.includes(PLUGIN_NAME) &&
+              line.includes(PLUGIN_VERSION) &&
+              line.includes('loaded'),
+          ),
+        )
+        assert.equal(created, cycle + 1)
+      } finally {
+        // 断言失败时也必须先卸载插件，否则打开的数据库会掩盖真正的错误。
+        fake.dispose()
+        await new Promise<void>(resolve => setImmediate(resolve))
+      }
 
-      fake.dispose()
-      await new Promise<void>(resolve => setImmediate(resolve))
-
+      assert.equal(cleared, cycle + 1)
       assert.equal(timeoutCount(), baseline)
       assert.ok(fake.logs.some(line => line.includes('unloaded')))
     }
   } finally {
+    globalThis.setInterval = originalSetInterval
+    globalThis.clearInterval = originalClearInterval
     rmSync(dataDir, { recursive: true, force: true })
   }
 })

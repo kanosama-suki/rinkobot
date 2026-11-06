@@ -62,7 +62,12 @@ export interface ChatMessageInput {
 export type ModelCallStatus = 'running' | 'succeeded' | 'failed' | 'aborted'
 // memory_extraction 仅用于读取 M3.3 及更早的历史审计行；
 // vision 是 M3.7 独立图片转述调用，不产生 assistant message。
-export type ModelCallPurpose = 'chat' | 'memory_extraction' | 'vision'
+export type ModelCallPurpose =
+  | 'chat'
+  | 'memory_extraction'
+  | 'vision'
+  | 'initiative'
+  | 'daily_review'
 
 export interface ModelUsageRecord {
   inputTokens: number
@@ -89,7 +94,9 @@ export interface ModelPricingRecord {
 export interface ModelCallRecord {
   id: string
   conversationId: string
-  userMessageId: string
+  // 聊天/视觉调用锚定到触发它的用户消息；主动消息和每日整理没有当前
+  // 用户消息，因此使用 null，而不是伪造一条聊天记录。
+  userMessageId: string | null
   assistantMessageId: string | null
   purpose: ModelCallPurpose
   provider: string
@@ -113,7 +120,7 @@ export interface ModelCallRecord {
 
 export interface BeginModelCallInput {
   conversationId: string
-  userMessageId: string
+  userMessageId?: string | null
   purpose?: ModelCallPurpose
   provider: string
   model: string
@@ -218,17 +225,227 @@ export interface SetEmergencyStateInput {
   updatedAt?: string
 }
 
-export type OutboxStatus = 'pending' | 'delivered' | 'failed' | 'cancelled'
+export type OutboxStatus =
+  | 'pending'
+  | 'sending'
+  | 'delivered'
+  | 'failed'
+  | 'unknown'
+  | 'cancelled'
+  | 'expired'
+
+export type OutboxKind = 'proactive' | 'reminder' | 'system' | 'legacy'
 
 export interface OutboxRecord {
   id: string
   target: string
   payloadRef: string
+  kind: OutboxKind
   status: OutboxStatus
   dueAt: string | null
   createdAt: string
+  updatedAt: string
   attempts: number
+  maxAttempts: number
   lastErrorCode: string | null
+  deliveredMessageId: string | null
+}
+
+export interface OutboxDeliveryResult {
+  outbox: OutboxRecord
+  message: ChatMessageRecord
+}
+
+export interface InitiativeStateRecord {
+  lastTickAt: string | null
+  nextProactiveAt: string | null
+  lastProactiveAt: string | null
+  consecutiveUnanswered: number
+  circuitOpenedAt: string | null
+  lastDailyPlanDay: string | null
+  lastDailyReviewDay: string | null
+  lastReviewAttemptDay: string | null
+  dailyReviewAttempts: number
+  lastTrashPurgeDay: string | null
+  updatedAt: string
+}
+
+export interface UpdateInitiativeStateInput {
+  lastTickAt?: string | null
+  nextProactiveAt?: string | null
+  lastProactiveAt?: string | null
+  consecutiveUnanswered?: number
+  circuitOpenedAt?: string | null
+  lastDailyPlanDay?: string | null
+  lastDailyReviewDay?: string | null
+  lastReviewAttemptDay?: string | null
+  dailyReviewAttempts?: number
+  lastTrashPurgeDay?: string | null
+  updatedAt?: string
+}
+
+export interface DailyPlanItemRecord {
+  id: string
+  localDay: string
+  position: number
+  kind: string
+  titleRef: string
+  startsAt: string
+  endsAt: string
+  status: 'planned' | 'active' | 'completed' | 'skipped'
+  createdAt: string
+}
+
+export interface DailyPlanRecord {
+  localDay: string
+  createdAt: string
+  items: DailyPlanItemRecord[]
+}
+
+export interface PutDailyPlanInput {
+  localDay: string
+  createdAt?: string
+  items: Array<{
+    id: string
+    position: number
+    kind: string
+    title: string
+    startsAt: string
+    endsAt: string
+  }>
+}
+
+export type ReminderStatus =
+  | 'confirmed'
+  | 'queued'
+  | 'delivered'
+  | 'cancelled'
+  | 'failed'
+
+export interface ReminderRecord {
+  id: string
+  bodyRef: string
+  dueAt: string
+  status: ReminderStatus
+  createdAt: string
+  confirmedAt: string
+  deliveredAt: string | null
+  outboxId: string | null
+}
+
+export interface PutReminderInput {
+  id?: string
+  text: string
+  dueAt: string
+  createdAt?: string
+  confirmedAt?: string
+}
+
+export type ReminderCandidateStatus =
+  | 'pending'
+  | 'confirmed'
+  | 'rejected'
+
+export interface ReminderCandidateRecord {
+  id: string
+  bodyRef: string
+  dueAt: string
+  status: ReminderCandidateStatus
+  createdAt: string
+  sourceMessageId: string
+  confirmedReminderId: string | null
+}
+
+export interface PutReminderCandidateInput {
+  id?: string
+  text: string
+  dueAt: string
+  sourceMessageId: string
+  createdAt?: string
+}
+
+export interface ConfirmReminderCandidateResult {
+  candidate: ReminderCandidateRecord
+  reminder: ReminderRecord
+}
+
+export type CareItemStatus =
+  | 'pending'
+  | 'queued'
+  | 'delivered'
+  | 'dismissed'
+  | 'expired'
+
+export interface CareItemRecord {
+  id: string
+  sourceMessageId: string
+  bodyRef: string
+  dueFrom: string
+  dueUntil: string
+  status: CareItemStatus
+  createdAt: string
+  deliveredAt: string | null
+  outboxId: string | null
+}
+
+export interface PutCareItemInput {
+  id?: string
+  text: string
+  sourceMessageId: string
+  dueFrom: string
+  dueUntil: string
+  createdAt?: string
+}
+
+export interface EnqueueOutboxInput {
+  id?: string
+  target: string
+  kind: 'proactive' | 'reminder' | 'system'
+  text: string
+  dueAt?: string | null
+  maxAttempts: number
+  createdAt?: string
+  careItemIds?: string[]
+}
+
+export interface DailySummaryRecord {
+  id: string
+  localDay: string
+  bodyRef: string
+  sourceRefs: string[]
+  createdAt: string
+}
+
+export interface PutDailySummaryInput {
+  localDay: string
+  summary: string
+  sourceMessageIds: string[]
+  createdAt?: string
+}
+
+export interface InitiativeRunRecord {
+  id: string
+  occurredAt: string
+  kind:
+    | 'tick'
+    | 'daily_plan'
+    | 'daily_review'
+    | 'proactive'
+    | 'reminder'
+    | 'outbox'
+    | 'circuit'
+  outcome: 'allowed' | 'sent' | 'skipped' | 'failed'
+  detailCode: string
+  targetId: string | null
+}
+
+export interface RecordInitiativeRunInput {
+  kind: InitiativeRunRecord['kind']
+  outcome: InitiativeRunRecord['outcome']
+  detailCode: string
+  targetId?: string | null
+  occurredAt?: string
+  id?: string
 }
 
 export interface AppendedEvent {

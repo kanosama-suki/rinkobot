@@ -117,11 +117,51 @@ min_relevance = 0.5
 candidate_limit = 24
 `
 
+const validInitiative = `schema_version = 1
+
+[schedule]
+tick_seconds = 60
+daily_plan_at = "07:05"
+daily_review_at = "00:30"
+
+[proactive]
+enabled = true
+min_interval_minutes = 60
+max_interval_minutes = 120
+chat_cooldown_minutes = 15
+circuit_window_minutes = 10
+circuit_max_messages = 3
+morning_greeting = true
+long_silence_hours = 24
+unanswered_slowdown_multiplier = 0.5
+follow_ups_enabled = true
+follow_up_window_hours = 24
+
+[reminders]
+enabled = true
+max_days_ahead = 365
+
+[outbox]
+max_attempts = 5
+retry_backoff_minutes = 5
+expire_after_minutes = 1440
+
+[life]
+enabled = true
+max_plan_items = 4
+
+[review]
+enabled = true
+max_messages = 200
+max_attempts_per_day = 3
+`
+
 interface ConfigOverrides {
   system?: string
   identity?: string
   lifeState?: string
   memory?: string
+  initiative?: string
   policy?: string
 }
 
@@ -136,6 +176,11 @@ function writeConfigs(overrides: ConfigOverrides = {}): string {
     'utf8',
   )
   writeFileSync(join(dir, 'memory.toml'), overrides.memory ?? validMemory, 'utf8')
+  writeFileSync(
+    join(dir, 'initiative.toml'),
+    overrides.initiative ?? validInitiative,
+    'utf8',
+  )
   writeFileSync(join(dir, 'policy.toml'), overrides.policy ?? validPolicy, 'utf8')
   return dir
 }

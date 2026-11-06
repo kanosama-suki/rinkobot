@@ -1,0 +1,59 @@
+# 主动性、提醒、outbox、日常计划与每日整理的配置。
+# 这里只保存工程参数；人格兴趣和真实日程不放仓库。
+schema_version = 1
+
+[schedule]
+# 唯一后台循环的检查间隔；不是主动消息的发送间隔。
+tick_seconds = 60
+daily_plan_at = "07:05"
+# 00:30 整理前一天；关机错过时在之后启动补做。
+daily_review_at = "00:30"
+
+[proactive]
+enabled = true
+# 每次评估后重新抽取的间隔；实际发送仍要经过闸门。
+min_interval_minutes = 60
+max_interval_minutes = 120
+# 最近有任何聊天消息时不主动插话。
+chat_cooldown_minutes = 15
+# 防刷屏熔断；正常节奏碰不到。
+circuit_window_minutes = 10
+circuit_max_messages = 3
+# 醒来后的第一次评估可以带一句早安；是否真的发送由内容判断。
+morning_greeting = true
+# 传给她的连续沉默时长，不直接等于“必须发担心消息”。
+long_silence_hours = 24
+# 连续几次主动没有回复后放慢；不是固定文案规则。
+unanswered_slowdown_multiplier = 0.5
+# 只对明确需要后续关心的事（生病、考试、出行）建立一次性跟进项。
+follow_ups_enabled = true
+# 跟进项在合适时间窗内只使用一次，避免每轮重复提“你昨天生病了”。
+follow_up_window_hours = 24
+# 只接受未来一段时间内可解释的后续关心；不把模糊小事排到遥远未来。
+follow_up_max_days_ahead = 7
+
+[reminders]
+enabled = true
+# 自然语言提醒最多允许排到多少天之后；防止模型输出离谱年份。
+max_days_ahead = 365
+
+[outbox]
+max_attempts = 5
+retry_backoff_minutes = 5
+expire_after_minutes = 1440
+
+[life]
+enabled = true
+# 每日计划的软性活动上限；用户安排和承诺仍是硬约束。
+max_plan_items = 4
+# 软计划的排布窗口；模型只决定活动内容与时长，落库时间由确定性代码排布。
+day_start_at = "09:00"
+day_end_at = "23:00"
+item_gap_minutes = 15
+
+[review]
+enabled = true
+# 每次整理最多读取多少条当天正文，限制上下文和费用。
+max_messages = 200
+# 失败后有限重试，不无限循环。
+max_attempts_per_day = 3

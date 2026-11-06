@@ -16,6 +16,7 @@ import { ConfigError, ConfigFieldError } from './errors.ts'
 import type { ConfigIssue } from './errors.ts'
 import type {
   IdentityConfig,
+  InitiativeConfig,
   LifeStateConfig,
   LoadedConfig,
   MemoryConfig,
@@ -48,6 +49,7 @@ const CONFIG_FILES = {
   identity: 'identity.toml',
   lifeState: 'life-state.toml',
   memory: 'memory.toml',
+  initiative: 'initiative.toml',
   policy: 'policy.toml',
 } as const
 
@@ -58,6 +60,7 @@ interface ParsedFiles {
   identity?: TomlTable
   lifeState?: TomlTable
   memory?: TomlTable
+  initiative?: TomlTable
   policy?: TomlTable
 }
 
@@ -138,6 +141,18 @@ export function loadConfigFromDirectory(configDir: string): LoadedConfig {
     }
   }
 
+  let initiative: InitiativeConfig | undefined
+  if (parsed.initiative) {
+    try {
+      initiative = validateInitiative(
+        parsed.initiative,
+        join(configDir, CONFIG_FILES.initiative),
+      )
+    } catch (error) {
+      issues.push(toIssue(error, join(configDir, CONFIG_FILES.initiative)))
+    }
+  }
+
   let policy: PolicyConfig | undefined
   if (parsed.policy) {
     try {
@@ -148,11 +163,19 @@ export function loadConfigFromDirectory(configDir: string): LoadedConfig {
   }
 
   // 缺失文件和字段错误都会走这里；错误列表为空时才算加载成功。
-  if (issues.length > 0 || !system || !identity || !lifeState || !memory || !policy) {
+  if (
+    issues.length > 0 ||
+    !system ||
+    !identity ||
+    !lifeState ||
+    !memory ||
+    !initiative ||
+    !policy
+  ) {
     throw new ConfigError(issues)
   }
 
-  return { system, identity, lifeState, memory, policy }
+  return { system, identity, lifeState, memory, initiative, policy }
 }
 
 function readConfigFile(file: string): { table?: TomlTable; issue?: ConfigIssue } {
@@ -824,6 +847,276 @@ function validateMemory(table: TomlTable, file: string): MemoryConfig {
         'recall.candidate_limit',
         1,
         50,
+      ),
+    },
+  }
+}
+
+function validateInitiative(
+  table: TomlTable,
+  file: string,
+): InitiativeConfig {
+  knownKeys(
+    table,
+    [
+      'schema_version',
+      'schedule',
+      'proactive',
+      'reminders',
+      'outbox',
+      'life',
+      'review',
+    ],
+    '',
+  )
+  requireSchemaVersion(table, CONFIG_SCHEMA_VERSION)
+
+  const schedule = requiredTable(table, 'schedule', 'schedule')
+  knownKeys(
+    schedule,
+    ['tick_seconds', 'daily_plan_at', 'daily_review_at'],
+    'schedule',
+  )
+  const dailyPlanAt = requiredString(
+    schedule,
+    'daily_plan_at',
+    'schedule.daily_plan_at',
+    5,
+    5,
+  )
+  const dailyReviewAt = requiredString(
+    schedule,
+    'daily_review_at',
+    'schedule.daily_review_at',
+    5,
+    5,
+  )
+  requireQuietTime(dailyPlanAt, 'schedule.daily_plan_at')
+  requireQuietTime(dailyReviewAt, 'schedule.daily_review_at')
+
+  const proactive = requiredTable(table, 'proactive', 'proactive')
+  knownKeys(
+    proactive,
+    [
+      'enabled',
+      'min_interval_minutes',
+      'max_interval_minutes',
+      'chat_cooldown_minutes',
+      'circuit_window_minutes',
+      'circuit_max_messages',
+      'morning_greeting',
+      'long_silence_hours',
+      'unanswered_slowdown_multiplier',
+      'follow_ups_enabled',
+      'follow_up_window_hours',
+      'follow_up_max_days_ahead',
+    ],
+    'proactive',
+  )
+  const minIntervalMinutes = requiredInteger(
+    proactive,
+    'min_interval_minutes',
+    'proactive.min_interval_minutes',
+    5,
+    1_440,
+  )
+  const maxIntervalMinutes = requiredInteger(
+    proactive,
+    'max_interval_minutes',
+    'proactive.max_interval_minutes',
+    5,
+    1_440,
+  )
+  if (maxIntervalMinutes < minIntervalMinutes) {
+    fail(
+      'proactive.max_interval_minutes',
+      'must be greater than or equal to proactive.min_interval_minutes',
+    )
+  }
+
+  const reminders = requiredTable(table, 'reminders', 'reminders')
+  knownKeys(reminders, ['enabled', 'max_days_ahead'], 'reminders')
+
+  const outbox = requiredTable(table, 'outbox', 'outbox')
+  knownKeys(
+    outbox,
+    ['max_attempts', 'retry_backoff_minutes', 'expire_after_minutes'],
+    'outbox',
+  )
+
+  const life = requiredTable(table, 'life', 'life')
+  knownKeys(
+    life,
+    [
+      'enabled',
+      'max_plan_items',
+      'day_start_at',
+      'day_end_at',
+      'item_gap_minutes',
+    ],
+    'life',
+  )
+  const dayStartAt =
+    optionalString(life, 'day_start_at', 'life.day_start_at', 5, 5) ??
+    '09:00'
+  const dayEndAt =
+    optionalString(life, 'day_end_at', 'life.day_end_at', 5, 5) ??
+    '23:00'
+  requireQuietTime(dayStartAt, 'life.day_start_at')
+  requireQuietTime(dayEndAt, 'life.day_end_at')
+  if (dayEndAt <= dayStartAt) {
+    fail('life.day_end_at', 'must be later than life.day_start_at')
+  }
+
+  const review = requiredTable(table, 'review', 'review')
+  knownKeys(review, ['enabled', 'max_messages', 'max_attempts_per_day'], 'review')
+
+  return {
+    schemaVersion: CONFIG_SCHEMA_VERSION,
+    schedule: {
+      tickSeconds: requiredInteger(
+        schedule,
+        'tick_seconds',
+        'schedule.tick_seconds',
+        10,
+        3_600,
+      ),
+      dailyPlanAt,
+      dailyReviewAt,
+    },
+    proactive: {
+      enabled: requiredBoolean(proactive, 'enabled', 'proactive.enabled'),
+      minIntervalMinutes,
+      maxIntervalMinutes,
+      chatCooldownMinutes: requiredInteger(
+        proactive,
+        'chat_cooldown_minutes',
+        'proactive.chat_cooldown_minutes',
+        1,
+        1_440,
+      ),
+      circuitWindowMinutes: requiredInteger(
+        proactive,
+        'circuit_window_minutes',
+        'proactive.circuit_window_minutes',
+        1,
+        1_440,
+      ),
+      circuitMaxMessages: requiredInteger(
+        proactive,
+        'circuit_max_messages',
+        'proactive.circuit_max_messages',
+        1,
+        100,
+      ),
+      morningGreeting: requiredBoolean(
+        proactive,
+        'morning_greeting',
+        'proactive.morning_greeting',
+      ),
+      longSilenceHours: requiredInteger(
+        proactive,
+        'long_silence_hours',
+        'proactive.long_silence_hours',
+        1,
+        720,
+      ),
+      unansweredSlowdownMultiplier: requiredNumber(
+        proactive,
+        'unanswered_slowdown_multiplier',
+        'proactive.unanswered_slowdown_multiplier',
+        0,
+        5,
+      ),
+      followUpsEnabled: requiredBoolean(
+        proactive,
+        'follow_ups_enabled',
+        'proactive.follow_ups_enabled',
+      ),
+      followUpWindowHours: requiredInteger(
+        proactive,
+        'follow_up_window_hours',
+        'proactive.follow_up_window_hours',
+        1,
+        168,
+      ),
+      followUpMaxDaysAhead:
+        optionalInteger(
+          proactive,
+          'follow_up_max_days_ahead',
+          'proactive.follow_up_max_days_ahead',
+          1,
+          60,
+        ) ?? 7,
+    },
+    reminders: {
+      enabled: requiredBoolean(reminders, 'enabled', 'reminders.enabled'),
+      maxDaysAhead: requiredInteger(
+        reminders,
+        'max_days_ahead',
+        'reminders.max_days_ahead',
+        1,
+        365,
+      ),
+    },
+    outbox: {
+      maxAttempts: requiredInteger(
+        outbox,
+        'max_attempts',
+        'outbox.max_attempts',
+        1,
+        100,
+      ),
+      retryBackoffMinutes: requiredInteger(
+        outbox,
+        'retry_backoff_minutes',
+        'outbox.retry_backoff_minutes',
+        1,
+        1_440,
+      ),
+      expireAfterMinutes: requiredInteger(
+        outbox,
+        'expire_after_minutes',
+        'outbox.expire_after_minutes',
+        1,
+        43_200,
+      ),
+    },
+    life: {
+      enabled: requiredBoolean(life, 'enabled', 'life.enabled'),
+      maxPlanItems: requiredInteger(
+        life,
+        'max_plan_items',
+        'life.max_plan_items',
+        1,
+        12,
+      ),
+      dayStartAt,
+      dayEndAt,
+      itemGapMinutes:
+        optionalInteger(
+          life,
+          'item_gap_minutes',
+          'life.item_gap_minutes',
+          0,
+          180,
+        ) ?? 15,
+    },
+    review: {
+      enabled: requiredBoolean(review, 'enabled', 'review.enabled'),
+      maxMessages: requiredInteger(
+        review,
+        'max_messages',
+        'review.max_messages',
+        1,
+        2_000,
+      ),
+      maxAttemptsPerDay: requiredInteger(
+        review,
+        'max_attempts_per_day',
+        'review.max_attempts_per_day',
+        1,
+        10,
       ),
     },
   }

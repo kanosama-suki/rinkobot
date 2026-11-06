@@ -63,7 +63,7 @@ export interface AuditTimelineEntry {
     outputTokens: number | null
     estimatedCost: number | null
     conversationId: string
-    userMessageId: string
+    userMessageId: string | null
     assistantMessageId: string | null
   }
   style?: {

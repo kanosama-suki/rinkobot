@@ -11,6 +11,7 @@ import type {
   BodyRecord,
   ChatRole,
   OutboxRecord,
+  OutboxKind,
   OutboxStatus,
 } from './types.ts'
 
@@ -21,9 +22,18 @@ export const MAX_CHAT_MESSAGE_CHARS = 4_000
 export const MAX_MEMORY_TEXT_CHARS = 4_000
 const OUTBOX_STATUSES: readonly OutboxStatus[] = [
   'pending',
+  'sending',
   'delivered',
   'failed',
+  'unknown',
   'cancelled',
+  'expired',
+]
+const OUTBOX_KINDS: readonly OutboxKind[] = [
+  'proactive',
+  'reminder',
+  'system',
+  'legacy',
 ]
 
 export interface BodyInput {
@@ -62,24 +72,55 @@ export function validateOutboxRecord(value: OutboxRecord): OutboxRecord {
   if (!OUTBOX_STATUSES.includes(value.status)) {
     invalid('outbox.status', `unsupported status "${value.status}"`)
   }
+  if (!OUTBOX_KINDS.includes(value.kind)) {
+    invalid('outbox.kind', `unsupported kind "${value.kind}"`)
+  }
   const dueAt =
     value.dueAt === null ? null : validateInstant(value.dueAt, 'outbox.dueAt')
   const createdAt = validateInstant(value.createdAt, 'outbox.createdAt')
+  const updatedAt = validateInstant(value.updatedAt, 'outbox.updatedAt')
+  if (Date.parse(updatedAt) < Date.parse(createdAt)) {
+    invalid('outbox.updatedAt', 'must not be earlier than createdAt')
+  }
   if (!Number.isInteger(value.attempts) || value.attempts < 0) {
     invalid('outbox.attempts', 'expected a non-negative integer')
   }
+  if (!Number.isInteger(value.maxAttempts) || value.maxAttempts < 1) {
+    invalid('outbox.maxAttempts', 'expected a positive integer')
+  }
+  if (value.attempts > value.maxAttempts) {
+    invalid('outbox.attempts', 'must not exceed maxAttempts')
+  }
   if (value.lastErrorCode !== null && !ERROR_CODE.test(value.lastErrorCode)) {
     invalid('outbox.lastErrorCode', 'expected a lowercase error code')
+  }
+  const deliveredMessageId =
+    value.deliveredMessageId === null
+      ? null
+      : validateIdentifier(value.deliveredMessageId, 'outbox.deliveredMessageId')
+  if (
+    value.status === 'delivered' &&
+    value.kind !== 'legacy' &&
+    deliveredMessageId === null
+  ) {
+    invalid('outbox.deliveredMessageId', 'delivered outbox requires a message ID')
+  }
+  if (value.status !== 'delivered' && deliveredMessageId !== null) {
+    invalid('outbox.deliveredMessageId', 'only delivered outbox may link a message')
   }
   return {
     id,
     target: value.target,
     payloadRef,
+    kind: value.kind,
     status: value.status,
     dueAt,
     createdAt,
+    updatedAt,
     attempts: value.attempts,
+    maxAttempts: value.maxAttempts,
     lastErrorCode: value.lastErrorCode,
+    deliveredMessageId,
   }
 }
 

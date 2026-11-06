@@ -10,7 +10,10 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import test from 'node:test'
 
-import { createWorkspace } from '../helpers/storage-fixture.ts'
+import {
+  createWorkspace,
+  dropCurrentInitiativeTables,
+} from '../helpers/storage-fixture.ts'
 
 test('a v7 style check table migrates to v8 without copying reply text', () => {
   const ws = createWorkspace(test)
@@ -79,7 +82,7 @@ test('a v7 style check table migrates to v8 without copying reply text', () => {
       ).all() as Array<Record<string, unknown>>
       assert.deepEqual(
         versions.map(row => Number(row.version)),
-        [1, 2, 3, 4, 5, 6, 7, 8],
+        [1, 2, 3, 4, 5, 6, 7, 8, 9],
       )
       const inspection = db.prepare(
         `SELECT * FROM reply_style_checks
@@ -120,6 +123,7 @@ function downgradeToV7(databasePath: string): void {
       CREATE INDEX reply_style_checks_checked_at_index
         ON reply_style_checks(checked_at);
     `)
+    dropCurrentInitiativeTables(db)
     db.exec('DELETE FROM schema_migrations')
     const migration = db.prepare(
       'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',

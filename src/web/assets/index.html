@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>Kanobot · M3 聊天、记忆与审计</title>
+    <title>Kanobot · M4 聊天、主动性与陪伴</title>
     <link rel="stylesheet" href="/kanobot/app.css">
   </head>
   <body>
@@ -13,8 +13,8 @@
         <div class="brand-block">
           <span class="brand-mark" aria-hidden="true">K</span>
           <div>
-            <p class="eyebrow">Kanobot / M3</p>
-            <h1>聊天、记忆与视觉</h1>
+            <p class="eyebrow">Kanobot / M4</p>
+            <h1>聊天、记忆与主动性</h1>
           </div>
         </div>
         <div class="topbar-actions">
@@ -84,6 +84,15 @@
               aria-controls="tab-status"
               data-tab="status"
             >状态</button>
+            <button
+              id="tab-button-initiative"
+              class="tab-button"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="tab-initiative"
+              data-tab="initiative"
+            >主动性 <span id="initiative-badge" class="tab-count">0</span></button>
             <button
               id="tab-button-memory"
               class="tab-button"
@@ -166,18 +175,18 @@
 
             <section class="panel-card subtle-card">
               <p class="eyebrow">当前边界</p>
-              <h2>M3 对话、状态与视觉</h2>
+              <h2>M4 陪伴与自主活动</h2>
               <ul class="boundary-list">
                 <li>复用 DSH 浏览器登录态</li>
                 <li>单次模型调用返回一个 JSON 信封</li>
                 <li>正文仍然逐字流式显示</li>
                 <li>记忆候选复用引用、敏感和去重门禁</li>
                 <li>心情与承诺写入版本化状态事件</li>
-                <li>字段损坏时保留正文并反馈降级原因</li>
                 <li>图片由独立、可配置的视觉模型转述</li>
-                <li>图片字节不写入正文、事件或长期记忆</li>
-                <li>视觉模型不可用时带图消息明确失败</li>
-                <li>仍是占位人格；主动消息尚未接入</li>
+                <li>唯一调度循环处理计划、提醒和主动消息</li>
+                <li>提醒只有你确认后才会进入发送队列</li>
+                <li>安静时段不发主动消息，但提醒照常送达</li>
+                <li>私人摘要只在登录后的所有者面板显示</li>
               </ul>
             </section>
 
@@ -191,6 +200,106 @@
               <button id="emergency-button" class="danger-button" type="button" disabled>
                 紧急停止
               </button>
+            </section>
+          </section>
+
+          <section
+            id="tab-initiative"
+            class="tab-panel initiative-panel"
+            role="tabpanel"
+            aria-labelledby="tab-button-initiative"
+            hidden
+          >
+            <section class="panel-card">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">她的节奏</p>
+                  <h2>主动性</h2>
+                </div>
+                <div class="initiative-actions">
+                  <button id="notification-enable" class="small-button" type="button">
+                    开启通知
+                  </button>
+                  <button id="initiative-refresh" class="small-button" type="button">
+                    刷新
+                  </button>
+                </div>
+              </div>
+              <p id="notification-status" class="initiative-note" hidden></p>
+              <dl class="status-list initiative-status-list">
+                <div>
+                  <dt>主动消息</dt>
+                  <dd id="initiative-enabled">—</dd>
+                </div>
+                <div>
+                  <dt>安静时段</dt>
+                  <dd id="initiative-quiet">—</dd>
+                </div>
+                <div>
+                  <dt>上次主动</dt>
+                  <dd id="initiative-last">—</dd>
+                </div>
+                <div>
+                  <dt>下次评估</dt>
+                  <dd id="initiative-next">—</dd>
+                </div>
+                <div>
+                  <dt>连续未回复</dt>
+                  <dd id="initiative-unanswered">—</dd>
+                </div>
+                <div>
+                  <dt>最近窗口</dt>
+                  <dd id="initiative-window">—</dd>
+                </div>
+              </dl>
+              <div id="circuit-warning" class="initiative-warning" hidden>
+                <p id="circuit-text"></p>
+                <button id="circuit-reset" class="secondary-button" type="button">
+                  恢复主动消息
+                </button>
+              </div>
+              <p id="initiative-error" class="inline-error" role="alert" hidden></p>
+            </section>
+
+            <section class="panel-card">
+              <p class="eyebrow">软计划</p>
+              <h2>她今天想做什么</h2>
+              <p class="initiative-note">
+                这是她可以自己调整的日常，不会覆盖你的明确安排、睡眠和承诺。
+              </p>
+              <div id="plan-list" class="initiative-list"></div>
+              <p id="plan-empty" class="memory-empty">今天还没有生成计划。</p>
+            </section>
+
+            <section class="panel-card">
+              <p class="eyebrow">确认后生效</p>
+              <h2>待确认的提醒</h2>
+              <p class="initiative-note">
+                模型只提交候选；你确认后才会在到点时发送。
+              </p>
+              <div id="reminder-candidate-list" class="initiative-list"></div>
+              <p id="reminder-candidate-empty" class="memory-empty">
+                没有待确认的提醒。
+              </p>
+            </section>
+
+            <section class="panel-card">
+              <p class="eyebrow">时间与关心</p>
+              <h2>提醒与后续关心</h2>
+              <div id="reminder-list" class="initiative-list"></div>
+              <p id="reminder-empty" class="memory-empty">没有提醒。</p>
+              <div id="care-list" class="initiative-list"></div>
+              <p id="care-empty" class="memory-empty">没有需要后续关心的事。</p>
+            </section>
+
+            <section class="panel-card">
+              <p class="eyebrow">只有所有者可见</p>
+              <h2>每日摘要</h2>
+              <p class="initiative-note">
+                她不主动把私人整理端到你面前；你仍可在这里查看和纠正记忆。
+              </p>
+              <div id="summary-list" class="initiative-list"></div>
+              <p id="summary-empty" class="memory-empty">还没有每日摘要。</p>
             </section>
           </section>
 

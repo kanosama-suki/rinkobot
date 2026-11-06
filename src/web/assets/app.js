@@ -1,5 +1,5 @@
 /**
- * M3.7 聊天、记忆、状态、视觉、审计与紧急停止面板。
+ * M4.0 聊天、记忆、主动性、状态、视觉、审计与紧急停止面板。
  *
  * 所有来自服务器和模型的文本都通过 textContent 渲染；SSE 只接受本页面
  * 固定的聊天流格式。记忆操作必须经过 DSH 登录态，页面不保存任何凭据。
@@ -36,9 +36,34 @@ const elements = {
   statusEvents: document.querySelector('#status-events'),
   emptyNote: document.querySelector('#empty-note'),
   tabStatus: document.querySelector('#tab-status'),
+  tabInitiative: document.querySelector('#tab-initiative'),
   tabMemory: document.querySelector('#tab-memory'),
   tabAudit: document.querySelector('#tab-audit'),
   tabButtons: Array.from(document.querySelectorAll('.tab-button')),
+  initiativeBadge: document.querySelector('#initiative-badge'),
+  initiativeEnabled: document.querySelector('#initiative-enabled'),
+  initiativeQuiet: document.querySelector('#initiative-quiet'),
+  initiativeLast: document.querySelector('#initiative-last'),
+  initiativeNext: document.querySelector('#initiative-next'),
+  initiativeUnanswered: document.querySelector('#initiative-unanswered'),
+  initiativeWindow: document.querySelector('#initiative-window'),
+  initiativeRefresh: document.querySelector('#initiative-refresh'),
+  initiativeError: document.querySelector('#initiative-error'),
+  notificationEnable: document.querySelector('#notification-enable'),
+  notificationStatus: document.querySelector('#notification-status'),
+  circuitWarning: document.querySelector('#circuit-warning'),
+  circuitText: document.querySelector('#circuit-text'),
+  circuitReset: document.querySelector('#circuit-reset'),
+  planList: document.querySelector('#plan-list'),
+  planEmpty: document.querySelector('#plan-empty'),
+  reminderCandidateList: document.querySelector('#reminder-candidate-list'),
+  reminderCandidateEmpty: document.querySelector('#reminder-candidate-empty'),
+  reminderList: document.querySelector('#reminder-list'),
+  reminderEmpty: document.querySelector('#reminder-empty'),
+  careList: document.querySelector('#care-list'),
+  careEmpty: document.querySelector('#care-empty'),
+  summaryList: document.querySelector('#summary-list'),
+  summaryEmpty: document.querySelector('#summary-empty'),
   memoryBadge: document.querySelector('#memory-badge'),
   memoryAdd: document.querySelector('#memory-add'),
   memorySearch: document.querySelector('#memory-search'),
@@ -73,9 +98,11 @@ const elements = {
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
+const POLL_INTERVAL_MS = 30_000
 
 const state = {
   sending: false,
+  polling: false,
   image: null,
   maxImageBytes: MAX_IMAGE_BYTES,
   messageIds: new Set(),
@@ -88,6 +115,7 @@ const state = {
   emergency: null,
   auditSource: 'all',
   auditEntries: [],
+  initiative: null,
 }
 
 void initialize()
@@ -110,6 +138,71 @@ async function initialize() {
   } catch (error) {
     showNotice(errorMessage(error))
   }
+  try {
+    await loadInitiative()
+  } catch (error) {
+    showInitiativeError(errorMessage(error))
+  }
+  updateNotificationControls()
+  window.setInterval(() => {
+    void pollUpdates()
+  }, POLL_INTERVAL_MS)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') void pollUpdates()
+  })
+}
+
+async function pollUpdates() {
+  if (state.polling) return
+  state.polling = true
+  try {
+    const previousProactiveAt = state.initiative?.lastProactiveAt ?? null
+    let initiativeView = null
+    try {
+      initiativeView = await loadInitiative()
+    } catch {
+      // 主动性接口可能被宿主关闭；已有错误会在打开页签时显示。
+    }
+    if (!state.sending) {
+      try {
+        const newMessages = await refreshConversation()
+        const latestProactiveAt = initiativeView?.lastProactiveAt ?? null
+        if (
+          latestProactiveAt !== null &&
+          latestProactiveAt !== previousProactiveAt &&
+          document.visibilityState !== 'visible'
+        ) {
+          const proactiveMessage = newMessages.find(message =>
+            message.role === 'assistant' &&
+            message.createdAt === latestProactiveAt
+          )
+          if (proactiveMessage !== undefined) {
+            notifyProactiveMessage(proactiveMessage)
+          }
+        }
+      } catch {
+        // 轮询是后台增强；失败不打断当前聊天或面板操作。
+      }
+    }
+  } finally {
+    state.polling = false
+  }
+}
+
+async function refreshConversation() {
+  const previousIds = new Set(state.messageIds)
+  const view = await fetchConversation()
+  applyModel(view.model)
+  applyVision(view.vision)
+  applyState(view.state)
+  applyUsage(view.modelUsage)
+  const newMessages = []
+  for (const message of view.messages) {
+    if (previousIds.has(message.id)) continue
+    appendMessage(message.role, message.text, message.createdAt, message.id)
+    newMessages.push(message)
+  }
+  return newMessages
 }
 
 async function fetchConversation() {
@@ -237,6 +330,9 @@ async function sendMessage() {
         appendEnvelopeOutcome(assistant, event.envelope)
         assistant = null
         void loadMemories().catch(error => showMemoryError(errorMessage(error)))
+        void loadInitiative().catch(error =>
+          showInitiativeError(errorMessage(error)),
+        )
       } else if (event.type === 'error') {
         throw new Error(event.message || '聊天回复失败。')
       }
@@ -496,6 +592,20 @@ function appendEnvelopeOutcome(article, envelope) {
   ) {
     messages.push(`新增 ${envelope.commitmentsCreated} 条承诺`)
   }
+  if (
+    typeof envelope.reminderCandidatesCreated === 'number' &&
+    envelope.reminderCandidatesCreated > 0
+  ) {
+    messages.push(
+      `新增 ${envelope.reminderCandidatesCreated} 条待确认提醒`,
+    )
+  }
+  if (
+    typeof envelope.careItemsCreated === 'number' &&
+    envelope.careItemsCreated > 0
+  ) {
+    messages.push(`新增 ${envelope.careItemsCreated} 条后续关心`)
+  }
   if (messages.length === 0) return
   const note = document.createElement('p')
   note.className = 'style-outcome'
@@ -517,6 +627,16 @@ function envelopeIssueLabel(code) {
     case 'commitments_skipped':
     case 'commitments_not_applied':
       return '部分承诺未写入'
+    case 'reminder_candidates_not_array':
+    case 'reminder_candidates_skipped':
+    case 'reminder_candidates_disabled':
+    case 'reminder_candidates_rejected':
+      return '部分提醒候选未创建'
+    case 'care_candidates_not_array':
+    case 'care_candidates_skipped':
+    case 'care_candidates_disabled':
+    case 'care_candidates_rejected':
+      return '部分关心事项未创建'
     default:
       return ''
   }
@@ -679,6 +799,413 @@ function formatDate(value) {
     month: '2-digit',
     day: '2-digit',
   }).format(date)
+}
+
+async function loadInitiative() {
+  const response = await fetch('/kanobot/api/initiative', {
+    credentials: 'same-origin',
+    headers: { accept: 'application/json' },
+  })
+  if (response.status === 404) {
+    renderInitiativeUnavailable()
+    return null
+  }
+  if (!response.ok) {
+    throw new Error(await responseMessage(response, '读取主动性状态失败'))
+  }
+  const view = await response.json()
+  applyInitiative(view)
+  hideInitiativeError()
+  return view
+}
+
+function applyInitiative(view) {
+  if (!view || typeof view !== 'object') return
+  state.initiative = view
+  elements.initiativeEnabled.textContent =
+    view.enabled === true ? '已开启，可偶尔主动联系' : '已关闭'
+  elements.initiativeQuiet.textContent =
+    view.quietNow === true ? '当前安静，不主动打扰' : '当前可主动联系'
+  elements.initiativeLast.textContent =
+    view.lastProactiveAt === null
+      ? '还没有主动说过话'
+      : formatDateTime(view.lastProactiveAt)
+  elements.initiativeNext.textContent =
+    view.nextProactiveAt === null
+      ? '尚未安排'
+      : formatDateTime(view.nextProactiveAt)
+  elements.initiativeUnanswered.textContent =
+    `${Number(view.consecutiveUnanswered) || 0} 条`
+  elements.initiativeWindow.textContent =
+    `${Number(view.circuit?.recentMessageCount) || 0} 条主动消息`
+
+  const circuitOpen = view.circuit?.open === true
+  elements.circuitWarning.hidden = !circuitOpen
+  if (circuitOpen) {
+    elements.circuitText.textContent =
+      `短时间主动消息偏多，已在 ${formatDateTime(view.circuit.openedAt)} 暂停。` +
+      '你可以等她安静一会儿，或确认后手动恢复。'
+  }
+
+  renderPlan(view.plan)
+  const candidates = Array.isArray(view.reminderCandidates)
+    ? view.reminderCandidates
+    : []
+  const reminders = Array.isArray(view.reminders) ? view.reminders : []
+  const careItems = Array.isArray(view.careItems) ? view.careItems : []
+  const summaries = Array.isArray(view.summaries) ? view.summaries : []
+  renderReminderCandidates(candidates)
+  renderReminders(reminders)
+  renderCareItems(careItems)
+  renderSummaries(summaries)
+
+  const pendingCare = careItems.filter(item => item.status === 'pending').length
+  elements.initiativeBadge.textContent = String(
+    candidates.length + pendingCare,
+  )
+}
+
+function renderInitiativeUnavailable() {
+  state.initiative = null
+  elements.initiativeBadge.textContent = '0'
+  elements.initiativeEnabled.textContent = '当前插件未启用'
+  elements.initiativeQuiet.textContent = '—'
+  elements.initiativeLast.textContent = '—'
+  elements.initiativeNext.textContent = '—'
+  elements.initiativeUnanswered.textContent = '—'
+  elements.initiativeWindow.textContent = '—'
+  elements.circuitWarning.hidden = true
+  elements.planList.replaceChildren()
+  elements.reminderCandidateList.replaceChildren()
+  elements.reminderList.replaceChildren()
+  elements.careList.replaceChildren()
+  elements.summaryList.replaceChildren()
+  elements.planEmpty.hidden = false
+  elements.planEmpty.textContent = '当前插件没有提供主动性数据。'
+  elements.reminderCandidateEmpty.hidden = false
+  elements.reminderEmpty.hidden = false
+  elements.careEmpty.hidden = false
+  elements.summaryEmpty.hidden = false
+}
+
+function renderPlan(plan) {
+  elements.planList.replaceChildren()
+  if (!plan || !Array.isArray(plan.items) || plan.items.length === 0) {
+    elements.planEmpty.hidden = false
+    elements.planEmpty.textContent = '今天还没有生成计划。'
+    return
+  }
+  elements.planEmpty.hidden = true
+  for (const item of plan.items) {
+    elements.planList.append(initiativeItem({
+      text: String(item.title ?? ''),
+      chips: [
+        planKindLabel(item.kind),
+        `${formatClock(item.startsAt)}–${formatClock(item.endsAt)}`,
+        planStatusLabel(item.status),
+      ],
+      pending: item.status === 'active',
+    }))
+  }
+}
+
+function renderReminderCandidates(candidates) {
+  elements.reminderCandidateList.replaceChildren()
+  if (candidates.length === 0) {
+    elements.reminderCandidateEmpty.hidden = false
+    return
+  }
+  elements.reminderCandidateEmpty.hidden = true
+  for (const candidate of candidates) {
+    elements.reminderCandidateList.append(initiativeItem({
+      text: String(candidate.text ?? ''),
+      chips: [`提醒时间 ${formatDateTime(candidate.dueAt)}`],
+      pending: candidate.status === 'pending',
+      actions: [
+        actionButton('确认', 'confirm-reminder', candidate.id, false),
+        actionButton('拒绝', 'reject-reminder', candidate.id, true),
+      ],
+    }))
+  }
+}
+
+function renderReminders(reminders) {
+  elements.reminderList.replaceChildren()
+  if (reminders.length === 0) {
+    elements.reminderEmpty.hidden = false
+    return
+  }
+  elements.reminderEmpty.hidden = true
+  for (const reminder of reminders) {
+    const cancellable =
+      reminder.status === 'confirmed' || reminder.status === 'queued'
+    const chips = [
+      `时间 ${formatDateTime(reminder.dueAt)}`,
+      reminderStatusLabel(reminder.status),
+    ]
+    if (reminder.deliveredAt !== null) {
+      chips.push(`送达 ${formatDateTime(reminder.deliveredAt)}`)
+    }
+    elements.reminderList.append(initiativeItem({
+      text: String(reminder.text ?? ''),
+      chips,
+      pending: reminder.status === 'confirmed' || reminder.status === 'queued',
+      actions: cancellable
+        ? [actionButton('取消', 'cancel-reminder', reminder.id, true)]
+        : [],
+    }))
+  }
+}
+
+function renderCareItems(items) {
+  elements.careList.replaceChildren()
+  if (items.length === 0) {
+    elements.careEmpty.hidden = false
+    return
+  }
+  elements.careEmpty.hidden = true
+  for (const item of items) {
+    elements.careList.append(initiativeItem({
+      text: String(item.text ?? ''),
+      chips: [
+        `关心窗口 ${formatDateTime(item.dueFrom)}–${formatDateTime(item.dueUntil)}`,
+        careStatusLabel(item.status),
+      ],
+      pending: item.status === 'pending' || item.status === 'queued',
+    }))
+  }
+}
+
+function renderSummaries(summaries) {
+  elements.summaryList.replaceChildren()
+  if (summaries.length === 0) {
+    elements.summaryEmpty.hidden = false
+    return
+  }
+  elements.summaryEmpty.hidden = true
+  for (const summary of summaries) {
+    const details = document.createElement('details')
+    details.className = 'initiative-item summary-item'
+    const heading = document.createElement('summary')
+    heading.textContent =
+      `${summary.localDay} · ${formatDateTime(summary.createdAt)}`
+    const body = document.createElement('p')
+    body.textContent = String(summary.summary ?? '')
+    details.append(heading, body)
+    if (Array.isArray(summary.sourceMessageIds)) {
+      const meta = document.createElement('div')
+      meta.className = 'initiative-item-meta'
+      meta.append(chip(`来源 ${summary.sourceMessageIds.length} 条消息`))
+      details.append(meta)
+    }
+    elements.summaryList.append(details)
+  }
+}
+
+function initiativeItem({ text, chips, actions = [], pending = false }) {
+  const article = document.createElement('article')
+  article.className = pending ? 'initiative-item pending' : 'initiative-item'
+  const body = document.createElement('p')
+  body.className = 'initiative-item-text'
+  body.textContent = text
+  article.append(body)
+  if (chips.length > 0) {
+    const meta = document.createElement('div')
+    meta.className = 'initiative-item-meta'
+    for (const label of chips) meta.append(chip(label))
+    article.append(meta)
+  }
+  if (actions.length > 0) {
+    const controls = document.createElement('div')
+    controls.className = 'initiative-item-actions'
+    controls.append(...actions)
+    article.append(controls)
+  }
+  return article
+}
+
+function formatClock(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
+function planKindLabel(value) {
+  switch (value) {
+    case 'reading':
+      return '阅读'
+    case 'movie':
+      return '观影'
+    case 'simulation':
+      return '模拟生活'
+    case 'study':
+      return '学习'
+    case 'resting':
+      return '休息'
+    case 'walk':
+      return '散步'
+    case 'music':
+      return '听音乐'
+    default:
+      return '日常'
+  }
+}
+
+function planStatusLabel(value) {
+  switch (value) {
+    case 'active':
+      return '进行中'
+    case 'completed':
+      return '已完成'
+    case 'skipped':
+      return '已跳过'
+    default:
+      return '待进行'
+  }
+}
+
+function reminderStatusLabel(value) {
+  switch (value) {
+    case 'confirmed':
+      return '已确认'
+    case 'queued':
+      return '发送队列中'
+    case 'delivered':
+      return '已送达'
+    case 'cancelled':
+      return '已取消'
+    case 'failed':
+      return '发送失败'
+    default:
+      return '未知状态'
+  }
+}
+
+function careStatusLabel(value) {
+  switch (value) {
+    case 'pending':
+      return '等待合适时机'
+    case 'queued':
+      return '准备关心'
+    case 'delivered':
+      return '已经关心过'
+    case 'dismissed':
+      return '已忽略'
+    case 'expired':
+      return '窗口已过'
+    default:
+      return '未知状态'
+  }
+}
+
+function updateNotificationControls() {
+  if (!('Notification' in window)) {
+    elements.notificationEnable.disabled = true
+    elements.notificationEnable.textContent = '不支持通知'
+    showNotificationStatus('这个浏览器不支持桌面通知；页面内仍会显示新消息。')
+    return
+  }
+  switch (Notification.permission) {
+    case 'granted':
+      elements.notificationEnable.disabled = true
+      elements.notificationEnable.textContent = '通知已开启'
+      showNotificationStatus('页面在后台时，她主动发来的新消息会弹出桌面通知。')
+      break
+    case 'denied':
+      elements.notificationEnable.disabled = true
+      elements.notificationEnable.textContent = '通知被阻止'
+      showNotificationStatus('浏览器已阻止通知，请在站点权限中恢复。')
+      break
+    default:
+      elements.notificationEnable.disabled = false
+      elements.notificationEnable.textContent = '开启通知'
+      showNotificationStatus('开启后，页面在后台时也能收到她的主动消息提醒。')
+  }
+}
+
+async function requestNotificationPermission() {
+  if (!('Notification' in window)) return
+  try {
+    await Notification.requestPermission()
+  } finally {
+    updateNotificationControls()
+  }
+}
+
+function showNotificationStatus(message) {
+  elements.notificationStatus.textContent = message
+  elements.notificationStatus.hidden = false
+}
+
+function notifyProactiveMessage(message) {
+  if (!('Notification' in window)) return
+  if (Notification.permission !== 'granted') return
+  if (document.visibilityState === 'visible') return
+  const text = String(message.text ?? '').replace(/\s+/g, ' ').trim()
+  const body = Array.from(text).slice(0, 120).join('')
+  const notification = new Notification('她发来一条消息', {
+    body: body === '' ? '打开 Kanobot 看看。' : body,
+    tag: `kanobot-${message.id}`,
+  })
+  notification.onclick = () => {
+    window.focus()
+    switchTab('status')
+    notification.close()
+  }
+}
+
+async function runInitiativeAction(action, id, label) {
+  let path = ''
+  let confirmation = ''
+  if (action === 'confirm-reminder') {
+    path =
+      `/kanobot/api/initiative/reminder-candidates/${encodeURIComponent(id)}/confirm`
+    confirmation = `确认这条提醒？\n${label}`
+  } else if (action === 'reject-reminder') {
+    path =
+      `/kanobot/api/initiative/reminder-candidates/${encodeURIComponent(id)}/reject`
+  } else if (action === 'cancel-reminder') {
+    path = `/kanobot/api/initiative/reminders/${encodeURIComponent(id)}`
+    confirmation = '取消这条提醒？'
+  } else if (action === 'reset-circuit') {
+    path = '/kanobot/api/initiative/circuit/reset'
+    confirmation = '恢复主动消息？之后的间隔仍受冷却和安静时段限制。'
+  } else {
+    return
+  }
+  if (confirmation !== '' && !window.confirm(confirmation)) return
+  elements.initiativeError.hidden = true
+  const response = await fetch(path, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ confirm: true }),
+  })
+  if (!response.ok) {
+    throw new Error(await responseMessage(response, '主动性操作失败'))
+  }
+  const payload = await response.json()
+  if (payload?.initiative && typeof payload.initiative === 'object') {
+    applyInitiative(payload.initiative)
+  } else {
+    await loadInitiative()
+  }
+  hideInitiativeError()
+}
+
+function showInitiativeError(message) {
+  elements.initiativeError.textContent = message
+  elements.initiativeError.hidden = false
+}
+
+function hideInitiativeError() {
+  elements.initiativeError.hidden = true
 }
 
 async function loadControl() {
@@ -1005,7 +1532,14 @@ for (const button of elements.tabButtons) {
 }
 
 function switchTab(tab) {
-  if (tab !== 'status' && tab !== 'memory' && tab !== 'audit') return
+  if (
+    tab !== 'status' &&
+    tab !== 'initiative' &&
+    tab !== 'memory' &&
+    tab !== 'audit'
+  ) {
+    return
+  }
   state.activeTab = tab
   for (const button of elements.tabButtons) {
     const active = button.dataset.tab === tab
@@ -1013,14 +1547,57 @@ function switchTab(tab) {
     button.setAttribute('aria-selected', active ? 'true' : 'false')
   }
   elements.tabStatus.hidden = tab !== 'status'
+  elements.tabInitiative.hidden = tab !== 'initiative'
   elements.tabMemory.hidden = tab !== 'memory'
   elements.tabAudit.hidden = tab !== 'audit'
-  if (tab === 'memory') {
+  if (tab === 'initiative') {
+    void loadInitiative().catch(error =>
+      showInitiativeError(errorMessage(error)),
+    )
+  } else if (tab === 'memory') {
     void loadMemories().catch(error => showMemoryError(errorMessage(error)))
   } else if (tab === 'audit') {
     void loadAudit().catch(error => showAuditError(errorMessage(error)))
   }
 }
+
+for (const list of [
+  elements.reminderCandidateList,
+  elements.reminderList,
+]) {
+  list.addEventListener('click', event => {
+    const button = event.target.closest('button[data-action]')
+    if (!(button instanceof HTMLButtonElement)) return
+    const id = button.dataset.id
+    const action = button.dataset.action
+    if (!id || !action) return
+    const item = button.closest('.initiative-item')
+    const label =
+      item?.querySelector('.initiative-item-text')?.textContent ?? ''
+    void runInitiativeAction(action, id, label).catch(error =>
+      showInitiativeError(errorMessage(error)),
+    )
+  })
+}
+
+elements.initiativeRefresh.addEventListener('click', () => {
+  void loadInitiative().catch(error =>
+    showInitiativeError(errorMessage(error)),
+  )
+})
+
+elements.circuitReset.addEventListener('click', () => {
+  const label = '恢复主动消息'
+  void runInitiativeAction('reset-circuit', 'circuit', label).catch(error =>
+    showInitiativeError(errorMessage(error)),
+  )
+})
+
+elements.notificationEnable.addEventListener('click', () => {
+  void requestNotificationPermission().catch(error =>
+    showInitiativeError(errorMessage(error)),
+  )
+})
 
 for (const button of elements.memoryFilters) {
   button.addEventListener('click', () => {

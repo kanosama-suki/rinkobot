@@ -17,6 +17,8 @@ import { MAX_CHAT_REPLY_CHARS } from './types.ts'
 export const CHAT_ENVELOPE_SCHEMA_VERSION = 1
 export const MAX_ENVELOPE_MEMORY_CANDIDATES = 3
 export const MAX_ENVELOPE_COMMITMENTS = 3
+export const MAX_ENVELOPE_REMINDER_CANDIDATES = 3
+export const MAX_ENVELOPE_CARE_CANDIDATES = 3
 
 export interface ChatEnvelopeAppraisal {
   valence: number
@@ -29,6 +31,17 @@ export interface ChatEnvelopeCommitment {
   dueAt: string | null
 }
 
+export interface ChatEnvelopeReminderCandidate {
+  text: string
+  dueAt: string
+}
+
+export interface ChatEnvelopeCareCandidate {
+  text: string
+  dueFrom: string
+  dueUntil: string
+}
+
 export interface ParsedChatEnvelope {
   schemaVersion: 1
   reply: string
@@ -37,6 +50,10 @@ export interface ParsedChatEnvelope {
   appraisal: ChatEnvelopeAppraisal | null
   commitments: ChatEnvelopeCommitment[]
   skippedCommitments: number
+  reminderCandidates: ChatEnvelopeReminderCandidate[]
+  skippedReminderCandidates: number
+  careCandidates: ChatEnvelopeCareCandidate[]
+  skippedCareCandidates: number
   // 可降级的问题代码；正文仍然有效时不会因此丢弃整轮回复。
   issues: string[]
 }
@@ -145,6 +162,14 @@ export function parseChatEnvelope(
     root.commitments,
     issues,
   )
+  const {
+    candidates: reminderCandidates,
+    skipped: skippedReminderCandidates,
+  } = parseReminderCandidates(root.reminderCandidates, issues)
+  const {
+    candidates: careCandidates,
+    skipped: skippedCareCandidates,
+  } = parseCareCandidates(root.careCandidates, issues)
 
   return {
     schemaVersion: CHAT_ENVELOPE_SCHEMA_VERSION,
@@ -154,6 +179,10 @@ export function parseChatEnvelope(
     appraisal,
     commitments,
     skippedCommitments,
+    reminderCandidates,
+    skippedReminderCandidates,
+    careCandidates,
+    skippedCareCandidates,
     issues,
   }
 }
@@ -241,6 +270,105 @@ function parseCommitment(value: unknown): ChatEnvelopeCommitment | null {
     return null
   }
   return { text, dueAt }
+}
+
+function parseReminderCandidates(
+  value: unknown,
+  issues: string[],
+): {
+  candidates: ChatEnvelopeReminderCandidate[]
+  skipped: number
+} {
+  if (!Array.isArray(value)) {
+    if (value !== undefined) issues.push('reminder_candidates_not_array')
+    return { candidates: [], skipped: 0 }
+  }
+  let skipped = Math.max(
+    0,
+    value.length - MAX_ENVELOPE_REMINDER_CANDIDATES,
+  )
+  const candidates: ChatEnvelopeReminderCandidate[] = []
+  for (const raw of value.slice(0, MAX_ENVELOPE_REMINDER_CANDIDATES)) {
+    const candidate = parseReminderCandidate(raw)
+    if (candidate === null) {
+      skipped += 1
+    } else {
+      candidates.push(candidate)
+    }
+  }
+  if (skipped > 0) issues.push('reminder_candidates_skipped')
+  return { candidates, skipped }
+}
+
+function parseReminderCandidate(
+  value: unknown,
+): ChatEnvelopeReminderCandidate | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null
+  }
+  const record = value as Record<string, unknown>
+  if (typeof record.text !== 'string' || typeof record.dueAt !== 'string') {
+    return null
+  }
+  const text = record.text.trim()
+  const length = Array.from(text).length
+  if (length === 0 || length > 500 || text.includes('\0')) return null
+  const dueAt = parseDueAt(record.dueAt)
+  return dueAt === null ? null : { text, dueAt }
+}
+
+function parseCareCandidates(
+  value: unknown,
+  issues: string[],
+): {
+  candidates: ChatEnvelopeCareCandidate[]
+  skipped: number
+} {
+  if (!Array.isArray(value)) {
+    if (value !== undefined) issues.push('care_candidates_not_array')
+    return { candidates: [], skipped: 0 }
+  }
+  let skipped = Math.max(0, value.length - MAX_ENVELOPE_CARE_CANDIDATES)
+  const candidates: ChatEnvelopeCareCandidate[] = []
+  for (const raw of value.slice(0, MAX_ENVELOPE_CARE_CANDIDATES)) {
+    const candidate = parseCareCandidate(raw)
+    if (candidate === null) {
+      skipped += 1
+    } else {
+      candidates.push(candidate)
+    }
+  }
+  if (skipped > 0) issues.push('care_candidates_skipped')
+  return { candidates, skipped }
+}
+
+function parseCareCandidate(
+  value: unknown,
+): ChatEnvelopeCareCandidate | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null
+  }
+  const record = value as Record<string, unknown>
+  if (
+    typeof record.text !== 'string' ||
+    typeof record.dueFrom !== 'string' ||
+    typeof record.dueUntil !== 'string'
+  ) {
+    return null
+  }
+  const text = record.text.trim()
+  const length = Array.from(text).length
+  if (length === 0 || length > 500 || text.includes('\0')) return null
+  const dueFrom = parseDueAt(record.dueFrom)
+  const dueUntil = parseDueAt(record.dueUntil)
+  if (
+    dueFrom === null ||
+    dueUntil === null ||
+    Date.parse(dueUntil) <= Date.parse(dueFrom)
+  ) {
+    return null
+  }
+  return { text, dueFrom, dueUntil }
 }
 
 function parseDueAt(value: unknown): string | null {

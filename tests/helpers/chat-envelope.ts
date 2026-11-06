@@ -12,6 +12,8 @@ export interface TestEnvelopeOptions {
     confidence: number
   } | null
   commitments?: unknown[]
+  reminderCandidates?: unknown[]
+  careCandidates?: unknown[]
 }
 
 export function chatEnvelopeText(
@@ -26,5 +28,7 @@ export function chatEnvelopeText(
       ? { valence: 0.1, arousal: 0.3, confidence: 0.6 }
       : options.appraisal,
     commitments: options.commitments ?? [],
+    reminderCandidates: options.reminderCandidates ?? [],
+    careCandidates: options.careCandidates ?? [],
   })
 }

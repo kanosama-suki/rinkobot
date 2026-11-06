@@ -22,6 +22,10 @@ import {
   type KanobotMemoryService,
 } from '../core/memory/index.ts'
 import {
+  InitiativeError,
+  type KanobotInitiativeService,
+} from '../core/initiative/index.ts'
+import {
   AUDIT_TIMELINE_SOURCES,
   type AuditTimelineFilter,
   type AuditTimelineService,
@@ -90,6 +94,7 @@ export interface ChatSurfaceOptions {
   audit?: OwnerAuditService
   timeline?: AuditTimelineService
   emergency?: KanobotEmergencyService
+  initiative?: KanobotInitiativeService
   logger: ChatLogger
   auth?: ChatAuthMessages
 }
@@ -227,6 +232,24 @@ async function handleRequest(
     return
   }
 
+  if (pathname === `${CHAT_BASE_PATH}/api/initiative`) {
+    if (req.method !== 'GET') {
+      writeMethodNotAllowed(res, ['GET'], true)
+      return
+    }
+    if (options.initiative === undefined) {
+      writeError(res, 404, 'not_found', '主动性接口未启用', true)
+      return
+    }
+    writeJson(res, 200, options.initiative.view())
+    return
+  }
+
+  if (pathname.startsWith(`${CHAT_BASE_PATH}/api/initiative/`)) {
+    await handleInitiativeAction(req, res, pathname, options)
+    return
+  }
+
   if (pathname === `${CHAT_BASE_PATH}/api/control`) {
     await handleControlRequest(req, res, options)
     return
@@ -246,6 +269,88 @@ async function handleRequest(
   }
 
   writeError(res, 404, 'not_found', '接口不存在', api)
+}
+
+const INITIATIVE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+
+async function handleInitiativeAction(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+  options: ChatSurfaceOptions,
+): Promise<void> {
+  if (req.method !== 'POST') {
+    writeMethodNotAllowed(res, ['POST'], true)
+    return
+  }
+  const initiative = options.initiative
+  if (initiative === undefined) {
+    writeError(res, 404, 'not_found', '主动性接口未启用', true)
+    return
+  }
+  const body = await readJsonBody(req)
+  requireConfirmation(body)
+  const relative = pathname.slice(`${CHAT_BASE_PATH}/api/initiative/`.length)
+  const parts = relative.split('/').filter(Boolean)
+  try {
+    if (
+      parts.length === 2 &&
+      parts[0] === 'circuit' &&
+      parts[1] === 'reset'
+    ) {
+      writeJson(res, 200, { initiative: initiative.resetCircuit() })
+      return
+    }
+    if (
+      parts.length === 3 &&
+      parts[0] === 'reminder-candidates'
+    ) {
+      const id = parts[1] ?? ''
+      if (!INITIATIVE_ID.test(id)) {
+        writeError(res, 400, 'invalid_reminder_id', '提醒候选 ID 不合法', true)
+        return
+      }
+      if (parts[2] === 'confirm') {
+        initiative.confirmReminderCandidate(id)
+        writeJson(res, 200, { initiative: initiative.view() })
+        return
+      }
+      if (parts[2] === 'reject') {
+        initiative.rejectReminderCandidate(id)
+        writeJson(res, 200, { initiative: initiative.view() })
+        return
+      }
+    }
+    if (parts.length === 2 && parts[0] === 'reminders') {
+      const id = parts[1] ?? ''
+      if (!INITIATIVE_ID.test(id)) {
+        writeError(res, 400, 'invalid_reminder_id', '提醒 ID 不合法', true)
+        return
+      }
+      initiative.cancelReminder(id)
+      writeJson(res, 200, { initiative: initiative.view() })
+      return
+    }
+    writeError(res, 404, 'not_found', '主动性操作不存在', true)
+  } catch (error) {
+    if (error instanceof InitiativeError) {
+      writeError(res, 409, error.code, '主动性操作当前不可执行', true)
+      return
+    }
+    if (error instanceof StorageError) {
+      writeError(
+        res,
+        error.code === 'REFERENCE_MISSING' ? 404 : 409,
+        error.code.toLowerCase(),
+        error.code === 'REFERENCE_MISSING'
+          ? '对象不存在'
+          : '对象状态不允许这个操作',
+        true,
+      )
+      return
+    }
+    throw error
+  }
 }
 
 const MEMORY_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
