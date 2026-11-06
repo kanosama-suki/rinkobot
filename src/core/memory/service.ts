@@ -2,7 +2,8 @@
  * 长期记忆的写入、纠正、候选转正和检索服务。
  *
  * 边界：
- * - 用户明确陈述且不敏感的内容立即 active；
+ * - 用户明确要求记住、或重要度高于 normal 的不敏感陈述立即 active；
+ * - 普通寒暄和一次性小事只进入 candidate，不会仅因来自用户就永久化；
  * - 推断、外部内容、敏感内容和第三人内容只能先成为 candidate；
  * - 纠正通过 replaceMemory 原子替换旧记录，旧记录保留证据但不可检索；
  * - 正文仍只存在 bodies，FTS 只为 active 记忆维护索引。
@@ -32,6 +33,12 @@ import {
   type OwnerMemoryInput,
   type RememberMemoryInput,
 } from './types.ts'
+import {
+  analyzeMemoryQuery,
+  compareMemoryRecallResults,
+  scoreMemoryRelevance,
+  type MemoryRecallResult,
+} from './recall.ts'
 
 const MEMORY_SOURCES: readonly MemorySource[] = [
   'user_stated',
@@ -54,13 +61,38 @@ const DEFAULT_CONFIDENCE: Record<MemorySource, number> = {
   external: 0.5,
 }
 
+export interface MemoryRecallSettings {
+  minRelevance: number
+  candidateLimit: number
+}
+
+export interface MemoryServiceOptions {
+  recall?: Partial<MemoryRecallSettings>
+}
+
+export const DEFAULT_MEMORY_RECALL_SETTINGS: MemoryRecallSettings = {
+  // 两个主题词至少命中一个；单词查询必须命中该词。
+  minRelevance: 0.5,
+  // FTS 先多取一些候选，再在内存里按问题意图过滤和排序。
+  candidateLimit: 24,
+}
+
 export class KanobotMemoryService {
   private readonly storage: KanobotStorage
   private readonly clock: Clock
+  private readonly recallSettings: MemoryRecallSettings
 
-  constructor(storage: KanobotStorage, clock: Clock = systemClock) {
+  constructor(
+    storage: KanobotStorage,
+    clock: Clock = systemClock,
+    options: MemoryServiceOptions = {},
+  ) {
     this.storage = storage
     this.clock = clock
+    this.recallSettings = validateRecallSettings({
+      ...DEFAULT_MEMORY_RECALL_SETTINGS,
+      ...options.recall,
+    })
   }
 
   remember(input: RememberMemoryInput): MemoryRecord {
@@ -68,9 +100,15 @@ export class KanobotMemoryService {
     const sensitivity = input.sensitivity === undefined
       ? 'normal'
       : requireSensitivity(input.sensitivity)
-    const importance = input.importance === undefined
+    const requestedImportance = input.importance === undefined
       ? 'normal'
       : requireImportance(input.importance)
+    const explicitlyRequested = input.explicitlyRequested === true
+    // “记住这个”是明确指令。模型即使只给 normal，也不能把它当普通寒暄；
+    // 但敏感和第三人内容仍只能进候选，不能绕过隐私门禁。
+    const importance = explicitlyRequested && requestedImportance === 'normal'
+      ? 'important'
+      : requestedImportance
     const confidence = input.confidence ?? DEFAULT_CONFIDENCE[source]
     if (
       typeof confidence !== 'number' ||
@@ -93,7 +131,9 @@ export class KanobotMemoryService {
       sensitivity,
       importance,
       status:
-        source === 'user_stated' && sensitivity === 'normal'
+        source === 'user_stated' &&
+        sensitivity === 'normal' &&
+        (explicitlyRequested || importance !== 'normal')
           ? 'active'
           : 'candidate',
       id: input.id,
@@ -186,7 +226,7 @@ export class KanobotMemoryService {
     query: string,
     limit = 5,
     options: MemoryRecallOptions = {},
-  ): MemorySearchResult[] {
+  ): MemoryRecallResult[] {
     if (!Number.isInteger(limit) || limit < 1 || limit > 10) {
       throw new MemoryInputError(
         'invalid_limit',
@@ -194,31 +234,53 @@ export class KanobotMemoryService {
       )
     }
     const bounded = Array.from(query).slice(0, 500).join('')
-    const precise = this.storage.searchMemories(bounded, {
+    const plan = analyzeMemoryQuery(bounded)
+    if (plan.topics.length === 0) return []
+
+    const candidateLimit = Math.max(
       limit,
+      Math.min(50, this.recallSettings.candidateLimit),
+    )
+    const precise = this.storage.searchMemories(bounded, {
+      limit: candidateLimit,
       markRecalled: false,
       matchMode: 'all',
     })
-    const broad = precise.length >= limit
-      ? []
-      : this.storage.searchMemories(bounded, {
-          limit,
-          markRecalled: false,
-          matchMode: 'any',
-        })
+    // 精确查询可能只命中“喜欢”这类常见词，真正相关的记忆反而需要宽松
+    // 查询补回。因此两次查询都取有界候选，再统一按主题覆盖率过滤。
+    const broad = this.storage.searchMemories(bounded, {
+      limit: candidateLimit,
+      markRecalled: false,
+      matchMode: 'any',
+    })
 
-    const merged: MemorySearchResult[] = []
+    const merged: MemoryRecallResult[] = []
     const seen = new Set<string>()
     for (const result of [...precise, ...broad]) {
       if (seen.has(result.memory.id)) continue
       seen.add(result.memory.id)
-      merged.push(result)
-      if (merged.length >= limit) break
+      const relevance = scoreMemoryRelevance(plan, result)
+      if (
+        relevance.rejectedReason !== null ||
+        relevance.score < this.recallSettings.minRelevance
+      ) {
+        continue
+      }
+      merged.push({
+        ...result,
+        relevance: relevance.score,
+        matchedTopics: relevance.matchedTopics,
+      })
     }
-    if (merged.length > 0 && (options.markRecalled ?? true)) {
-      this.storage.markMemoriesRecalled(merged.map(result => result.memory.id))
+    merged.sort(compareMemoryRecallResults)
+    const admitted = merged.slice(0, limit)
+    if (admitted.length > 0 && (options.markRecalled ?? true)) {
+      this.storage.markMemoriesRecalled(
+        admitted.map(result => result.memory.id),
+        this.clock.now().toISOString(),
+      )
     }
-    return merged
+    return admitted
   }
 
   /**
@@ -364,6 +426,33 @@ export class KanobotMemoryService {
     })
     return quoteRef
   }
+}
+
+function validateRecallSettings(
+  settings: MemoryRecallSettings,
+): MemoryRecallSettings {
+  if (
+    typeof settings.minRelevance !== 'number' ||
+    !Number.isFinite(settings.minRelevance) ||
+    settings.minRelevance < 0 ||
+    settings.minRelevance > 1
+  ) {
+    throw new MemoryInputError(
+      'invalid_min_relevance',
+      'memory recall minRelevance must be a number between 0 and 1',
+    )
+  }
+  if (
+    !Number.isInteger(settings.candidateLimit) ||
+    settings.candidateLimit < 1 ||
+    settings.candidateLimit > 50
+  ) {
+    throw new MemoryInputError(
+      'invalid_candidate_limit',
+      'memory recall candidateLimit must be an integer between 1 and 50',
+    )
+  }
+  return settings
 }
 
 function requireMemorySource(value: unknown): MemorySource {

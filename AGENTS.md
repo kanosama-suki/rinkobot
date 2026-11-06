@@ -2,7 +2,7 @@
 
 ## 0. 项目一句话
 
-在 DSH 宿主中自研一个连续、可恢复、可审计的陪伴型机器人；M3 网页聊天闭环已经完成，包括网页聊天、Magpie 网关、长期记忆、风格控制、单次对话信封、上下文预算、可配置视觉、本地开发入口、统一审计和风格自动重写。下一步进入 M4 主动、提醒与每日整理，先只做网页渠道；M4.5 再做 DSH 插件 + 独立程序的发行基础和模型 provider 设置页。
+在 DSH 宿主中自研一个连续、可恢复、可审计的陪伴型机器人；M3 网页聊天闭环已经完成，M4 第 0 步“记忆质量门控”也已完成，包括网页聊天、Magpie 网关、长期记忆、风格控制、单次对话信封、上下文预算、可配置视觉、本地开发入口、统一审计、风格自动重写、记忆相关性和显式记忆兜底。下一步继续 M4 的调度、生活事件、主动消息、提醒与每日整理，先只做网页渠道；M4.5 再做 DSH 插件 + 独立程序的发行基础和模型 provider 设置页。
 
 ## 1. 必读顺序
 
@@ -10,6 +10,7 @@
 2. `docs/need.md`：产品需求、关系边界和设计理由。
 3. `structure.md`：文件和模块放置规则。
 4. `docs/plugin-research.md`：第三方机制的可信度和限制。
+5. `docs/memory-research.md`：记忆插件的源码调研、可借鉴机制和当前取舍。
 
 `README.md` 用于快速入门；`docs/plugin-catalog.zh.md` 只作为第三方索引，不是依赖或安全依据。`docs/astra/` 和 `docs/gemini/` 是草稿，不作为执行依据。
 
@@ -71,13 +72,13 @@ node scripts/preflight-runtime.ts F:\kanobot\dsh\test-home\kanobot\config F:\kan
 npm run test:lifecycle -- --output F:\kanobot\dsh\m1-plugin-lifecycle.json
 ```
 
-`npm test` 使用 `node --test`，当前 171 项通过。自动测试不会读取真实人格文件、调用真实模型接口或操作正式数据库；真实 Magpie 验收使用隔离的 4100 测试 Profile，M3.1/M3.3/M3.4/M3.5/M3.6/M3.7 证据分别见 `docs/m3.1-acceptance.md`、`docs/m3.3-acceptance.md`、`docs/m3.4-acceptance.md`、`docs/m3.5-acceptance.md`、`docs/m3.6-acceptance.md` 和 `docs/m3.7-acceptance.md`。M3 收尾的本地开发入口、统一审计和风格重写见 `docs/m3-completion-acceptance.md`。测试实例的启停、配置预检和工具审计脚本在 `F:\kanobot\dsh`，不在本仓库内；正式 `4096` 实例不属于测试命令。
+`npm test` 使用 `node --test`，当前 181 项通过。自动测试不会读取真实人格文件、调用真实模型接口或操作正式数据库；真实 Magpie 验收使用隔离的 4100 测试 Profile，M3.1/M3.3/M3.4/M3.5/M3.6/M3.7 证据分别见 `docs/m3.1-acceptance.md`、`docs/m3.3-acceptance.md`、`docs/m3.4-acceptance.md`、`docs/m3.5-acceptance.md`、`docs/m3.6-acceptance.md` 和 `docs/m3.7-acceptance.md`。M3 收尾的本地开发入口、统一审计和风格重写见 `docs/m3-completion-acceptance.md`；M4 第 0 步记忆门控见 `docs/m4.0-memory-acceptance.md`。测试实例的启停、配置预检和工具审计脚本在 `F:\kanobot\dsh`，不在本仓库内；正式 `4096` 实例不属于测试命令。
 
 ## 5. 当前状态
 
-- 阶段：M3 网页聊天闭环已完成（2026-11-05）；下一步进入 M4 主动、提醒与每日整理。M4 先只做网页渠道；M4.5 处理 DSH 插件 + 独立程序的双形态、模型 provider 设置页和发行安全门禁。真实模型比较与主模型选型仍后置。
-- 已存在：DSH 测试 Profile、Host 插件、不经过 DSH 的本地开发入口、严格配置 loader、版本化事件与纯 reducer、SQLite 主库和独立墓碑库、确定性快照、回收站/彻底清除、每日备份、恢复测试、配置/数据库预检、复用 DSH 登录态的 `/kanobot/` 网页、SSE 聊天、schema v8 对话/消息/模型调用审计（含 `purpose`，包括独立 `vision` 调用）/FTS5 记忆索引/风格检查（含一次自动重写记录）/所有者审计/紧急状态、Magpie 精确模型网关、超时/有限重试、token 与估算费用记录、并发/每日调用熔断、长期记忆候选规则、纠正与中文双列检索、聊天前记忆召回注入、单次聊天调用返回的 JSON 信封、正文流式显示、同一轮记忆候选写入、appraisal 状态事件、commitment 正文与事件、所有者记忆面板、确定性回复风格检查与一次受控重写、7 个脚本化人格场景、跨所有者/记忆/模型/风格/聊天的统一审计时间线、紧急停止与 `STOP` 文件双重开关、`[context]` 分块字符预算、当前时间/星期/沉默时长、定性状态描述、相对时间 `dueAt`，以及独立可配置的 `[vision]` 模型、单图输入校验、视觉转述/失败闭环和不落库保证。
-- 尚未存在：真实模型场景比较、QQ 适配器、浏览器 worker、VM 和自进化。统一审计只覆盖已有元数据，读取行为和失败的所有者操作仍未完整审计。视觉模型不自动选型或比较，当前只支持本机回环 Magpie 路由、单张图片和当轮内存转述。
+- 阶段：M4 已开始，第 0 步“记忆质量门控”已完成（2026-11-06）；下一步继续 M4 的单一调度循环、生活事件、主动消息、outbox、提醒和每日整理。M4 先只做网页渠道；M4.5 处理 DSH 插件 + 独立程序的双形态、模型 provider 设置页和发行安全门禁。真实模型比较与主模型选型仍后置。
+- 已存在：DSH 测试 Profile、Host 插件、不经过 DSH 的本地开发入口、严格配置 loader、版本化事件与纯 reducer、SQLite 主库和独立墓碑库、确定性快照、回收站/彻底清除、每日备份、恢复测试、配置/数据库预检、复用 DSH 登录态的 `/kanobot/` 网页、SSE 聊天、schema v8 对话/消息/模型调用审计（含 `purpose`，包括独立 `vision` 调用）/FTS5 记忆索引/风格检查（含一次自动重写记录）/所有者审计/紧急状态、Magpie 精确模型网关、超时/有限重试、token 与估算费用记录、并发/每日调用熔断、长期记忆候选规则、纠正与中文双列检索、聊天前记忆召回注入、记忆问题意图/主语判断、相关性门槛和重复抑制、显式“记住这个”确定性兜底、单次聊天调用返回的 JSON 信封、正文流式显示、同一轮记忆候选写入、appraisal 状态事件、commitment 正文与事件、所有者记忆面板、确定性回复风格检查与一次受控重写、7 个脚本化人格场景、跨所有者/记忆/模型/风格/聊天的统一审计时间线、紧急停止与 `STOP` 文件双重开关、`[context]` 分块字符预算、当前时间/星期/沉默时长、定性状态描述、相对时间 `dueAt`，以及独立可配置的 `[vision]` 模型、单图输入校验、视觉转述/失败闭环和不落库保证。
+- 尚未存在：M4 调度器、生活事件、主动消息、提醒、每日整理、真实模型场景比较、QQ 适配器、浏览器 worker、VM 和自进化。统一审计只覆盖已有元数据，读取行为和失败的所有者操作仍未完整审计。视觉模型不自动选型或比较，当前只支持本机回环 Magpie 路由、单张图片和当轮内存转述。
 - 已知部署基线：Windows 10（10.0.19045），Node v24.19.0，DSH `0.2.1-rc.5`（npm `latest` 标签；当前没有非 RC 版本）。插件源码在本目录，测试实例使用独立 `DSH_HOME=F:\kanobot\dsh\test-home`。
 - 已知清理记录：旧插件、NapCat 和旧 VM 已从宿主清理；重新部署必须按新设计进行，不能复用旧配置假设。
 - 已确认的产品决定见 `docs/plan.md` 第 1 节。
@@ -93,7 +94,7 @@ npm run test:lifecycle -- --output F:\kanobot\dsh\m1-plugin-lifecycle.json
 - M3.7 的独立视觉模型、单图输入、视觉审计、失败闭环和真实 4100 结果见 `docs/m3.7-acceptance.md`。
 - M3 收尾的本地开发入口、统一审计、风格自动重写、schema v8 和自动测试结果见 `docs/m3-completion-acceptance.md`。
 - 测试 Profile 数据在 `F:\kanobot\dsh\test-home\kanobot\data`；主库备份不包含独立墓碑库，迁移和恢复时必须单独保留 `tombstones.sqlite`。
-- 最近更新时间：2026-11-05。
+- 最近更新时间：2026-11-06。
 
 ## 6. 代码规范（后续实现时适用）
 

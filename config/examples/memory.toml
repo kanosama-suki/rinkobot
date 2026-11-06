@@ -3,3 +3,10 @@ schema_version = 1
 
 [trash]
 retention_days = 30
+
+[recall]
+# 当前问题至少要覆盖多少比例的主题词，才允许把记忆注入提示词。
+# 两个主题词时 0.5 表示至少命中一个；无关记忆宁可不注入。
+min_relevance = 0.5
+# 先取多少条全文检索候选，再按问题意图和相关性重新过滤。
+candidate_limit = 24

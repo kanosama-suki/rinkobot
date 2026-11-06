@@ -38,6 +38,9 @@ export {
   normalizeMemoryText,
 } from './records.ts'
 export {
+  listMemorySearchTokens,
+} from './memory-search.ts'
+export {
   KanobotStorage,
   openStorageFromConfig,
   resolveConfiguredLayout,

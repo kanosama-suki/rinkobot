@@ -21,10 +21,12 @@ import {
   type ModelCallRecord,
 } from '../storage/index.ts'
 import { StorageError } from '../storage/index.ts'
-import type {
-  KanobotMemoryService,
-  MemoryExtractionSummary,
-  ParsedMemoryCandidate,
+import {
+  extractExplicitMemoryText,
+  hasExplicitRememberInstruction,
+  type KanobotMemoryService,
+  type MemoryExtractionSummary,
+  type ParsedMemoryCandidate,
 } from '../memory/index.ts'
 import {
   CHAT_CONVERSATION_ID,
@@ -102,6 +104,8 @@ reply 必须紧跟在 schemaVersion 后面，因为系统会边生成边显示�
 规则：
 - reply 是 1..4000 字的字符串，换行必须写成 \\n；不要在 JSON 外再说一遍。
 - memoryCandidates 最多 3 条；没有就输出空数组。text 用第三人称，提到所有者时写 kano。
+- 只输出值得长期保存、未来仍可能影响互动的内容；寒暄、临时情绪、一次性安排和无后续价值的细节不要输出。普通偏好或小事用 normal，不代表系统一定会把它永久化。
+- 用户明确说“记住这个 / 记一下 / 记着”时，必须为所说的内容输出一条对应候选；这是明确指令，不是寒暄。
 - memoryCandidates 的 quote 必须逐字来自本轮用户消息或 reply；不能改写或拼接。
 - source 只能是 user_stated 或 rinko_inferred。只有 quote 来自用户消息时才能用 user_stated。
 - sensitivity 只能是 normal、sensitive、third_party；涉及密码、证件、账户、住址、健康诊断、创伤、自伤时用 sensitive；涉及第三人的个人信息时用 third_party。
@@ -652,6 +656,7 @@ export class KanobotChatService {
 
       let memory: MemoryExtractionSummary | null = null
       if (this.memory !== undefined) {
+        const explicitlyRequested = hasExplicitRememberInstruction(turn.text)
         memory = envelope === null
           ? {
               status: 'failed',
@@ -664,7 +669,17 @@ export class KanobotChatService {
               envelope.memoryCandidates,
               envelope.skippedMemoryCandidates,
               assistantMessage.createdAt,
+              explicitlyRequested,
             )
+        if (memory.createdCount === 0) {
+          const fallback = this.persistExplicitMemoryFallback(
+            turn.text,
+            assistantMessage.createdAt,
+          )
+          if (fallback !== null) {
+            memory = mergeMemorySummaries(memory, fallback)
+          }
+        }
       }
 
       const issueCodes = [...(envelope?.issues ?? [])]
@@ -930,6 +945,7 @@ export class KanobotChatService {
     candidates: ParsedMemoryCandidate[],
     skippedBeforeWrite: number,
     createdAt: string,
+    explicitlyRequested: boolean,
   ): MemoryExtractionSummary {
     const memory = this.memory
     if (memory === undefined) {
@@ -962,6 +978,7 @@ export class KanobotChatService {
           sensitivity: candidate.sensitivity,
           importance: candidate.importance,
           createdAt,
+          explicitlyRequested,
         })
         createdCount += 1
         if (record.status === 'candidate') candidateCount += 1
@@ -975,6 +992,40 @@ export class KanobotChatService {
       candidateCount,
       skippedCount,
       errorCode: null,
+    }
+  }
+
+  /**
+   * 明确“记住”不能完全依赖模型是否遵守格式。若同一轮没有写入任何候选，
+   * 就从很短、很直接的指令里提取内容并保存；复杂表达仍交给模型候选。
+   */
+  private persistExplicitMemoryFallback(
+    userText: string,
+    createdAt: string,
+  ): MemoryExtractionSummary | null {
+    const memory = this.memory
+    if (memory === undefined) return null
+    const text = extractExplicitMemoryText(userText)
+    if (text === null || memory.hasEquivalentText(text)) return null
+    try {
+      memory.remember({
+        text,
+        quoteText: text,
+        kind: 'owner_request',
+        source: 'user_stated',
+        importance: 'important',
+        createdAt,
+        explicitlyRequested: true,
+      })
+      return {
+        status: 'succeeded',
+        createdCount: 1,
+        candidateCount: 0,
+        skippedCount: 0,
+        errorCode: null,
+      }
+    } catch {
+      return null
     }
   }
 
@@ -1101,6 +1152,21 @@ export class KanobotChatService {
           .length,
       },
     }
+  }
+}
+
+function mergeMemorySummaries(
+  base: MemoryExtractionSummary,
+  fallback: MemoryExtractionSummary,
+): MemoryExtractionSummary {
+  return {
+    status: 'succeeded',
+    createdCount: base.createdCount + fallback.createdCount,
+    candidateCount: base.candidateCount + fallback.candidateCount,
+    skippedCount: base.skippedCount + fallback.skippedCount,
+    // 信封损坏会单独体现在 done.envelope；显式记忆兜底成功时，
+    // 记忆子系统本身不再报告失败。
+    errorCode: null,
   }
 }
 

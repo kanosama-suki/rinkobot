@@ -128,6 +128,10 @@ export interface MemoryConfig {
   trash: {
     retentionDays: number
   }
+  recall: {
+    minRelevance: number
+    candidateLimit: number
+  }
 }
 
 export interface LoadedConfig {

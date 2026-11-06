@@ -46,31 +46,12 @@ export function buildMemorySearchMatch(
   query: string,
   mode: MemorySearchMode = 'all',
 ): string | null {
-  if (typeof query !== 'string') {
-    throw new TypeError('memory search query must be text')
-  }
-  const trimmed = query.trim()
-  if (trimmed.length === 0 || trimmed.length > MAX_SEARCH_QUERY_CHARS) {
-    throw new RangeError(
-      `memory search query must be 1..${MAX_SEARCH_QUERY_CHARS} characters`,
-    )
-  }
-
-  const wordTokens: string[] = []
-  const seen = new Set<string>()
-  for (const part of WORD_SEGMENTER.segment(trimmed)) {
-    if (!part.isWordLike) continue
-    const token = part.segment.trim()
-    const key = token.toLowerCase()
-    if (token === '' || STOPWORDS.has(key) || seen.has(key)) continue
-    seen.add(key)
-    wordTokens.push(token)
-    if (wordTokens.length >= MAX_SEARCH_TOKENS) break
-  }
+  const wordTokens = listMemorySearchTokens(query)
   if (wordTokens.length === 0) return null
 
   // 宽松召回时把中文词拆成单字，解决 Segmenter 把“想喝”整体成词、
   // 而记忆里只存了“喝”时完全匹配不上的问题。精确模式不拆，避免过宽。
+  const seen = new Set(wordTokens.map(token => token.toLowerCase()))
   const tokens = [...wordTokens]
   if (mode === 'any') {
     for (const token of wordTokens) {
@@ -92,4 +73,33 @@ export function buildMemorySearchMatch(
       return `(word_text:${quoted} OR char_text:${quoted})`
     })
     .join(mode === 'any' ? ' OR ' : ' AND ')
+}
+
+/**
+ * 返回与 FTS 查询一致的有界词元，供记忆召回的相关性判断复用。
+ * 这里只做切词和停用词过滤，不把用户原文拼进 FTS 语法。
+ */
+export function listMemorySearchTokens(query: string): string[] {
+  if (typeof query !== 'string') {
+    throw new TypeError('memory search query must be text')
+  }
+  const trimmed = query.trim()
+  if (trimmed.length === 0 || trimmed.length > MAX_SEARCH_QUERY_CHARS) {
+    throw new RangeError(
+      `memory search query must be 1..${MAX_SEARCH_QUERY_CHARS} characters`,
+    )
+  }
+
+  const wordTokens: string[] = []
+  const seen = new Set<string>()
+  for (const part of WORD_SEGMENTER.segment(trimmed)) {
+    if (!part.isWordLike) continue
+    const token = part.segment.trim()
+    const key = token.toLowerCase()
+    if (token === '' || STOPWORDS.has(key) || seen.has(key)) continue
+    seen.add(key)
+    wordTokens.push(token)
+    if (wordTokens.length >= MAX_SEARCH_TOKENS) break
+  }
+  return wordTokens
 }

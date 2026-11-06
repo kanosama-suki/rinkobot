@@ -1204,14 +1204,18 @@ export class KanobotStorage {
        JOIN bodies b ON b.id = m.content_ref
        WHERE memory_search MATCH ?
          AND m.status = 'active'
+       -- 相关性先于“永久重要”：永久记忆不应劫持一个主题完全不同的当前问题。
+       -- 召回时间较近的条目排在同等相关度之后，减少同一旧事被连续复述。
        ORDER BY
+         search_rank ASC,
          CASE m.importance
            WHEN 'permanent' THEN 0
            WHEN 'important' THEN 1
            ELSE 2
          END ASC,
-         COALESCE(m.last_recalled_at, m.created_at) DESC,
-         search_rank ASC,
+         CASE WHEN m.last_recalled_at IS NULL THEN 0 ELSE 1 END ASC,
+         m.last_recalled_at ASC,
+         m.created_at DESC,
          m.id ASC
        LIMIT ?`,
     ).all(match, limit) as Array<Record<string, unknown>>

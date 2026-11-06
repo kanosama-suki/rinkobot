@@ -791,11 +791,13 @@ function validateLifeState(table: TomlTable, file: string): LifeStateConfig {
 }
 
 function validateMemory(table: TomlTable, file: string): MemoryConfig {
-  knownKeys(table, ['schema_version', 'trash'], '')
+  knownKeys(table, ['schema_version', 'trash', 'recall'], '')
   requireSchemaVersion(table, CONFIG_SCHEMA_VERSION)
 
   const trash = requiredTable(table, 'trash', 'trash')
   knownKeys(trash, ['retention_days'], 'trash')
+  const recall = requiredTable(table, 'recall', 'recall')
+  knownKeys(recall, ['min_relevance', 'candidate_limit'], 'recall')
 
   return {
     schemaVersion: CONFIG_SCHEMA_VERSION,
@@ -806,6 +808,22 @@ function validateMemory(table: TomlTable, file: string): MemoryConfig {
         'trash.retention_days',
         1,
         3650,
+      ),
+    },
+    recall: {
+      minRelevance: requiredNumber(
+        recall,
+        'min_relevance',
+        'recall.min_relevance',
+        0,
+        1,
+      ),
+      candidateLimit: requiredInteger(
+        recall,
+        'candidate_limit',
+        'recall.candidate_limit',
+        1,
+        50,
       ),
     },
   }

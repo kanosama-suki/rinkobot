@@ -129,7 +129,9 @@ export async function createDevServer(
   try {
     storage = KanobotStorage.openFromConfig(loaded, dataDir, clock)
     storage.maybeCreateDailyBackup()
-    const memory = new KanobotMemoryService(storage, clock)
+    const memory = new KanobotMemoryService(storage, clock, {
+      recall: loaded.memory.recall,
+    })
     const audit = new OwnerAuditService(storage, clock)
     const timeline = new AuditTimelineService(storage)
     const emergency = new KanobotEmergencyService(

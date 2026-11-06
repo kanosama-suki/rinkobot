@@ -89,7 +89,9 @@ export async function apply(
     storage = KanobotStorage.openFromConfig(loaded, dataDir, clock)
     // 备份失败也应阻止“看似启动成功”：日备份是 M2 的数据安全边界。
     storage.maybeCreateDailyBackup()
-    const memory = new KanobotMemoryService(storage, clock)
+    const memory = new KanobotMemoryService(storage, clock, {
+      recall: loaded.memory.recall,
+    })
     const audit = new OwnerAuditService(storage)
     const timeline = new AuditTimelineService(storage)
     const emergency = new KanobotEmergencyService(

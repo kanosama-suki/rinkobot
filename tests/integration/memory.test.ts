@@ -16,7 +16,7 @@ import {
 } from '../../src/core/memory/index.ts'
 import { createWorkspace } from '../helpers/storage-fixture.ts'
 
-test('only unmarked user statements become searchable immediately', () => {
+test('explicit remember is durable while ordinary small talk stays a candidate', () => {
   const ws = createWorkspace(test)
   const store = ws.open()
   try {
@@ -25,12 +25,25 @@ test('only unmarked user statements become searchable immediately', () => {
       text: 'kano 喜欢早上喝咖啡。',
       kind: 'preference',
       source: 'user_stated',
+      explicitlyRequested: true,
     })
     assert.equal(stated.status, 'active')
+    assert.equal(stated.importance, 'important')
     assert.deepEqual(
       memory.search('咖啡', { markRecalled: false })
         .map(result => result.memory.id),
       [stated.id],
+    )
+
+    const ordinary = memory.remember({
+      text: 'kano 今天提到外面在下雨。',
+      kind: 'small_talk',
+      source: 'user_stated',
+    })
+    assert.equal(ordinary.status, 'candidate')
+    assert.equal(
+      memory.search('下雨', { markRecalled: false }).length,
+      0,
     )
 
     const candidates = [
@@ -60,7 +73,7 @@ test('only unmarked user statements become searchable immediately', () => {
     ]
     assert.ok(candidates.every(candidate => candidate.status === 'candidate'))
     assert.equal(memory.search('书店', { markRecalled: false }).length, 0)
-    assert.equal(memory.listCandidates().length, 4)
+    assert.equal(memory.listCandidates().length, 5)
 
     const promoted = memory.promote(candidates[0].id)
     assert.equal(promoted.status, 'active')
@@ -83,26 +96,31 @@ test('Chinese word and single-character columns retrieve the expected memories',
         text: 'kano 喜欢早上喝咖啡，不加糖。',
         kind: 'preference',
         source: 'user_stated',
+        importance: 'important',
       }),
       memory.remember({
         text: '晚上泡茶要淡一点，不喝浓茶。',
         kind: 'preference',
         source: 'user_stated',
+        importance: 'important',
       }),
       memory.remember({
         text: '她最近在做空气动力和网格的仿真。',
         kind: 'shared_experience',
         source: 'user_stated',
+        importance: 'important',
       }),
       memory.remember({
         text: '周末想一起看一部老电影。',
         kind: 'plan',
         source: 'user_stated',
+        importance: 'important',
       }),
       memory.remember({
         text: 'kano 的生日是三月十四日。',
         kind: 'personal_fact',
         source: 'user_stated',
+        importance: 'important',
       }),
     ]
     const expectations: Array<[string, string]> = [
@@ -183,6 +201,7 @@ test('trash hides a memory from search and restore brings the index back', () =>
       text: 'kano 喜欢在雨天听爵士乐。',
       kind: 'preference',
       source: 'user_stated',
+      importance: 'important',
     })
     store.trashMemory(record.id, '2026-11-05T10:00:00.000Z')
     assert.equal(
@@ -215,6 +234,7 @@ test('active memory search survives restart and a v3 to v6 migration', () => {
       text: 'kano 喜欢窗边的座位。',
       kind: 'preference',
       source: 'user_stated',
+      importance: 'important',
     }).id
   } finally {
     store.close()
@@ -274,6 +294,7 @@ test('purging a memory removes its FTS row as well as its body', () => {
       text: '待清除的唯一记忆 KB-MEMORY-PURGE-42',
       kind: 'note',
       source: 'user_stated',
+      importance: 'important',
     })
     assert.equal(
       memory.search('KB-MEMORY-PURGE-42', { markRecalled: false })[0]

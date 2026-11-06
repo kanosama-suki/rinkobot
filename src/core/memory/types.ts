@@ -22,6 +22,11 @@ export interface RememberMemoryInput {
   importance?: Importance
   id?: string
   createdAt?: string
+  /**
+   * 由聊天回合的确定性检测传入，不采信模型自报。显式记住且不敏感时
+   * 立即 active，并在模型只给 normal 时至少提升为 important。
+   */
+  explicitlyRequested?: boolean
 }
 
 export interface CorrectMemoryInput {

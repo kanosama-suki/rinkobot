@@ -62,6 +62,66 @@ test('a user-stated preference is saved in the same model turn', async () => {
   }
 })
 
+test('ordinary small talk is retained as a candidate instead of silently becoming permanent', async () => {
+  const ws = createWorkspace(test)
+  const store = ws.open()
+  try {
+    const memory = new KanobotMemoryService(store, ws.clock)
+    const chat = new KanobotChatService(
+      store,
+      new EnvelopeModel(chatEnvelopeText('嗯，路上慢一点。', {
+        memoryCandidates: [{
+          text: 'kano 今天路过一家书店。',
+          quote: '今天路过一家书店',
+          kind: 'small_talk',
+          source: 'user_stated',
+          sensitivity: 'normal',
+          importance: 'normal',
+          confidence: 0.8,
+        }],
+      })),
+      { memory },
+    )
+
+    const done = (await collect(chat, '今天路过一家书店。'))
+      .find(event => event.type === 'done')
+    assert.ok(done?.type === 'done')
+    assert.equal(done.memory?.createdCount, 1)
+    assert.equal(done.memory?.candidateCount, 1)
+    assert.equal(memory.listCandidates().length, 1)
+    assert.equal(memory.search('书店', { markRecalled: false }).length, 0)
+  } finally {
+    store.close()
+  }
+})
+
+test('an explicit remember request has a deterministic fallback when the model omits candidates', async () => {
+  const ws = createWorkspace(test)
+  const store = ws.open()
+  try {
+    const memory = new KanobotMemoryService(store, ws.clock)
+    const chat = new KanobotChatService(
+      store,
+      new EnvelopeModel(chatEnvelopeText('记住了。')),
+      { memory },
+    )
+
+    const done = (await collect(chat, '记住这个：我对花生过敏。'))
+      .find(event => event.type === 'done')
+    assert.ok(done?.type === 'done')
+    assert.equal(done.memory?.status, 'succeeded')
+    assert.equal(done.memory?.createdCount, 1)
+
+    const found = memory.search('花生', { markRecalled: false })
+    assert.equal(found.length, 1)
+    assert.equal(found[0]?.memory.status, 'active')
+    assert.equal(found[0]?.memory.kind, 'owner_request')
+    assert.equal(found[0]?.memory.importance, 'important')
+  } finally {
+    store.close()
+  }
+})
+
 test('a claim quoting the assistant reply is downgraded to a candidate', async () => {
   const ws = createWorkspace(test)
   const store = ws.open()
@@ -242,6 +302,7 @@ test('relevant memories are recalled into the system prompt, not fake messages',
       text: 'kano 喜欢早上喝咖啡，不加糖。',
       kind: 'preference',
       source: 'user_stated',
+      importance: 'important',
     })
     const model = new EnvelopeModel(chatEnvelopeText('好。'))
     const chat = new KanobotChatService(store, model, { memory })

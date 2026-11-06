@@ -111,6 +111,10 @@ const validMemory = `schema_version = 1
 
 [trash]
 retention_days = 30
+
+[recall]
+min_relevance = 0.5
+candidate_limit = 24
 `
 
 interface ConfigOverrides {
@@ -168,6 +172,8 @@ test('loads the checked-in example configuration', () => {
   assert.equal(config.system.storage.snapshotEveryEvents, 100)
   assert.equal(config.lifeState.limits.maxCommitments, 32)
   assert.equal(config.memory.trash.retentionDays, 30)
+  assert.equal(config.memory.recall.minRelevance, 0.5)
+  assert.equal(config.memory.recall.candidateLimit, 24)
   assert.equal(config.system.vision.enabled, false)
   assert.equal(config.system.vision.provider, null)
   assert.equal(config.system.vision.maxImageBytes, 5 * 1024 * 1024)
@@ -418,6 +424,21 @@ test('rejects an invalid trash retention period', () => {
   })
   try {
     expectIssue(() => loadConfigFromDirectory(dir), 'trash.retention_days', 'memory.toml')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rejects an invalid memory relevance threshold', () => {
+  const dir = writeConfigs({
+    memory: validMemory.replace('min_relevance = 0.5', 'min_relevance = 1.5'),
+  })
+  try {
+    expectIssue(
+      () => loadConfigFromDirectory(dir),
+      'recall.min_relevance',
+      'memory.toml',
+    )
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

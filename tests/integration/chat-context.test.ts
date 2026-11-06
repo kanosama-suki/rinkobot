@@ -122,6 +122,7 @@ test('only memories that actually enter the prompt are marked recalled', async (
       text: 'kano 曾经在雨天的咖啡馆听爵士乐。',
       kind: 'experience',
       source: 'user_stated',
+      importance: 'important',
     })
     const model = new CapturingModel()
     const chat = new KanobotChatService(store, model, {
