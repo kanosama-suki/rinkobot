@@ -7,6 +7,9 @@ config/*
 .env.*
 secrets/
 *.secret
+model-settings.json
+model-secrets.key
+model-secrets.json
 
 # 依赖、构建和测试产物
 node_modules/

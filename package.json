@@ -1,8 +1,8 @@
 {
   "name": "@kanobot/dsh-plugin",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "private": true,
-  "description": "Kanobot companion runtime for the DSH host",
+  "description": "Kanobot companion runtime for DSH and standalone hosting",
   "type": "module",
   "exports": {
     ".": "./src/plugin/index.ts",
@@ -10,7 +10,9 @@
   },
   "files": [
     "src",
+    "scripts",
     "config",
+    "docs/*.md",
     "locale",
     "icon.svg",
     "README.md",
@@ -18,7 +20,9 @@
     "structure.md"
   ],
   "scripts": {
+    "app": "node scripts/app-server.ts",
     "dev": "node scripts/dev-server.ts",
+    "start": "node scripts/app-server.ts",
     "test": "node --test",
     "check:case": "node scripts/check-import-case.ts",
     "check": "npm run check:case && npm test",

@@ -8,7 +8,8 @@
  * - M2 新增文件是必需文件，缺失时不能悄悄用旧的一文件配置继续启动。
  */
 
-import { readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import { BlockList, isIP } from 'node:net'
 import { join } from 'node:path'
 import { parse } from 'smol-toml'
 
@@ -21,12 +22,15 @@ import type {
   LoadedConfig,
   MemoryConfig,
   PolicyConfig,
+  ChatProvider,
   SystemConfig,
   VisionConfig,
+  VisionProvider,
 } from './types.ts'
 import {
   asTable,
   fail,
+  isTable,
   joinField,
   knownKeys,
   requireQuietTime,
@@ -42,7 +46,10 @@ import {
   requiredTable,
   type TomlTable,
 } from './validation.ts'
-import { CONFIG_SCHEMA_VERSION } from './types.ts'
+import {
+  CONFIG_SCHEMA_VERSION,
+  RUNTIME_MODEL_SETTINGS_FILENAME,
+} from './types.ts'
 
 const CONFIG_FILES = {
   system: 'system.toml',
@@ -53,6 +60,58 @@ const CONFIG_FILES = {
   policy: 'policy.toml',
 } as const
 
+const MODEL_KEYS = [
+  'provider',
+  'route',
+  'name',
+  'base_url',
+  'api_key_env',
+  'api_key_secret',
+  'allow_private_network',
+  'timeout_ms',
+  'max_retries',
+  'max_output_tokens',
+  'reasoning_effort',
+] as const
+
+const VISION_KEYS = [
+  'enabled',
+  'provider',
+  'route',
+  'name',
+  'base_url',
+  'api_key_env',
+  'api_key_secret',
+  'allow_private_network',
+  'timeout_ms',
+  'max_retries',
+  'max_output_tokens',
+  'max_image_bytes',
+  'max_description_chars',
+] as const
+
+const PRIVATE_ADDRESSES = new BlockList()
+PRIVATE_ADDRESSES.addSubnet('0.0.0.0', 8, 'ipv4')
+PRIVATE_ADDRESSES.addSubnet('10.0.0.0', 8, 'ipv4')
+PRIVATE_ADDRESSES.addSubnet('100.64.0.0', 10, 'ipv4')
+PRIVATE_ADDRESSES.addSubnet('127.0.0.0', 8, 'ipv4')
+PRIVATE_ADDRESSES.addSubnet('169.254.0.0', 16, 'ipv4')
+PRIVATE_ADDRESSES.addSubnet('172.16.0.0', 12, 'ipv4')
+PRIVATE_ADDRESSES.addSubnet('192.0.0.0', 24, 'ipv4')
+PRIVATE_ADDRESSES.addSubnet('192.0.2.0', 24, 'ipv4')
+PRIVATE_ADDRESSES.addSubnet('192.168.0.0', 16, 'ipv4')
+PRIVATE_ADDRESSES.addSubnet('198.18.0.0', 15, 'ipv4')
+PRIVATE_ADDRESSES.addSubnet('198.51.100.0', 24, 'ipv4')
+PRIVATE_ADDRESSES.addSubnet('203.0.113.0', 24, 'ipv4')
+PRIVATE_ADDRESSES.addSubnet('224.0.0.0', 4, 'ipv4')
+PRIVATE_ADDRESSES.addSubnet('240.0.0.0', 4, 'ipv4')
+PRIVATE_ADDRESSES.addAddress('::', 'ipv6')
+PRIVATE_ADDRESSES.addAddress('::1', 'ipv6')
+PRIVATE_ADDRESSES.addSubnet('fc00::', 7, 'ipv6')
+PRIVATE_ADDRESSES.addSubnet('fe80::', 10, 'ipv6')
+PRIVATE_ADDRESSES.addSubnet('ff00::', 8, 'ipv6')
+PRIVATE_ADDRESSES.addSubnet('2001:db8::', 32, 'ipv6')
+
 type ConfigKind = keyof typeof CONFIG_FILES
 
 interface ParsedFiles {
@@ -62,6 +121,11 @@ interface ParsedFiles {
   memory?: TomlTable
   initiative?: TomlTable
   policy?: TomlTable
+}
+
+interface RuntimeOverlaySource {
+  file: string
+  fields: Set<string>
 }
 
 export function loadConfigFromDirectory(configDir: string): LoadedConfig {
@@ -96,13 +160,27 @@ export function loadConfigFromDirectory(configDir: string): LoadedConfig {
       parsed[kind] = result.table
     }
   }
+  const runtimeOverlay = applyRuntimeModelOverlay(
+    parsed,
+    configDir,
+    issues,
+  )
 
   let system: SystemConfig | undefined
   if (parsed.system) {
     try {
       system = validateSystem(parsed.system, join(configDir, CONFIG_FILES.system))
     } catch (error) {
-      issues.push(toIssue(error, join(configDir, CONFIG_FILES.system)))
+      issues.push(
+        toIssue(
+          error,
+          runtimeOverlay?.fields.has(
+            error instanceof ConfigFieldError ? error.field : '',
+          )
+            ? runtimeOverlay.file
+            : join(configDir, CONFIG_FILES.system),
+        ),
+      )
     }
   }
 
@@ -297,28 +375,39 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
   }
 
   const model = requiredTable(table, 'model', 'model')
-  knownKeys(
-    model,
-    [
-      'provider',
-      'name',
-      'base_url',
-      'api_key_env',
-      'timeout_ms',
-      'max_retries',
-      'max_output_tokens',
-      'reasoning_effort',
-    ],
-    'model',
+  knownKeys(model, MODEL_KEYS, 'model')
+  const provider = parseChatProvider(
+    requiredString(model, 'provider', 'model.provider', 1, 128),
+    'model.provider',
   )
-  const provider = requiredString(model, 'provider', 'model.provider', 1, 128)
+  const route = optionalString(model, 'route', 'model.route', 1, 128)
   const name = requiredString(model, 'name', 'model.name', 1, 128)
   const rawBaseUrl = optionalString(model, 'base_url', 'model.base_url', 1, 512)
-  const baseUrl = rawBaseUrl === null ? null : requireLoopbackBaseUrl(rawBaseUrl, 'model.base_url')
+  const allowPrivateNetwork = optionalBoolean(
+    model,
+    'allow_private_network',
+    'model.allow_private_network',
+  ) ?? false
+  const baseUrl = rawBaseUrl === null
+    ? null
+    : validateModelBaseUrl(
+        rawBaseUrl,
+        'model.base_url',
+        provider,
+        allowPrivateNetwork,
+      )
   const apiKeyEnv = optionalString(model, 'api_key_env', 'model.api_key_env', 1, 128)
   if (apiKeyEnv !== null && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(apiKeyEnv)) {
     fail('model.api_key_env', 'expected an environment variable name')
   }
+  const apiKeySecret = optionalString(
+    model,
+    'api_key_secret',
+    'model.api_key_secret',
+    1,
+    128,
+  )
+  requireCredentialReference(apiKeyEnv, apiKeySecret, 'model')
   const timeoutMs = requiredInteger(
     model,
     'timeout_ms',
@@ -356,12 +445,39 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
       'expected a lowercase reasoning level such as "low" or "high"',
     )
   }
-  if (provider === 'magpie') {
+  if (provider === 'magpie' || provider === 'openai-compatible') {
     if (baseUrl === null) {
-      fail('model.base_url', 'required when provider is "magpie"')
+      fail(
+        'model.base_url',
+        `required when provider is "${provider}"`,
+      )
     }
     if (maxOutputTokens === null) {
-      fail('model.max_output_tokens', 'required when provider is "magpie"')
+      fail(
+        'model.max_output_tokens',
+        `required when provider is "${provider}"`,
+      )
+    }
+  }
+  if (provider === 'dsh') {
+    if (route === null) {
+      fail('model.route', 'required when provider is "dsh"')
+    }
+    if (baseUrl !== null) {
+      fail('model.base_url', 'must be omitted when provider is "dsh"')
+    }
+    if (apiKeyEnv !== null || apiKeySecret !== null) {
+      fail(
+        'model.api_key_env',
+        'DSH credentials are owned by the host and must not be configured here',
+      )
+    }
+  } else if (route !== null) {
+    fail('model.route', 'only the "dsh" provider accepts a route')
+  }
+  if (provider === 'mock') {
+    if (baseUrl !== null || apiKeyEnv !== null || apiKeySecret !== null) {
+      fail('model.provider', 'mock provider does not accept endpoint credentials')
     }
   }
 
@@ -482,9 +598,12 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
     },
     model: {
       provider,
+      route,
       name,
       baseUrl,
       apiKeyEnv,
+      apiKeySecret,
+      allowPrivateNetwork,
       timeoutMs,
       maxRetries,
       maxOutputTokens,
@@ -528,9 +647,12 @@ function validateVision(table: TomlTable): VisionConfig {
   const defaults: VisionConfig = {
     enabled: false,
     provider: null,
+    route: null,
     name: null,
     baseUrl: null,
     apiKeyEnv: null,
+    apiKeySecret: null,
+    allowPrivateNetwork: false,
     timeoutMs: 120_000,
     maxRetries: 2,
     maxOutputTokens: null,
@@ -540,34 +662,30 @@ function validateVision(table: TomlTable): VisionConfig {
   if (!('vision' in table)) return defaults
 
   const section = requiredTable(table, 'vision', 'vision')
-  knownKeys(
-    section,
-    [
-      'enabled',
-      'provider',
-      'name',
-      'base_url',
-      'api_key_env',
-      'timeout_ms',
-      'max_retries',
-      'max_output_tokens',
-      'max_image_bytes',
-      'max_description_chars',
-    ],
-    'vision',
-  )
+  knownKeys(section, VISION_KEYS, 'vision')
   const enabled = 'enabled' in section
     ? requiredBoolean(section, 'enabled', 'vision.enabled')
     : false
-  const provider = optionalString(section, 'provider', 'vision.provider', 1, 128)
-  if (provider !== null && provider !== 'magpie') {
-    fail('vision.provider', 'only the local "magpie" router is supported')
-  }
+  const rawProvider = optionalString(section, 'provider', 'vision.provider', 1, 128)
+  const provider = rawProvider === null
+    ? null
+    : parseVisionProvider(rawProvider, 'vision.provider')
+  const route = optionalString(section, 'route', 'vision.route', 1, 128)
   const name = optionalString(section, 'name', 'vision.name', 1, 128)
   const rawBaseUrl = optionalString(section, 'base_url', 'vision.base_url', 1, 512)
+  const allowPrivateNetwork = optionalBoolean(
+    section,
+    'allow_private_network',
+    'vision.allow_private_network',
+  ) ?? false
   const baseUrl = rawBaseUrl === null
     ? null
-    : requireLoopbackBaseUrl(rawBaseUrl, 'vision.base_url')
+    : validateModelBaseUrl(
+        rawBaseUrl,
+        'vision.base_url',
+        provider ?? 'magpie',
+        allowPrivateNetwork,
+      )
   const apiKeyEnv = optionalString(
     section,
     'api_key_env',
@@ -578,6 +696,14 @@ function validateVision(table: TomlTable): VisionConfig {
   if (apiKeyEnv !== null && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(apiKeyEnv)) {
     fail('vision.api_key_env', 'expected an environment variable name')
   }
+  const apiKeySecret = optionalString(
+    section,
+    'api_key_secret',
+    'vision.api_key_secret',
+    1,
+    128,
+  )
+  requireCredentialReference(apiKeyEnv, apiKeySecret, 'vision')
   const timeoutMs = optionalInteger(
     section,
     'timeout_ms',
@@ -628,12 +754,18 @@ function validateVision(table: TomlTable): VisionConfig {
       fail('vision.max_output_tokens', 'required when vision.enabled is true')
     }
   }
+  if (route !== null) {
+    fail('vision.route', 'vision providers do not accept a DSH route')
+  }
   return {
     enabled,
     provider,
+    route,
     name,
     baseUrl,
     apiKeyEnv,
+    apiKeySecret,
+    allowPrivateNetwork,
     timeoutMs,
     maxRetries,
     maxOutputTokens,
@@ -664,7 +796,56 @@ function optionalInteger(
   return requiredInteger(parent, key, field, min, max)
 }
 
-function requireLoopbackBaseUrl(value: string, field: string): string {
+function optionalBoolean(
+  parent: TomlTable,
+  key: string,
+  field: string,
+): boolean | null {
+  if (!(key in parent)) return null
+  return requiredBoolean(parent, key, field)
+}
+
+function parseChatProvider(value: string, field: string): ChatProvider {
+  if (
+    value !== 'mock' &&
+    value !== 'magpie' &&
+    value !== 'dsh' &&
+    value !== 'openai-compatible'
+  ) {
+    fail(
+      field,
+      'expected "mock", "magpie", "dsh" or "openai-compatible"',
+    )
+  }
+  return value
+}
+
+function parseVisionProvider(value: string, field: string): VisionProvider {
+  if (value !== 'magpie' && value !== 'openai-compatible') {
+    fail(field, 'expected "magpie" or "openai-compatible"')
+  }
+  return value
+}
+
+function requireCredentialReference(
+  apiKeyEnv: string | null,
+  apiKeySecret: string | null,
+  prefix: string,
+): void {
+  if (apiKeyEnv !== null && apiKeySecret !== null) {
+    fail(
+      `${prefix}.api_key_secret`,
+      'api_key_env and api_key_secret are mutually exclusive',
+    )
+  }
+}
+
+export function validateModelBaseUrl(
+  value: string,
+  field: string,
+  provider: ChatProvider | VisionProvider,
+  allowPrivateNetwork: boolean,
+): string {
   let url: URL
   try {
     url = new URL(value)
@@ -680,11 +861,38 @@ function requireLoopbackBaseUrl(value: string, field: string): string {
   if (url.search !== '' || url.hash !== '') {
     fail(field, 'query strings and fragments are not allowed')
   }
-  if (!isLoopbackHostname(url.hostname)) {
-    fail(field, 'model base URL must use a loopback host')
-  }
   if (url.pathname !== '/v1' && url.pathname !== '/v1/') {
     fail(field, 'model base URL must end with /v1')
+  }
+  if (provider === 'magpie') {
+    if (!isLoopbackHostname(url.hostname)) {
+      fail(field, 'Magpie base URL must use a loopback host')
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      fail(field, 'only http and https are allowed')
+    }
+  } else {
+    if (
+      url.protocol !== 'https:' &&
+      !(allowPrivateNetwork && url.protocol === 'http:')
+    ) {
+      fail(
+        field,
+        'third-party model endpoints require HTTPS unless private-network access is explicitly enabled',
+      )
+    }
+    if (!allowPrivateNetwork) {
+      if (
+        isLoopbackHostname(url.hostname) ||
+        isPrivateIpLiteral(url.hostname) ||
+        url.hostname.toLowerCase().endsWith('.local')
+      ) {
+        fail(
+          field,
+          'private or loopback endpoints require model.allow_private_network = true',
+        )
+      }
+    }
   }
   return `${url.origin}/v1`
 }
@@ -696,6 +904,80 @@ function isLoopbackHostname(hostname: string): boolean {
       ? hostname.slice(1, -1)
       : hostname
   return ['127.0.0.1', '::1', 'localhost'].includes(normalized.toLowerCase())
+}
+
+function isPrivateIpLiteral(hostname: string): boolean {
+  const normalized =
+    hostname.startsWith('[') && hostname.endsWith(']')
+      ? hostname.slice(1, -1)
+      : hostname
+  const family = isIP(normalized)
+  if (family === 4) return PRIVATE_ADDRESSES.check(normalized, 'ipv4')
+  if (family === 6) return PRIVATE_ADDRESSES.check(normalized, 'ipv6')
+  return false
+}
+
+/**
+ * 运行时设置覆盖只替换模型段，其他 TOML 文件仍由原配置管理。
+ * 页面写入的是 JSON，避免为了改两个字段重写带注释的 system.toml。
+ */
+function applyRuntimeModelOverlay(
+  parsed: ParsedFiles,
+  configDir: string,
+  issues: ConfigIssue[],
+): RuntimeOverlaySource | undefined {
+  if (parsed.system === undefined) return
+  const file = join(configDir, RUNTIME_MODEL_SETTINGS_FILENAME)
+  if (!existsSync(file)) return
+
+  let overlay: TomlTable
+  try {
+    const value: unknown = JSON.parse(readFileSync(file, 'utf8'))
+    overlay = asTable(value, '$')
+  } catch (error) {
+    issues.push(toIssue(error, file))
+    return
+  }
+
+  try {
+    knownKeys(overlay, ['schema_version', 'model', 'vision'], '$')
+    requireSchemaVersion(overlay, CONFIG_SCHEMA_VERSION)
+    const fields = new Set<string>()
+    if ('model' in overlay) {
+      const base = isTable(parsed.system.model) ? parsed.system.model : {}
+      const override = asTable(overlay.model, 'model')
+      knownKeys(override, MODEL_KEYS, 'model')
+      parsed.system.model = mergeRuntimeSection(base, override)
+      for (const key of Object.keys(override)) fields.add(`model.${key}`)
+    }
+    if ('vision' in overlay) {
+      const base = isTable(parsed.system.vision) ? parsed.system.vision : {}
+      const override = asTable(overlay.vision, 'vision')
+      knownKeys(override, VISION_KEYS, 'vision')
+      parsed.system.vision = mergeRuntimeSection(base, override)
+      for (const key of Object.keys(override)) fields.add(`vision.${key}`)
+    }
+    return { file, fields }
+  } catch (error) {
+    issues.push(toIssue(error, file))
+    return
+  }
+}
+
+/**
+ * JSON 的 null 表示“删除 TOML 基线的同名字段”，而不是把 null 交给类型校验。
+ * 这让 provider 切换能显式清掉旧的 base_url、凭据引用和 reasoning_effort。
+ */
+function mergeRuntimeSection(
+  base: TomlTable,
+  override: TomlTable,
+): TomlTable {
+  const merged: TomlTable = { ...base }
+  for (const [key, value] of Object.entries(override)) {
+    if (value === null) delete merged[key]
+    else merged[key] = value
+  }
+  return merged
 }
 
 function validateLifeState(table: TomlTable, file: string): LifeStateConfig {

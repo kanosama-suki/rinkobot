@@ -74,6 +74,14 @@ export interface ChatModel {
   readonly id: string
   readonly mode: string
   readonly provider: string
+  /**
+   * Provider 能力必须显式声明；缺省按旧适配器能力处理。
+   * 不支持预填或 JSON 强制模式时，服务层不能假装这些能力存在。
+   */
+  readonly capabilities?: {
+    responsePrefill: boolean
+    jsonMode: boolean
+  }
   stream(request: ChatModelRequest): AsyncIterable<ChatModelStreamEvent>
 }
 

@@ -540,8 +540,10 @@ export class KanobotChatService {
         {
           systemPrompt: assembled.systemPrompt,
           messages: assembled.messages,
-          jsonMode: true,
-          responsePrefill: CHAT_ENVELOPE_PREFILL,
+          jsonMode: this.model.capabilities?.jsonMode !== false,
+          responsePrefill: this.model.capabilities?.responsePrefill === false
+            ? undefined
+            : CHAT_ENVELOPE_PREFILL,
           signal,
         },
         turn.text,
@@ -611,8 +613,10 @@ export class KanobotChatService {
               systemPrompt:
                 `${assembled.systemPrompt}${buildStyleRetryPrompt(styleCheck)}`,
               messages: assembled.messages,
-              jsonMode: true,
-              responsePrefill: CHAT_ENVELOPE_PREFILL,
+              jsonMode: this.model.capabilities?.jsonMode !== false,
+              responsePrefill: this.model.capabilities?.responsePrefill === false
+                ? undefined
+                : CHAT_ENVELOPE_PREFILL,
               signal,
             },
             turn.text,

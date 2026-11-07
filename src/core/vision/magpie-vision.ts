@@ -42,6 +42,11 @@ export interface MagpieVisionModelOptions {
   apiKey?: string | null
   retryBaseDelayMs?: number
   sessionId?: string
+  /** 第三方 OpenAI-compatible 视觉路由复用同一驱动时的审计身份。 */
+  providerId?: string
+  mode?: string
+  sendSessionHeader?: boolean
+  preflight?: (() => Promise<void>) | null
 }
 
 interface MagpieVisionDescriptor {
@@ -61,8 +66,8 @@ interface ParsedVisionResponse {
  */
 export class MagpieVisionModel implements VisionModel {
   readonly id: string
-  readonly mode = 'magpie'
-  readonly provider = 'magpie'
+  readonly mode: string
+  readonly provider: string
 
   private readonly baseUrl: string
   private readonly maxOutputTokens: number
@@ -71,12 +76,21 @@ export class MagpieVisionModel implements VisionModel {
   private readonly apiKey: string | null
   private readonly retryBaseDelayMs: number
   private readonly sessionId: string
+  private readonly sendSessionHeader: boolean
+  private readonly preflight: (() => Promise<void>) | null
   private pricing: ChatModelPricing | null = null
   private checked = false
 
   constructor(options: MagpieVisionModelOptions) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl)
     this.id = validateLabel(options.model, 'model')
+    this.mode = validateLabel(options.mode ?? 'magpie', 'mode')
+    this.provider = validateLabel(
+      options.providerId ?? 'magpie',
+      'providerId',
+    )
+    this.sendSessionHeader = options.sendSessionHeader ?? true
+    this.preflight = options.preflight ?? null
     this.maxOutputTokens = validatePositiveInteger(
       options.maxOutputTokens,
       'maxOutputTokens',
@@ -119,10 +133,12 @@ export class MagpieVisionModel implements VisionModel {
       : AbortSignal.any([signal, controller.signal])
 
     try {
+      await this.preflight?.()
       const response = await fetch(`${this.baseUrl}/models`, {
         method: 'GET',
         headers: this.headers('application/json'),
         signal: combined,
+        redirect: 'error',
       })
       if (!response.ok) {
         await cancelBody(response)
@@ -193,6 +209,7 @@ export class MagpieVisionModel implements VisionModel {
       const combined = AbortSignal.any([request.signal, controller.signal])
 
       try {
+        await this.preflight?.()
         const response = await fetch(`${this.baseUrl}/chat/completions`, {
           method: 'POST',
           headers: {
@@ -200,6 +217,7 @@ export class MagpieVisionModel implements VisionModel {
             'content-type': 'application/json',
           },
           signal: combined,
+          redirect: 'error',
           body: JSON.stringify({
             model: this.id,
             messages: [
@@ -267,9 +285,9 @@ export class MagpieVisionModel implements VisionModel {
   }
 
   private headers(accept: string): Record<string, string> {
-    const headers: Record<string, string> = {
-      accept,
-      [SESSION_HEADER]: this.sessionId,
+    const headers: Record<string, string> = { accept }
+    if (this.sendSessionHeader) {
+      headers[SESSION_HEADER] = this.sessionId
     }
     if (this.apiKey !== null) {
       headers.authorization = `Bearer ${this.apiKey}`

@@ -45,10 +45,10 @@ import {
   type ChatSurfaceOptions,
 } from '../web/index.ts'
 import {
-  createChatModel,
-  createVisionModel,
-  type KanobotModelMode,
-} from '../plugin/models.ts'
+  createModelRuntime,
+  type ModelProviderMode,
+} from '../model-providers/index.ts'
+import { ModelSettingsService } from '../settings/index.ts'
 
 const DEV_COOKIE = 'kanobot_dev_session'
 const DEFAULT_PORT = 4101
@@ -70,7 +70,7 @@ const DEV_SECURITY_HEADERS = {
 export interface DevServerOptions {
   configDir?: string
   dataDir?: string
-  modelMode?: KanobotModelMode
+  modelMode?: ModelProviderMode
   port?: number
   clock?: Clock
   bootstrapTtlMs?: number
@@ -126,8 +126,19 @@ export async function createDevServer(
 
   const loaded = loadConfigFromDirectory(configDir)
   const modelMode = options.modelMode ?? 'mock'
-  const model = await createChatModel(loaded, modelMode)
-  const visionModel = await createVisionModel(loaded, modelMode)
+  const runtime = await createModelRuntime(loaded, {
+    configDir,
+    mode: modelMode,
+  })
+  const model = runtime.chat
+  const visionModel = runtime.vision
+  const models = new ModelSettingsService({
+    configDir,
+    loaded,
+    readOnly:
+      configDir ===
+      fileURLToPath(new URL('../../config/examples', import.meta.url)),
+  })
 
   let storage: KanobotStorage | undefined
   let server: Server | undefined
@@ -148,7 +159,7 @@ export async function createDevServer(
     )
     const initiative = new KanobotInitiativeService(
       storage,
-      modelMode === 'mock'
+      model.mode === 'mock'
         ? new MockInitiativeBrain()
         : new ModelInitiativeBrain({
             model,
@@ -237,6 +248,7 @@ export async function createDevServer(
       timeline,
       emergency,
       initiative,
+      models,
       logger,
       auth: {
         unauthenticatedMessage:

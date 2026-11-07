@@ -233,9 +233,12 @@ test('maps snake_case TOML fields to typed runtime fields', () => {
     const config = loadConfigFromDirectory(dir)
     assert.deepEqual(config.system.model, {
       provider: 'magpie',
+      route: null,
       name: 'deepseek/deepseek-flash',
       baseUrl: 'http://127.0.0.1:3425/v1',
       apiKeyEnv: 'MAGPIE_API_KEY',
+      apiKeySecret: null,
+      allowPrivateNetwork: false,
       timeoutMs: 120000,
       maxRetries: 2,
       maxOutputTokens: 4096,
@@ -705,9 +708,12 @@ max_description_chars = 1500
     assert.deepEqual(config.system.vision, {
       enabled: true,
       provider: 'magpie',
+      route: null,
       name: 'test/vision-model',
       baseUrl: 'http://127.0.0.1:3425/v1',
       apiKeyEnv: 'MAGPIE_API_KEY',
+      apiKeySecret: null,
+      allowPrivateNetwork: false,
       timeoutMs: 90_000,
       maxRetries: 1,
       maxOutputTokens: 2048,
@@ -799,6 +805,82 @@ max_output_tokens = 2048
       'vision.base_url',
       'system.toml',
     )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('runtime settings overlay rejects unknown fields and wrong types', () => {
+  const unknownDir = writeConfigs()
+  const wrongTypeDir = writeConfigs()
+  try {
+    writeFileSync(
+      join(unknownDir, 'model-settings.json'),
+      JSON.stringify({
+        schema_version: 1,
+        model: { surprise: true },
+      }),
+      'utf8',
+    )
+    expectIssue(
+      () => loadConfigFromDirectory(unknownDir),
+      'model.surprise',
+      'model-settings.json',
+    )
+
+    writeFileSync(
+      join(wrongTypeDir, 'model-settings.json'),
+      JSON.stringify({
+        schema_version: 1,
+        model: { timeout_ms: '120000' },
+      }),
+      'utf8',
+    )
+    expectIssue(
+      () => loadConfigFromDirectory(wrongTypeDir),
+      'model.timeout_ms',
+      'model-settings.json',
+    )
+  } finally {
+    rmSync(unknownDir, { recursive: true, force: true })
+    rmSync(wrongTypeDir, { recursive: true, force: true })
+  }
+})
+
+test('runtime settings overlay uses null to delete inherited model fields', () => {
+  const dir = writeConfigs()
+  try {
+    writeFileSync(
+      join(dir, 'model-settings.json'),
+      JSON.stringify({
+        schema_version: 1,
+        model: {
+          provider: 'mock',
+          name: 'kanobot-mock-v1',
+          base_url: null,
+          api_key_env: null,
+          reasoning_effort: null,
+          allow_private_network: null,
+        },
+        vision: {
+          enabled: false,
+          provider: null,
+          name: null,
+          base_url: null,
+          api_key_env: null,
+          max_output_tokens: null,
+        },
+      }),
+      'utf8',
+    )
+    const config = loadConfigFromDirectory(dir)
+    assert.equal(config.system.model.provider, 'mock')
+    assert.equal(config.system.model.baseUrl, null)
+    assert.equal(config.system.model.apiKeyEnv, null)
+    assert.equal(config.system.model.reasoningEffort, null)
+    assert.equal(config.system.model.allowPrivateNetwork, false)
+    assert.equal(config.system.vision.enabled, false)
+    assert.equal(config.system.vision.name, null)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

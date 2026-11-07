@@ -9,6 +9,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { loadConfigFromDirectory } from '../core/config/index.ts'
 import {
@@ -40,9 +41,17 @@ import {
   type ChatConnection,
   type ChatWebServer,
 } from '../web/index.ts'
-import { createChatModel, createVisionModel } from './models.ts'
+import {
+  createModelRuntime,
+  type DshLlmBridge,
+  type ModelProviderMode,
+} from '../model-providers/index.ts'
+import { ModelSettingsService } from '../settings/index.ts'
 import { PLUGIN_NAME, PLUGIN_VERSION } from './version.ts'
 
+// `llm` 只在 provider = "dsh" 时需要；mock、Magpie 和第三方 HTTP provider
+// 不应因为宿主没有挂载 DSH 模型服务而拒绝启动。缺少 ctx.llm 时由 provider
+// 工厂在真正选择 dsh 后 fail-closed。
 export const inject = ['webServer', 'connection']
 
 export interface KanobotPluginConfig {
@@ -50,7 +59,11 @@ export interface KanobotPluginConfig {
   dataDir?: string
   heartbeatMs?: number
   startupReportPath?: string
-  modelMode?: 'mock' | 'magpie'
+  /**
+   * 仅用于测试强制 mock 的旧 Profile 兼容字段。
+   * 真实 provider 必须由配置和设置页决定，不能再被旧 Profile 的值遮蔽。
+   */
+  modelMode?: ModelProviderMode
 }
 
 interface PluginLogger {
@@ -63,6 +76,13 @@ interface PluginContext {
   effect(callback: () => () => void): () => void
   webServer: ChatWebServer
   connection: ChatConnection
+  /**
+   * Cordis 只允许通过 reflect 读取未在 inject 中声明为必需的服务。
+   * `llm` 不是所有宿主都必须提供的能力，因此不能直接读取 `ctx.llm`。
+   */
+  reflect: {
+    get(name: string): unknown
+  }
 }
 
 export async function apply(
@@ -76,8 +96,14 @@ export async function apply(
   let storage: KanobotStorage | undefined
   let scheduler: InitiativeScheduler | undefined
   let disposeChatSurface: (() => void) | undefined
-  const modelMode = config.modelMode ?? 'mock'
-  if (modelMode !== 'mock' && modelMode !== 'magpie') {
+  const modelMode = config.modelMode
+  if (
+    modelMode !== undefined &&
+    modelMode !== 'mock' &&
+    modelMode !== 'magpie' &&
+    modelMode !== 'dsh' &&
+    modelMode !== 'openai-compatible'
+  ) {
     throw new Error(`unsupported modelMode "${String(modelMode)}"`)
   }
 
@@ -85,11 +111,25 @@ export async function apply(
     // 聊天、记忆和存储共用同一个真实时钟；测试可替换为手动时钟，
     // 避免提示词里的“现在”和消息/审计时间来自不同时间源。
     const clock = systemClock
+    const llm = resolveOptionalLlm(ctx)
     // 真实模型模式必须在打开数据库和注册定时器之前完成精确模型检查。
     // 检查失败时拒绝激活，不自动降级到 mock 或另一个模型。
-    const model = await createChatModel(loaded, modelMode)
+    const runtime = await createModelRuntime(loaded, {
+      configDir,
+      llm,
+      // 旧 Profile 的 `modelMode: magpie` 是历史默认值，不应覆盖设置页
+      // 保存的真实 provider；只有测试需要的强制 mock 继续保留。
+      ...(modelMode === 'mock' ? { mode: 'mock' as const } : {}),
+    })
+    const model = runtime.chat
     // 视觉模型独立配置；未启用时保持为 null，带图请求会在落库前明确失败。
-    const visionModel = await createVisionModel(loaded, modelMode)
+    const visionModel = runtime.vision
+    const models = new ModelSettingsService({
+      configDir,
+      loaded,
+      llm,
+      readOnly: configDir === bundledExamplesDir(),
+    })
     // 数据库损坏、schema 不兼容或路径逃逸都会在这里阻止插件继续激活。
     storage = KanobotStorage.openFromConfig(loaded, dataDir, clock)
     // 备份失败也应阻止“看似启动成功”：日备份是 M2 的数据安全边界。
@@ -106,7 +146,7 @@ export async function apply(
     )
     const initiative = new KanobotInitiativeService(
       storage,
-      modelMode === 'mock'
+      model.mode === 'mock'
         ? new MockInitiativeBrain()
         : new ModelInitiativeBrain({
             model,
@@ -163,6 +203,7 @@ export async function apply(
       timeline,
       emergency,
       initiative,
+      models,
       logger: ctx.logger,
     })
     scheduler = new InitiativeScheduler({
@@ -187,7 +228,7 @@ export async function apply(
         tombstones: storage.tombstonePath,
         backupDir: storage.backupDir,
         chatPath: `${CHAT_BASE_PATH}/`,
-        modelMode,
+        modelMode: model.mode,
         provider: chat.identity().provider,
         model: chat.identity().id,
         configuredProvider: loaded.system.model.provider,
@@ -214,7 +255,7 @@ export async function apply(
     ctx.logger.info(
       `[kanobot] ${PLUGIN_NAME} ${PLUGIN_VERSION} loaded; ` +
         `config=${configDir}; database=${storage.databasePath}; ` +
-        `chat=${CHAT_BASE_PATH}/; modelMode=${modelMode}; ` +
+        `chat=${CHAT_BASE_PATH}/; modelMode=${model.mode}; ` +
         `provider=${chat.identity().provider}; ` +
         `model=${chat.identity().id}; identity=${loaded.identity.mode}; ` +
         `vision=${visionModel === null ? 'disabled' : `${visionModel.provider}:${visionModel.id}`}; ` +
@@ -296,6 +337,30 @@ function writeStartupReport(path: string, report: Record<string, unknown>): void
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function resolveOptionalLlm(
+  ctx: PluginContext,
+): DshLlmBridge | undefined {
+  // 用 reflect.get 读取可选服务：Cordis 对未 inject 的 ctx.llm 会直接拒绝，
+  // 即便宿主的其他服务已经就绪。
+  const candidate = ctx.reflect.get('llm')
+  if (candidate === undefined || candidate === null) return undefined
+  if (
+    typeof candidate !== 'object' ||
+    typeof (candidate as DshLlmBridge).listProviders !== 'function' ||
+    typeof (candidate as DshLlmBridge).resolveModelInfo !== 'function' ||
+    typeof (candidate as DshLlmBridge).prepareCall !== 'function'
+  ) {
+    throw new Error('host llm service is present but does not expose the DSH bridge')
+  }
+  return candidate as DshLlmBridge
+}
+
+function bundledExamplesDir(): string {
+  return resolve(
+    fileURLToPath(new URL('../../config/examples', import.meta.url)),
+  )
 }
 
 export { PLUGIN_NAME, PLUGIN_VERSION }

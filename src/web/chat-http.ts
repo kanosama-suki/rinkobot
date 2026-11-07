@@ -36,6 +36,10 @@ import {
   StorageError,
   type OwnerAuditAction,
 } from '../core/storage/index.ts'
+import {
+  ModelSettingsError,
+  type ModelSettingsService,
+} from '../settings/index.ts'
 
 export const CHAT_BASE_PATH = '/kanobot'
 
@@ -95,6 +99,7 @@ export interface ChatSurfaceOptions {
   timeline?: AuditTimelineService
   emergency?: KanobotEmergencyService
   initiative?: KanobotInitiativeService
+  models?: ModelSettingsService
   logger: ChatLogger
   auth?: ChatAuthMessages
 }
@@ -268,7 +273,80 @@ async function handleRequest(
     return
   }
 
+  if (
+    pathname === `${CHAT_BASE_PATH}/api/settings/models` ||
+    pathname === `${CHAT_BASE_PATH}/api/settings/models/test`
+  ) {
+    await handleModelSettingsRequest(req, res, pathname, options)
+    return
+  }
+
   writeError(res, 404, 'not_found', '接口不存在', api)
+}
+
+async function handleModelSettingsRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+  options: ChatSurfaceOptions,
+): Promise<void> {
+  const service = options.models
+  if (service === undefined) {
+    writeError(res, 404, 'not_found', '模型设置接口未启用', true)
+    return
+  }
+  if (pathname.endsWith('/test')) {
+    if (req.method !== 'POST') {
+      writeMethodNotAllowed(res, ['POST'], true)
+      return
+    }
+    try {
+      const body = await readJsonBody(req)
+      writeJson(res, 200, await service.test(body))
+    } catch (error) {
+      handleModelSettingsError(res, options.logger, error)
+    }
+    return
+  }
+  if (req.method === 'GET') {
+    writeJson(res, 200, service.view())
+    return
+  }
+  if (req.method === 'PUT') {
+    try {
+      const body = await readJsonBody(req)
+      writeJson(res, 200, await service.save(body))
+    } catch (error) {
+      handleModelSettingsError(res, options.logger, error)
+    }
+    return
+  }
+  writeMethodNotAllowed(res, ['GET', 'PUT'], true)
+}
+
+function handleModelSettingsError(
+  res: ServerResponse,
+  logger: ChatLogger,
+  error: unknown,
+): void {
+  if (error instanceof ModelSettingsError) {
+    const status =
+      error.code === 'settings_read_only' ||
+      error.code === 'credential_reuse_refused'
+        ? 409
+        : error.code.endsWith('_test_failed')
+          ? 422
+          : 400
+    writeError(res, status, error.code, error.message, true)
+    return
+  }
+  if (error instanceof RequestError) {
+    writeError(res, error.status, error.code, error.message, true)
+    return
+  }
+  // 设置请求不记录 body；这里只记录脱敏错误类型，避免密钥误入日志。
+  logger.error?.('[kanobot] model settings request failed')
+  writeError(res, 500, 'internal_error', '模型设置操作失败', true)
 }
 
 const INITIATIVE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/

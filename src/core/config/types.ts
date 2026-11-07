@@ -7,15 +7,21 @@
  */
 
 export const CONFIG_SCHEMA_VERSION = 1
+export const RUNTIME_MODEL_SETTINGS_FILENAME = 'model-settings.json'
 
 export type Environment = 'development' | 'production'
+export type ChatProvider = 'mock' | 'magpie' | 'dsh' | 'openai-compatible'
+export type VisionProvider = 'magpie' | 'openai-compatible'
 
 export interface VisionConfig {
   enabled: boolean
-  provider: string | null
+  provider: VisionProvider | null
+  route: string | null
   name: string | null
   baseUrl: string | null
   apiKeyEnv: string | null
+  apiKeySecret: string | null
+  allowPrivateNetwork: boolean
   timeoutMs: number
   maxRetries: number
   maxOutputTokens: number | null
@@ -42,10 +48,13 @@ export interface SystemConfig {
     maxMessageChars: number
   }
   model: {
-    provider: string
+    provider: ChatProvider
+    route: string | null
     name: string
     baseUrl: string | null
     apiKeyEnv: string | null
+    apiKeySecret: string | null
+    allowPrivateNetwork: boolean
     timeoutMs: number
     maxRetries: number
     maxOutputTokens: number | null

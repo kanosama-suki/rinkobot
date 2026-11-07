@@ -1,8 +1,8 @@
 /**
  * 插件生命周期集成测试。
  *
- * 用最小的 fake context 模拟 Cordis 的 logger/effect，验证真实插件的
- * 启停、坏配置顺序、启动报告和定时器清理。
+ * 用最小的 fake context 模拟 Cordis 的 logger/effect/reflect，验证真实插件
+ * 的启停、可选服务读取、坏配置顺序、启动报告和定时器清理。
  */
 
 import assert from 'node:assert/strict'
@@ -20,6 +20,11 @@ import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
 import { apply, PLUGIN_NAME, PLUGIN_VERSION } from '../../src/plugin/index.ts'
+import type { DshLlmBridge } from '../../src/model-providers/index.ts'
+import type {
+  DshPreparedCall,
+  DshResolvedModelInfo,
+} from '../../src/model-providers/dsh-types.ts'
 
 const examplesDir = fileURLToPath(new URL('../../config/examples', import.meta.url))
 
@@ -35,12 +40,13 @@ interface FakePluginContext {
     connection: {
       admit(): { peer: object }
     }
+    llm?: DshLlmBridge
   }
   logs: string[]
   dispose(): void
 }
 
-function createFakeContext(): FakePluginContext {
+function createFakeContext(llm?: DshLlmBridge): FakePluginContext {
   const logs: string[] = []
   const disposers: Array<() => void> = []
   let disposed = false
@@ -67,6 +73,16 @@ function createFakeContext(): FakePluginContext {
         admit(): { peer: object } {
           return { peer: {} }
         },
+      },
+      reflect: {
+        get(name: string): unknown {
+          return name === 'llm' ? llm : undefined
+        },
+      },
+      // Cordis 未 inject 的服务通过 ctx.llm 读取会抛错；这个 getter 让测试
+      // 在插件绕过 reflect 直接读取时立即失败。
+      get llm(): never {
+        throw new Error('plugin must read optional services through ctx.reflect')
       },
     },
     logs,
@@ -112,6 +128,7 @@ test('the real plugin apply/dispose cycle leaves no timer behind', async () => {
           configDir: examplesDir,
           dataDir,
           heartbeatMs: 60_000,
+          modelMode: 'mock',
         })
 
         assert.ok(
@@ -149,6 +166,7 @@ test('plugin configuration failures happen before a timer is registered', async 
       apply(fake.ctx, {
         configDir: `${examplesDir}-missing`,
         heartbeatMs: 60_000,
+          modelMode: 'mock',
       }),
     /configuration directory does not exist/,
   )
@@ -187,7 +205,7 @@ test('enabled vision rejects mock mode before opening storage or registering a t
           heartbeatMs: 60_000,
           modelMode: 'mock',
         }),
-      /vision\.enabled requires modelMode "magpie"/,
+      /vision\.enabled requires a real model provider, not mock/,
     )
     assert.equal(timeoutCount(), baseline)
     // 视觉模式校验先于存储初始化，失败时不应生成数据目录或数据库。
@@ -209,6 +227,7 @@ test('an explicit startup report proves successful activation', async () => {
       configDir: examplesDir,
       dataDir,
       heartbeatMs: 60_000,
+      modelMode: 'mock',
       startupReportPath: reportPath,
     })
     fake.dispose()
@@ -255,6 +274,7 @@ test('a corrupt existing database blocks plugin activation before a timer exists
           configDir: examplesDir,
           dataDir: dir,
           heartbeatMs: 60_000,
+          modelMode: 'mock',
         }),
       /invalid SQLite file header/,
     )
@@ -266,3 +286,148 @@ test('a corrupt existing database blocks plugin activation before a timer exists
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('DSH provider fails before storage when reflect does not expose llm', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kanobot-plugin-dsh-missing-'))
+  const configDir = join(dir, 'config')
+  const dataDir = join(dir, 'data')
+  const baseline = timeoutCount()
+  const fake = createFakeContext()
+
+  try {
+    configureDshChatModel(configDir)
+    await assert.rejects(
+      () =>
+        apply(fake.ctx, {
+          configDir,
+          dataDir,
+          heartbeatMs: 60_000,
+        }),
+      /host does not expose ctx\.llm/,
+    )
+    assert.equal(existsSync(dataDir), false)
+    assert.equal(timeoutCount(), baseline)
+  } finally {
+    fake.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('DSH provider receives the host bridge and reports the exact route', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kanobot-plugin-dsh-'))
+  const configDir = join(dir, 'config')
+  const dataDir = join(dir, 'data')
+  const reportPath = join(dir, 'startup.json')
+  const fake = createFakeContext(createDshBridge())
+
+  try {
+    configureDshChatModel(configDir)
+    await apply(fake.ctx, {
+      configDir,
+      dataDir,
+      heartbeatMs: 60_000,
+      startupReportPath: reportPath,
+    })
+  } finally {
+    fake.dispose()
+  }
+
+  try {
+    const report = JSON.parse(readFileSync(reportPath, 'utf8')) as {
+      provider: string
+      model: string
+      modelMode: string
+    }
+    assert.equal(report.provider, 'test-route')
+    assert.equal(report.model, 'test/chat-model')
+    assert.equal(report.modelMode, 'dsh')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a legacy modelMode magpie does not mask the configured provider', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kanobot-plugin-legacy-mode-'))
+  const configDir = join(dir, 'config')
+  const dataDir = join(dir, 'data')
+  const reportPath = join(dir, 'startup.json')
+  const fake = createFakeContext(createDshBridge())
+
+  try {
+    configureDshChatModel(configDir)
+    await apply(fake.ctx, {
+      configDir,
+      dataDir,
+      heartbeatMs: 60_000,
+      modelMode: 'magpie',
+      startupReportPath: reportPath,
+    })
+    const report = JSON.parse(readFileSync(reportPath, 'utf8')) as {
+      provider: string
+      configuredProvider: string
+      modelMode: string
+    }
+    assert.equal(report.provider, 'test-route')
+    assert.equal(report.configuredProvider, 'dsh')
+    assert.equal(report.modelMode, 'dsh')
+  } finally {
+    fake.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+function configureDshChatModel(configDir: string): void {
+  cpSync(examplesDir, configDir, { recursive: true })
+  const path = join(configDir, 'system.toml')
+  const source = readFileSync(path, 'utf8')
+  const start = source.indexOf('[model]')
+  const end = source.indexOf('[vision]')
+  assert.ok(start >= 0 && end > start)
+  const section = [
+    '[model]',
+    'provider = "dsh"',
+    'route = "test-route"',
+    'name = "test/chat-model"',
+    'timeout_ms = 5000',
+    'max_retries = 0',
+    'max_output_tokens = 4096',
+    '',
+  ].join('\n')
+  writeFileSync(
+    path,
+    `${source.slice(0, start)}${section}\n${source.slice(end)}`,
+    'utf8',
+  )
+}
+
+function createDshBridge(): DshLlmBridge {
+  const info: DshResolvedModelInfo = {
+    provider: 'test-route',
+    id: 'test/chat-model',
+    name: 'Test Chat Model',
+    inputModalities: ['text'],
+  }
+  return {
+    listProviders() {
+      return [{ id: info.provider, name: 'Test Route' }]
+    },
+    async listModels() {
+      return [info]
+    },
+    async resolveModelInfo() {
+      return info
+    },
+    async prepareCall() {
+      const prepared: DshPreparedCall = {
+        model: info,
+        async *stream() {
+          throw new Error('startup test must not dispatch model calls')
+        },
+      }
+      return prepared
+    },
+    async *stream() {
+      throw new Error('startup test must not dispatch model calls')
+    },
+  }
+}

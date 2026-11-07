@@ -426,7 +426,7 @@ h2 {
 
 .panel-tabs {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 6px;
   padding: 5px;
   border: 1px solid var(--line);
@@ -982,7 +982,8 @@ h2 {
 }
 
 .field textarea,
-.field select {
+.field select,
+.field input {
   width: 100%;
   padding: 9px 11px;
   border: 1px solid var(--line);
@@ -991,6 +992,12 @@ h2 {
   background: var(--surface);
   font: inherit;
   font-size: 0.84rem;
+}
+
+.field input:disabled,
+.field select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .field textarea {
@@ -1003,6 +1010,94 @@ h2 {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+}
+
+.settings-panel {
+  gap: 12px;
+}
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-note,
+.credential-status {
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
+
+.settings-warning {
+  margin: 10px 0 0;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--line));
+  border-radius: 10px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  font-size: 0.76rem;
+}
+
+.settings-status {
+  margin: 10px 0 0;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent-strong) 25%, var(--line));
+  border-radius: 10px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  font-size: 0.78rem;
+}
+
+.settings-wide-field {
+  margin-top: 10px;
+}
+
+.check-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding-top: 19px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.check-field input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-strong);
+}
+
+.settings-credential {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.settings-credential .field {
+  margin-top: 9px;
+}
+
+.settings-vision-fields {
+  margin-top: 13px;
+}
+
+.settings-vision-fields[hidden] {
+  display: none;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  padding: 2px 2px 16px;
+}
+
+.settings-actions button:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 .dialog-actions {

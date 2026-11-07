@@ -39,6 +39,7 @@ const elements = {
   tabInitiative: document.querySelector('#tab-initiative'),
   tabMemory: document.querySelector('#tab-memory'),
   tabAudit: document.querySelector('#tab-audit'),
+  tabSettings: document.querySelector('#tab-settings'),
   tabButtons: Array.from(document.querySelectorAll('.tab-button')),
   initiativeBadge: document.querySelector('#initiative-badge'),
   initiativeEnabled: document.querySelector('#initiative-enabled'),
@@ -94,6 +95,48 @@ const elements = {
   auditList: document.querySelector('#audit-list'),
   auditEmpty: document.querySelector('#audit-empty'),
   auditError: document.querySelector('#audit-error'),
+  settingsForm: document.querySelector('#settings-form'),
+  settingsRefresh: document.querySelector('#settings-refresh'),
+  settingsReadOnly: document.querySelector('#settings-readonly'),
+  settingsHostNote: document.querySelector('#settings-host-note'),
+  settingsError: document.querySelector('#settings-error'),
+  settingsStatus: document.querySelector('#settings-status'),
+  settingsTest: document.querySelector('#settings-test'),
+  settingsSave: document.querySelector('#settings-save'),
+  settingsChatProvider: document.querySelector('#settings-chat-provider'),
+  settingsChatName: document.querySelector('#settings-chat-name'),
+  settingsChatRouteField: document.querySelector('#settings-chat-route-field'),
+  settingsChatRoute: document.querySelector('#settings-chat-route'),
+  settingsChatBaseField: document.querySelector('#settings-chat-base-field'),
+  settingsChatBaseUrl: document.querySelector('#settings-chat-base-url'),
+  settingsChatTimeout: document.querySelector('#settings-chat-timeout'),
+  settingsChatRetries: document.querySelector('#settings-chat-retries'),
+  settingsChatMaxOutput: document.querySelector('#settings-chat-max-output'),
+  settingsChatReasoning: document.querySelector('#settings-chat-reasoning'),
+  settingsChatPrivate: document.querySelector('#settings-chat-private'),
+  settingsChatCredentialMode: document.querySelector('#settings-chat-credential-mode'),
+  settingsChatCredentialStatus: document.querySelector('#settings-chat-credential-status'),
+  settingsChatEnvField: document.querySelector('#settings-chat-env-field'),
+  settingsChatEnv: document.querySelector('#settings-chat-env'),
+  settingsChatSecretField: document.querySelector('#settings-chat-secret-field'),
+  settingsChatSecret: document.querySelector('#settings-chat-secret'),
+  settingsVisionEnabled: document.querySelector('#settings-vision-enabled'),
+  settingsVisionFields: document.querySelector('#settings-vision-fields'),
+  settingsVisionProvider: document.querySelector('#settings-vision-provider'),
+  settingsVisionName: document.querySelector('#settings-vision-name'),
+  settingsVisionBaseUrl: document.querySelector('#settings-vision-base-url'),
+  settingsVisionTimeout: document.querySelector('#settings-vision-timeout'),
+  settingsVisionRetries: document.querySelector('#settings-vision-retries'),
+  settingsVisionMaxOutput: document.querySelector('#settings-vision-max-output'),
+  settingsVisionImageBytes: document.querySelector('#settings-vision-image-bytes'),
+  settingsVisionDescriptionChars: document.querySelector('#settings-vision-description-chars'),
+  settingsVisionPrivate: document.querySelector('#settings-vision-private'),
+  settingsVisionCredentialMode: document.querySelector('#settings-vision-credential-mode'),
+  settingsVisionCredentialStatus: document.querySelector('#settings-vision-credential-status'),
+  settingsVisionEnvField: document.querySelector('#settings-vision-env-field'),
+  settingsVisionEnv: document.querySelector('#settings-vision-env'),
+  settingsVisionSecretField: document.querySelector('#settings-vision-secret-field'),
+  settingsVisionSecret: document.querySelector('#settings-vision-secret'),
 }
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -116,6 +159,8 @@ const state = {
   auditSource: 'all',
   auditEntries: [],
   initiative: null,
+  modelSettings: null,
+  settingsBusy: false,
 }
 
 void initialize()
@@ -142,6 +187,11 @@ async function initialize() {
     await loadInitiative()
   } catch (error) {
     showInitiativeError(errorMessage(error))
+  }
+  try {
+    await loadModelSettings()
+  } catch (error) {
+    showSettingsError(errorMessage(error))
   }
   updateNotificationControls()
   window.setInterval(() => {
@@ -1509,6 +1559,405 @@ function statusLabel(value) {
   }
 }
 
+/* ------------------------------ 模型设置 ------------------------------ */
+
+async function loadModelSettings() {
+  const response = await fetch('/kanobot/api/settings/models', {
+    credentials: 'same-origin',
+    headers: { accept: 'application/json' },
+  })
+  if (response.status === 404) {
+    state.modelSettings = null
+    updateSettingsButtons()
+    showSettingsError('当前宿主没有启用模型设置接口。')
+    return null
+  }
+  if (!response.ok) {
+    throw new Error(await responseMessage(response, '读取模型设置失败'))
+  }
+  const view = await response.json()
+  applyModelSettings(view)
+  hideSettingsError()
+  return view
+}
+
+function applyModelSettings(view) {
+  if (!view || typeof view !== 'object') {
+    throw new Error('模型设置响应格式不正确')
+  }
+  state.modelSettings = view
+  const chat = view.chat ?? {}
+  const vision = view.vision ?? {}
+  const dshChatAvailable =
+    view.hostCapabilities?.dshChat?.available === true
+
+  setSelectValue(elements.settingsChatProvider, chat.provider ?? 'mock')
+  const dshOption = elements.settingsChatProvider.querySelector(
+    'option[value="dsh"]',
+  )
+  if (dshOption instanceof HTMLOptionElement) {
+    dshOption.disabled = !dshChatAvailable
+  }
+  elements.settingsHostNote.hidden = dshChatAvailable
+  elements.settingsHostNote.textContent = dshChatAvailable
+    ? ''
+    : view.hostCapabilities?.dshChat?.reason ??
+      '当前宿主不支持 DSH provider。'
+  elements.settingsChatName.value = chat.name ?? ''
+  elements.settingsChatRoute.value = chat.route ?? ''
+  elements.settingsChatBaseUrl.value = chat.baseUrl ?? ''
+  elements.settingsChatTimeout.value = String(chat.timeoutMs ?? 120_000)
+  elements.settingsChatRetries.value = String(chat.maxRetries ?? 2)
+  elements.settingsChatMaxOutput.value =
+    chat.maxOutputTokens === null || chat.maxOutputTokens === undefined
+      ? ''
+      : String(chat.maxOutputTokens)
+  elements.settingsChatReasoning.value = chat.reasoningEffort ?? ''
+  elements.settingsChatPrivate.checked = chat.allowPrivateNetwork === true
+  elements.settingsChatCredentialMode.value = 'keep'
+  elements.settingsChatEnv.value = ''
+  elements.settingsChatSecret.value = ''
+  elements.settingsChatCredentialStatus.textContent =
+    credentialStatusText(chat.credential)
+
+  elements.settingsVisionEnabled.checked = vision.enabled === true
+  setSelectValue(
+    elements.settingsVisionProvider,
+    vision.provider ?? 'magpie',
+  )
+  elements.settingsVisionName.value = vision.name ?? ''
+  elements.settingsVisionBaseUrl.value = vision.baseUrl ?? ''
+  elements.settingsVisionTimeout.value = String(vision.timeoutMs ?? 120_000)
+  elements.settingsVisionRetries.value = String(vision.maxRetries ?? 2)
+  elements.settingsVisionMaxOutput.value =
+    vision.maxOutputTokens === null || vision.maxOutputTokens === undefined
+      ? ''
+      : String(vision.maxOutputTokens)
+  elements.settingsVisionImageBytes.value = String(
+    vision.maxImageBytes ?? 5 * 1024 * 1024,
+  )
+  elements.settingsVisionDescriptionChars.value = String(
+    vision.maxDescriptionChars ?? 2_000,
+  )
+  elements.settingsVisionPrivate.checked =
+    vision.allowPrivateNetwork === true
+  elements.settingsVisionCredentialMode.value = 'keep'
+  elements.settingsVisionEnv.value = ''
+  elements.settingsVisionSecret.value = ''
+  elements.settingsVisionCredentialStatus.textContent =
+    credentialStatusText(vision.credential)
+
+  elements.settingsReadOnly.hidden = view.readOnly !== true
+  elements.settingsStatus.hidden = true
+  syncSettingsForm()
+  updateSettingsButtons()
+}
+
+function syncSettingsForm() {
+  const chatProvider = elements.settingsChatProvider.value
+  const chatIsDsh = chatProvider === 'dsh'
+  const chatIsMock = chatProvider === 'mock'
+  const chatNeedsEndpoint = !chatIsDsh && !chatIsMock
+  const chatUsesProjectCredential = !chatIsDsh && !chatIsMock
+
+  elements.settingsChatRouteField.hidden = !chatIsDsh
+  elements.settingsChatRoute.disabled = !chatIsDsh
+  elements.settingsChatRoute.required = chatIsDsh
+  elements.settingsChatBaseField.hidden = !chatNeedsEndpoint
+  elements.settingsChatBaseUrl.disabled = !chatNeedsEndpoint
+  elements.settingsChatBaseUrl.required = chatNeedsEndpoint
+  elements.settingsChatMaxOutput.required = !chatIsMock
+  elements.settingsChatReasoning.disabled = chatIsMock
+  elements.settingsChatPrivate.disabled = chatProvider !== 'openai-compatible'
+  elements.settingsChatCredentialMode.disabled = !chatUsesProjectCredential
+  if (!chatUsesProjectCredential) {
+    elements.settingsChatCredentialMode.value = 'none'
+  }
+
+  const visionEnabled = elements.settingsVisionEnabled.checked
+  elements.settingsVisionFields.hidden = !visionEnabled
+  for (const element of [
+    elements.settingsVisionProvider,
+    elements.settingsVisionName,
+    elements.settingsVisionBaseUrl,
+    elements.settingsVisionTimeout,
+    elements.settingsVisionRetries,
+    elements.settingsVisionMaxOutput,
+    elements.settingsVisionImageBytes,
+    elements.settingsVisionDescriptionChars,
+    elements.settingsVisionPrivate,
+  ]) {
+    element.disabled = !visionEnabled
+  }
+  elements.settingsVisionName.required = visionEnabled
+  elements.settingsVisionBaseUrl.required = visionEnabled
+  elements.settingsVisionMaxOutput.required = visionEnabled
+  elements.settingsVisionTimeout.required = visionEnabled
+  elements.settingsVisionRetries.required = visionEnabled
+  elements.settingsVisionImageBytes.required = visionEnabled
+  elements.settingsVisionDescriptionChars.required = visionEnabled
+  elements.settingsVisionCredentialMode.disabled = !visionEnabled
+  if (!visionEnabled) {
+    elements.settingsVisionCredentialMode.value = 'keep'
+  } else if (elements.settingsVisionProvider.value === '') {
+    elements.settingsVisionProvider.value = 'magpie'
+  }
+
+  syncCredentialFields('chat')
+  syncCredentialFields('vision')
+  updateSettingsButtons()
+}
+
+function syncCredentialFields(prefix) {
+  const mode = elements[`settings${capitalize(prefix)}CredentialMode`]
+  const envField = elements[`settings${capitalize(prefix)}EnvField`]
+  const env = elements[`settings${capitalize(prefix)}Env`]
+  const secretField = elements[`settings${capitalize(prefix)}SecretField`]
+  const secret = elements[`settings${capitalize(prefix)}Secret`]
+  const disabled = mode.disabled
+  const environmentMode = !disabled && mode.value === 'environment'
+  const secretMode = !disabled && mode.value === 'new'
+  envField.hidden = !environmentMode
+  env.disabled = !environmentMode
+  env.required = environmentMode
+  secretField.hidden = !secretMode
+  secret.disabled = !secretMode
+  secret.required = secretMode
+}
+
+function credentialStatusText(credential) {
+  if (!credential || typeof credential !== 'object') {
+    return '凭据状态未知'
+  }
+  if (credential.mode === 'environment') {
+    return `使用环境变量：${credential.environmentName ?? '（未命名）'}`
+  }
+  if (credential.mode === 'local-secret') {
+    return credential.configured === true
+      ? `使用本地加密密钥：${credential.label ?? '已保存'}`
+      : '本地密钥不可用，请重新填写或改用环境变量'
+  }
+  return '未配置 API key'
+}
+
+async function testModelSettings() {
+  if (state.settingsBusy) return
+  if (!elements.settingsForm.reportValidity()) return
+  setSettingsBusy(true)
+  hideSettingsError()
+  try {
+    const result = await modelSettingsRequest(
+      'POST',
+      '/kanobot/api/settings/models/test',
+      buildModelSettingsDraft(),
+    )
+    const vision = result.vision?.enabled === true
+      ? `${result.vision.provider} / ${result.vision.model}`
+      : '未启用'
+    showSettingsStatus(
+      `连接测试通过：${result.chat.provider} / ${result.chat.model}；视觉：${vision}`,
+    )
+  } catch (error) {
+    showSettingsError(errorMessage(error))
+  } finally {
+    setSettingsBusy(false)
+  }
+}
+
+async function saveModelSettings() {
+  if (state.settingsBusy) return
+  if (state.modelSettings?.readOnly === true) {
+    showSettingsError('示例配置是只读的，不能保存模型设置。')
+    return
+  }
+  if (!elements.settingsForm.reportValidity()) return
+  setSettingsBusy(true)
+  hideSettingsError()
+  try {
+    const view = await modelSettingsRequest(
+      'PUT',
+      '/kanobot/api/settings/models',
+      buildModelSettingsDraft(),
+    )
+    applyModelSettings(view)
+    elements.settingsChatSecret.value = ''
+    elements.settingsVisionSecret.value = ''
+    showSettingsStatus(
+      '模型设置已保存。请重启当前宿主；运行中的对话不会热切换模型。',
+    )
+  } catch (error) {
+    showSettingsError(errorMessage(error))
+  } finally {
+    setSettingsBusy(false)
+  }
+}
+
+function buildModelSettingsDraft() {
+  const chatProvider = elements.settingsChatProvider.value
+  const chatNeedsEndpoint =
+    chatProvider === 'magpie' || chatProvider === 'openai-compatible'
+  const visionEnabled = elements.settingsVisionEnabled.checked
+  return {
+    chat: {
+      provider: chatProvider,
+      route: chatProvider === 'dsh'
+        ? requiredSettingText(elements.settingsChatRoute, 'DSH route')
+        : null,
+      name: requiredSettingText(elements.settingsChatName, '聊天模型名'),
+      baseUrl: chatNeedsEndpoint
+        ? requiredSettingText(elements.settingsChatBaseUrl, '聊天 Base URL')
+        : null,
+      timeoutMs: settingInteger(elements.settingsChatTimeout, '聊天超时'),
+      maxRetries: settingInteger(elements.settingsChatRetries, '聊天重试次数'),
+      maxOutputTokens:
+        chatProvider === 'mock'
+          ? nullableSettingInteger(
+              elements.settingsChatMaxOutput,
+              '聊天最大输出 Token',
+            )
+          : settingInteger(
+              elements.settingsChatMaxOutput,
+              '聊天最大输出 Token',
+            ),
+      reasoningEffort:
+        chatProvider === 'mock'
+          ? null
+          : nullableSettingText(elements.settingsChatReasoning),
+      allowPrivateNetwork: elements.settingsChatPrivate.checked,
+      credential: settingCredential('chat'),
+    },
+    vision: {
+      enabled: visionEnabled,
+      provider: visionEnabled ? elements.settingsVisionProvider.value : null,
+      name: visionEnabled
+        ? requiredSettingText(elements.settingsVisionName, '视觉模型名')
+        : null,
+      baseUrl: visionEnabled
+        ? requiredSettingText(elements.settingsVisionBaseUrl, '视觉 Base URL')
+        : null,
+      timeoutMs: settingInteger(elements.settingsVisionTimeout, '视觉超时'),
+      maxRetries: settingInteger(
+        elements.settingsVisionRetries,
+        '视觉重试次数',
+      ),
+      maxOutputTokens: visionEnabled
+        ? settingInteger(
+            elements.settingsVisionMaxOutput,
+            '视觉最大输出 Token',
+          )
+        : null,
+      allowPrivateNetwork: elements.settingsVisionPrivate.checked,
+      maxImageBytes: settingInteger(
+        elements.settingsVisionImageBytes,
+        '最大图片字节',
+      ),
+      maxDescriptionChars: settingInteger(
+        elements.settingsVisionDescriptionChars,
+        '最大转述字数',
+      ),
+      credential: settingCredential('vision'),
+    },
+  }
+}
+
+function settingCredential(prefix) {
+  const modeElement =
+    elements[`settings${capitalize(prefix)}CredentialMode`]
+  const mode = modeElement.value
+  if (mode === 'environment') {
+    return {
+      mode,
+      environmentName: requiredSettingText(
+        elements[`settings${capitalize(prefix)}Env`],
+        '环境变量名',
+      ),
+    }
+  }
+  if (mode === 'new') {
+    const value = elements[`settings${capitalize(prefix)}Secret`].value
+    if (value.trim() === '') {
+      throw new Error('新 API key 不能为空')
+    }
+    return { mode, value }
+  }
+  return { mode }
+}
+
+function requiredSettingText(element, label) {
+  const value = element.value.trim()
+  if (value === '') throw new Error(`${label}不能为空`)
+  return value
+}
+
+function nullableSettingText(element) {
+  const value = element.value.trim()
+  return value === '' ? null : value
+}
+
+function settingInteger(element, label) {
+  const raw = element.value.trim()
+  const value = Number(raw)
+  if (raw === '' || !Number.isSafeInteger(value)) {
+    throw new Error(`${label}必须是整数`)
+  }
+  return value
+}
+
+function nullableSettingInteger(element, label) {
+  if (element.value.trim() === '') return null
+  return settingInteger(element, label)
+}
+
+async function modelSettingsRequest(method, path, body) {
+  const headers = { accept: 'application/json' }
+  const init = {
+    method,
+    credentials: 'same-origin',
+    headers,
+  }
+  if (body !== undefined) {
+    headers['content-type'] = 'application/json'
+    init.body = JSON.stringify(body)
+  }
+  const response = await fetch(path, init)
+  if (!response.ok) {
+    throw new Error(await responseMessage(response, '模型设置操作失败'))
+  }
+  return response.json()
+}
+
+function setSettingsBusy(busy) {
+  state.settingsBusy = busy
+  updateSettingsButtons()
+}
+
+function updateSettingsButtons() {
+  const readOnly = state.modelSettings?.readOnly === true
+  elements.settingsTest.disabled =
+    state.settingsBusy || state.modelSettings === null
+  elements.settingsSave.disabled =
+    state.settingsBusy || state.modelSettings === null || readOnly
+}
+
+function showSettingsError(message) {
+  elements.settingsError.textContent = message
+  elements.settingsError.hidden = false
+  elements.settingsStatus.hidden = true
+}
+
+function hideSettingsError() {
+  elements.settingsError.hidden = true
+}
+
+function showSettingsStatus(message) {
+  elements.settingsStatus.textContent = message
+  elements.settingsStatus.hidden = false
+}
+
+function capitalize(value) {
+  return value.slice(0, 1).toUpperCase() + value.slice(1)
+}
+
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error)
 }
@@ -1536,7 +1985,8 @@ function switchTab(tab) {
     tab !== 'status' &&
     tab !== 'initiative' &&
     tab !== 'memory' &&
-    tab !== 'audit'
+    tab !== 'audit' &&
+    tab !== 'settings'
   ) {
     return
   }
@@ -1550,6 +2000,7 @@ function switchTab(tab) {
   elements.tabInitiative.hidden = tab !== 'initiative'
   elements.tabMemory.hidden = tab !== 'memory'
   elements.tabAudit.hidden = tab !== 'audit'
+  elements.tabSettings.hidden = tab !== 'settings'
   if (tab === 'initiative') {
     void loadInitiative().catch(error =>
       showInitiativeError(errorMessage(error)),
@@ -1558,6 +2009,10 @@ function switchTab(tab) {
     void loadMemories().catch(error => showMemoryError(errorMessage(error)))
   } else if (tab === 'audit') {
     void loadAudit().catch(error => showAuditError(errorMessage(error)))
+  } else if (tab === 'settings') {
+    void loadModelSettings().catch(error =>
+      showSettingsError(errorMessage(error)),
+    )
   }
 }
 
@@ -1592,6 +2047,31 @@ elements.circuitReset.addEventListener('click', () => {
     showInitiativeError(errorMessage(error)),
   )
 })
+
+elements.settingsRefresh.addEventListener('click', () => {
+  void loadModelSettings().catch(error =>
+    showSettingsError(errorMessage(error)),
+  )
+})
+
+elements.settingsForm.addEventListener('submit', event => {
+  event.preventDefault()
+  void saveModelSettings()
+})
+
+elements.settingsTest.addEventListener('click', () => {
+  void testModelSettings()
+})
+
+for (const element of [
+  elements.settingsChatProvider,
+  elements.settingsChatCredentialMode,
+  elements.settingsVisionEnabled,
+  elements.settingsVisionProvider,
+  elements.settingsVisionCredentialMode,
+]) {
+  element.addEventListener('change', () => syncSettingsForm())
+}
 
 elements.notificationEnable.addEventListener('click', () => {
   void requestNotificationPermission().catch(error =>

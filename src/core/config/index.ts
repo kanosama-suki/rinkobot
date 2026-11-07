@@ -6,8 +6,12 @@
 
 export { ConfigError, ConfigFieldError, formatConfigIssues } from './errors.ts'
 export type { ConfigIssue } from './errors.ts'
-export { loadConfigFromDirectory } from './loader.ts'
+export {
+  loadConfigFromDirectory,
+  validateModelBaseUrl,
+} from './loader.ts'
 export type {
+  ChatProvider,
   Environment,
   IdentityConfig,
   IdentityMode,
@@ -18,5 +22,9 @@ export type {
   PolicyConfig,
   SystemConfig,
   VisionConfig,
+  VisionProvider,
 } from './types.ts'
-export { CONFIG_SCHEMA_VERSION } from './types.ts'
+export {
+  CONFIG_SCHEMA_VERSION,
+  RUNTIME_MODEL_SETTINGS_FILENAME,
+} from './types.ts'

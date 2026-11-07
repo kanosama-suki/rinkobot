@@ -40,6 +40,14 @@ export interface MagpieChatModelOptions {
   apiKey?: string | null
   retryBaseDelayMs?: number
   sessionId?: string
+  /** OpenAI-compatible 路由可以复用这个驱动，但审计身份必须来自配置。 */
+  providerId?: string
+  mode?: string
+  providerName?: string
+  sendSessionHeader?: boolean
+  /** 第三方端点每次请求前的 SSRF/DNS 检查；Magpie 默认不需要。 */
+  preflight?: (() => Promise<void>) | null
+  maxResponsePrefillChars?: number
 }
 
 interface MagpieModelDescriptor {
@@ -57,8 +65,12 @@ interface AttemptState {
  */
 export class MagpieChatModel implements ChatModel {
   readonly id: string
-  readonly mode = 'magpie'
-  readonly provider = 'magpie'
+  readonly mode: string
+  readonly provider: string
+  readonly capabilities = {
+    responsePrefill: true,
+    jsonMode: true,
+  } as const
 
   private readonly baseUrl: string
   private readonly maxOutputTokens: number
@@ -68,12 +80,31 @@ export class MagpieChatModel implements ChatModel {
   private readonly apiKey: string | null
   private readonly retryBaseDelayMs: number
   private readonly sessionId: string
+  private readonly providerName: string
+  private readonly sendSessionHeader: boolean
+  private readonly preflight: (() => Promise<void>) | null
+  private readonly maxResponsePrefillChars: number
   private pricing: ChatModelPricing | null = null
   private checked = false
 
   constructor(options: MagpieChatModelOptions) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl)
     this.id = validateLabel(options.model, 'model')
+    this.mode = validateLabel(options.mode ?? 'magpie', 'mode')
+    this.provider = validateLabel(
+      options.providerId ?? 'magpie',
+      'providerId',
+    )
+    this.providerName = validateLabel(
+      options.providerName ?? 'Magpie',
+      'providerName',
+    )
+    this.sendSessionHeader = options.sendSessionHeader ?? true
+    this.preflight = options.preflight ?? null
+    this.maxResponsePrefillChars = validatePositiveInteger(
+      options.maxResponsePrefillChars ?? MAX_RESPONSE_PREFILL_CHARS,
+      'maxResponsePrefillChars',
+    )
     this.maxOutputTokens = validatePositiveInteger(
       options.maxOutputTokens,
       'maxOutputTokens',
@@ -123,10 +154,12 @@ export class MagpieChatModel implements ChatModel {
       : AbortSignal.any([signal, controller.signal])
 
     try {
+      await this.preflight?.()
       const response = await fetch(`${this.baseUrl}/models`, {
         method: 'GET',
         headers: this.headers('application/json'),
         signal: combined,
+        redirect: 'error',
       })
       if (!response.ok) {
         await cancelBody(response)
@@ -196,7 +229,10 @@ export class MagpieChatModel implements ChatModel {
     const responsePrefill =
       request.responsePrefill === undefined
         ? null
-        : validateResponsePrefill(request.responsePrefill)
+        : validateResponsePrefill(
+            request.responsePrefill,
+            this.maxResponsePrefillChars,
+          )
     let lastError: ChatModelError | null = null
     let outputRepairRequired = false
     for (let attempt = 1; attempt <= this.maxRetries + 1; attempt += 1) {
@@ -261,6 +297,7 @@ export class MagpieChatModel implements ChatModel {
     }
 
     try {
+      await this.preflight?.()
       const response = await fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
@@ -268,6 +305,7 @@ export class MagpieChatModel implements ChatModel {
           'content-type': 'application/json',
         },
         signal: combined,
+        redirect: 'error',
         body: JSON.stringify({
           model: this.id,
           messages: [
@@ -402,9 +440,9 @@ export class MagpieChatModel implements ChatModel {
   }
 
   private headers(accept: string): Record<string, string> {
-    const headers: Record<string, string> = {
-      accept,
-      [SESSION_HEADER]: this.sessionId,
+    const headers: Record<string, string> = { accept }
+    if (this.sendSessionHeader) {
+      headers[SESSION_HEADER] = this.sessionId
     }
     if (this.apiKey !== null) {
       headers.authorization = `Bearer ${this.apiKey}`
@@ -861,15 +899,18 @@ function validateReasoningEffort(value: unknown): string {
   return value
 }
 
-function validateResponsePrefill(value: unknown): string {
+function validateResponsePrefill(
+  value: unknown,
+  maxChars: number,
+): string {
   if (
     typeof value !== 'string' ||
     value.length === 0 ||
-    Array.from(value).length > MAX_RESPONSE_PREFILL_CHARS ||
+    Array.from(value).length > maxChars ||
     /[\r\n\0]/.test(value)
   ) {
     throw new RangeError(
-      `responsePrefill must be 1..${MAX_RESPONSE_PREFILL_CHARS} single-line characters`,
+      `responsePrefill must be 1..${maxChars} single-line characters`,
     )
   }
   return value

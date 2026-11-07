@@ -1,6 +1,6 @@
 # 项目文件结构
 
-以下路径相对于项目根目录 `a/`。当前仓库处于 M4 自动化实现与测试已完成、等待真实模型试用和日常观察的状态：已有 DSH Host 插件和不经过 DSH 的本地开发入口、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、网页聊天和 SSE、精确模型网关和调用审计、长期记忆与中文检索、单次 JSON 信封、所有者记忆/控制/审计面板、风格检查、上下文预算、独立视觉模型，以及 schema v9 的单一调度循环、软性生活计划、主动消息、outbox、提醒、一次性关心、每日摘要、回收站到期清除和浏览器通知。真实模型 M4 内容质量、真实浏览器后台通知、M4.5、QQ、浏览器 worker、VM、游戏、自进化和公开发送仍不存在。已确认的双形态是“同一核心 + DSH 插件 + 独立程序”，M4 先只做网页渠道，M4.5 才收口发行基础、模型 provider 设置页和独立正式入口；`src/dev` 仍只是开发工具，不是产品。本文中的“目标结构”是后续实现的约束，不是已经存在的目录。
+以下路径相对于项目根目录 `a/`。当前仓库处于 M4.5 已完成、等待日常观察和下一阶段选择的状态：已有 DSH Host 插件、正式独立程序、开发入口、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、网页聊天和 SSE、长期记忆与中文检索、单次 JSON 信封、所有者面板、风格检查、上下文预算、独立视觉模型、schema v9 的主动性与提醒闭环，以及聊天/视觉分开的 provider 设置页、运行时覆盖、环境变量/本地加密 secret store 和第三方端点治理。真实第三方 API、日常观察、QQ、浏览器 worker、VM、游戏、自进化和公开发送仍不存在。双形态是“同一核心 + DSH 插件 + 独立程序”，两者共用数据库契约；`src/dev` 仍只是开发工具，不是产品。
 
 ## 1. 当前结构
 
@@ -22,6 +22,7 @@ kanobot/a/
 ├── scripts/
 │   ├── check-import-case.ts          相对 import 路径大小写检查
 │   ├── dev-server.ts                 不经过 DSH 的本地开发网页启动器
+│   ├── app-server.ts                 正式独立程序启动器和参数解析
 │   ├── validate-config.ts            配置目录预检 CLI
 │   ├── preflight-runtime.ts          配置、主库、墓碑库的启动前预检
 │   └── m1-lifecycle.ts               10 次 apply/dispose 生命周期报告
@@ -29,9 +30,21 @@ kanobot/a/
 │   ├── plugin/
 │   │   ├── index.ts                  DSH Host 插件入口
 │   │   ├── lifecycle.ts              定时器生命周期
-│   │   ├── models.ts                 Host 与开发入口共用的精确模型工厂
+│   │   ├── models.ts                 旧调用点兼容的 provider 薄导出
 │   │   ├── version.ts                插件名和版本
 │   │   └── cordis.patch.yml          bundle 默认插入的插件行
+│   ├── app/
+│   │   ├── index.ts                  正式独立程序公开入口
+│   │   └── server.ts                 显式目录、一次性登录、Cookie 和网页装配
+│   ├── model-providers/
+│   │   ├── index.ts                  provider 工厂、精确能力和凭据解析
+│   │   ├── dsh-chat.ts               DSH ctx.llm 窄适配器、有限重试和错误映射
+│   │   ├── dsh-types.ts              DSH 可选服务的本地窄接口
+│   │   ├── secret-store.ts           AES-256-GCM 本地密钥存储
+│   │   └── url-security.ts           第三方 URL/DNS/私网前置检查
+│   ├── settings/
+│   │   ├── index.ts                  运行时模型设置公开接口
+│   │   └── model-settings.ts         设置视图、测试、保存和运行时覆盖
 │   ├── core/
 │   │   ├── config/
 │   │   │   ├── index.ts              配置模块公开导出
@@ -118,6 +131,7 @@ kanobot/a/
     ├── memory-research.md             记忆插件源码调研和取舍
     ├── m4.0-memory-acceptance.md      M4 第 0 步记忆质量门控验收
     ├── m4-acceptance.md               M4 主动性、提醒、每日整理和 schema v9 验收
+    ├── m4.5-acceptance.md             M4.5 双形态、provider、设置页和安全边界验收
     ├── m1-acceptance.md              M1 八项验收、证据和已知边界
     ├── m2-acceptance.md              M2 五项验收、运行证据和已知边界
     ├── m3-acceptance.md              M3.0 聊天骨架验收、证据和未完成项
@@ -158,10 +172,11 @@ kanobot/a/
 - `docs/memory-research.md` 记录 `dsh-mnemon`、`dsh-engram`、`dsh-memento`、`dsh-meow-memory` 和 `dsh-dream` 的调研快照、许可证边界和可借鉴机制。
 - `docs/m4.0-memory-acceptance.md` 记录 M4 第 0 步的问题意图、相关性门槛、显式记忆兜底、配置和 181 项自动测试结果。
 - `docs/m4-acceptance.md` 记录 M4 的单一调度、软计划、主动消息、outbox、提醒、每日整理、浏览器通知、schema v9、201 项自动测试和未验证边界。
+- `docs/m4.5-acceptance.md` 记录 M4.5 的双形态、provider、设置页、密钥/端点治理、4100 加载回归、241 项自动测试和未验证边界。
 
 ## 2. 目标结构
 
-后续实现按下面的边界扩展。目录可以按实际工作量调整，但模块职责和配置归属不能混在一起。
+M4.5 的 `src/app` 和 `src/model-providers` 已落地；其余目录仍按里程碑逐步出现。目录可以按实际工作量调整，但模块职责和配置归属不能混在一起。
 
 ```text
 kanobot/a/
@@ -180,8 +195,8 @@ kanobot/a/
 │   └── examples/                     可提交的脱敏 TOML 模板
 ├── src/
 │   ├── plugin/                       DSH 入口、生命周期和依赖装配
-│   ├── app/                          独立程序正式入口（M4.5；共享 core，不复用 dev）
-│   ├── model-providers/              模型适配器：DSH ctx.llm、Magpie、OpenAI-compatible、mock
+│   ├── app/                          独立程序正式入口（已落地；共享 core，不复用 dev）
+│   ├── model-providers/              已落地：DSH ctx.llm、Magpie、OpenAI-compatible、mock
 │   ├── dev/                          仅开发用的回环网页入口，不是产品入口
 │   ├── core/                         配置、时钟、事件、reducer、快照、存储和迁移
 │   ├── identity/                     身份基线和版本
@@ -232,7 +247,7 @@ M2/M3 的实际数据布局：
 - 业务代码按 `src/<module>/` 放置；模块之间通过明确接口交互，不共享任意全局变量。
 - `core` 不导入 DSH 或独立程序专用模块。DSH 插件、独立程序、模型 provider 和渠道都只通过适配器调用 core；新增宿主不能复制人格、记忆或状态逻辑。
 - 模型 provider 放在宿主/适配层，不把 Magpie、DeepSeek、Gemini 或某个第三方 URL 写进聊天核心；每次调用的精确 provider、模型、能力和审计由适配器负责。
-- M3 的 `src/dev` 只用于本地调试。M4.5 的独立程序必须另建正式入口，补齐鉴权、配置、数据生命周期、安装和发布；不能把开发入口换个名字就当产品。
+- `src/dev` 只用于本地调试。正式独立程序已经另建在 `src/app`，补齐显式配置/数据目录、一次性登录、Cookie 鉴权、数据生命周期和发布入口；不能把开发入口换个名字就当产品。
 - 一个小型 FSM 只能放在具体流程模块内，例如 `src/channels/` 的投递状态或 `src/evolution/` 的候选生命周期；不得新增“角色总状态机”。
 - 单元测试放 `tests/unit/`，跨模块和 DSH 生命周期测试放 `tests/integration/`，回放与迁移测试放 `tests/replay/`。
 - 人格场景规格放 `tests/scenarios/`；当前样例使用脚本化占位回复，不能把通过结果当成真实模型行为。
@@ -261,9 +276,22 @@ ui.toml
 
 `channels.toml` 是群列表、私聊白名单、@ 规则和投递策略的唯一配置来源。配置加载器统一做 schema 校验、默认值、跨文件引用检查和 fail-closed，不把参数散落到各模块。
 
-`system.toml` 的 `[context]` 保存单轮上下文的字符预算和分块上限；`[model]` 保存聊天模型和可选推理档位；`[vision]` 保存独立视觉模型的开关、精确模型名和请求上限。`initiative.toml` 保存 tick、软计划、主动消息、提醒、outbox 和每日整理参数。M3 基线仍只连接本机回环 Magpie `/v1`；M4.5 通过 provider 适配层增加 DSH `ctx.llm` 和受控的第三方 OpenAI-compatible 端点。`memory.toml` 的 `[trash]` 保存回收站期限，`[recall]` 保存相关性和候选上限。`[storage]` 只写相对数据目录的路径；主库、墓碑库和备份目录的实际绝对路径由 `dataDir` 解析并在存储层再次检查目录逃逸。
+`system.toml` 的 `[context]` 保存单轮上下文的字符预算和分块上限；`[model]` 保存聊天 provider、精确模型、可选推理档位和凭据引用；`[vision]` 保存独立视觉模型的开关、provider、精确模型名和请求上限。`initiative.toml` 保存 tick、软计划、主动消息、提醒、outbox 和每日整理参数。聊天 provider 支持本机 Magpie、DSH `ctx.llm`、受控 OpenAI-compatible 和 mock；视觉 provider 支持本机 Magpie 或受控 OpenAI-compatible。`memory.toml` 的 `[trash]` 保存回收站期限，`[recall]` 保存相关性和候选上限。`[storage]` 只写相对数据目录的路径；主库、墓碑库和备份目录的实际绝对路径由 `dataDir` 解析并在存储层再次检查目录逃逸。
 
-模型来源、聊天/视觉模型、`separate`/`unified` 视觉模式、人格复核模式、主动渠道、QQ 聚合参数和记忆相关性门槛都属于可配置选项。示例配置只放脱敏默认值；M4.5 的 Web UI 修改 Git 忽略的运行时配置和 secret 引用，不回显密钥，不直接改仓库模板。
+模型来源、聊天/视觉模型、`separate`/`unified` 视觉模式、人格复核模式、主动渠道、QQ 聚合参数和记忆相关性门槛都属于可配置选项。示例配置只放脱敏默认值；设置页修改配置目录中 Git 忽略的 `model-settings.json` 和 `secrets/`，不回显密钥，不直接改仓库模板。运行时覆盖只允许 `model` 和 `vision` 段，未改配置需要重启宿主才生效。
+
+配置目录中的运行时文件：
+
+```text
+<configDir>/
+├── system.toml ...                   普通 TOML 配置
+├── model-settings.json               设置页写入的聊天/视觉覆盖，含凭据引用
+└── secrets/
+    ├── model-secrets.key             AES-256-GCM 主密钥（尽力限制权限）
+    └── model-secrets.json            加密后的凭据条目
+```
+
+`model-settings.json` 和 `secrets/` 不进入 Git。主密钥与密文在同一配置目录，只提供静态加密和文件权限缓解，不是操作系统凭据管理器。
 
 ## 5. 暂时不拆的东西
 

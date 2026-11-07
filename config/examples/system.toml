@@ -1,5 +1,5 @@
 # 运行环境、时区、模型路由和资源上限。
-# API key 通过 DSH 凭据或环境变量提供，不写进配置文件。
+# API key 通过环境变量或本地加密 secret 引用提供，配置文件不写值。
 schema_version = 1
 environment = "development"
 
@@ -23,14 +23,21 @@ max_history_chars = 8000
 max_message_chars = 4000
 
 [model]
-# M3.1 使用电脑上的 Magpie 本地模型路由。地址只能是回环 /v1 端点；
-# 精确模型名不会自动替换成 auto/* 路由组。
+# 示例默认使用电脑上的 Magpie 本地模型路由。provider = "magpie" 时地址
+# 只能是回环 /v1 端点；精确模型名不会自动替换成 auto/* 路由组。
+# 也可改为 "mock"、"dsh"（仅 DSH 插件）或 "openai-compatible"。
 provider = "magpie"
+# 只有 provider = "dsh" 时才使用宿主里精确的 provider 路由名。
+# route = "deepseek-official"
 # 当前本机路由可用的精确模型示例，不代表最终主模型选型。
 name = "dsdsdsds/deepseek-flash"
 base_url = "http://127.0.0.1:3425/v1"
 # 当前 Magpie 未启用鉴权；启用时只在本机环境变量中设置 key。
 # api_key_env = "MAGPIE_API_KEY"
+# 网页设置页也可以写入加密的本地 secret 引用；与环境变量二选一。
+# api_key_secret = "<secret reference>"
+# 第三方 OpenAI-compatible 默认只接受公开 HTTPS；自建私网端点需显式开启。
+allow_private_network = false
 timeout_ms = 120000
 max_retries = 2
 max_output_tokens = 4096
@@ -41,12 +48,15 @@ reasoning_effort = "low"
 
 [vision]
 # 视觉模型独立于聊天模型，默认关闭；开启后必须填写精确模型名。
-# 不支持任意远程 URL，只允许本机 Magpie 的回环 /v1 端点。
+# provider 支持 "magpie"（回环 /v1）或 "openai-compatible"
+# （默认 HTTPS；私网/回环需显式 allow_private_network = true）。
 enabled = false
 # provider = "magpie"
 # name = "<exact vision model id>"
 # base_url = "http://127.0.0.1:3425/v1"
 # api_key_env = "MAGPIE_API_KEY"
+# api_key_secret = "<secret reference>"
+# allow_private_network = false
 # timeout_ms = 120000
 # max_retries = 2
 # max_output_tokens = 2048

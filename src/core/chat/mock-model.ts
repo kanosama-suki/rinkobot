@@ -20,6 +20,10 @@ export class MockChatModel implements ChatModel {
   readonly id = MOCK_MODEL_ID
   readonly mode = 'mock'
   readonly provider = 'mock'
+  readonly capabilities = {
+    responsePrefill: true,
+    jsonMode: true,
+  } as const
 
   async *stream(
     request: ChatModelRequest,

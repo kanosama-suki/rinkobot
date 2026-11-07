@@ -215,8 +215,10 @@ export class ModelInitiativeBrain implements InitiativeBrain {
       for await (const event of this.model.stream({
         systemPrompt: this.systemPrompt,
         messages: [{ role: 'user', text: prompt }],
-        jsonMode: true,
-        responsePrefill,
+        jsonMode: this.model.capabilities?.jsonMode !== false,
+        responsePrefill: this.model.capabilities?.responsePrefill === false
+          ? undefined
+          : responsePrefill,
         signal,
       })) {
         if (event.type === 'text') {

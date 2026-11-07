@@ -54,7 +54,7 @@ test('the local dev entry authenticates the whole surface with a one-time token'
       headers: { cookie },
     })
     assert.equal(page.status, 200)
-    assert.match(await page.text(), /M4 聊天、主动性与陪伴/)
+    assert.match(await page.text(), /M4\.5 聊天、主动性与陪伴/)
 
     const badOrigin = await fetch(`${server.baseUrl}/kanobot/api/chat`, {
       method: 'POST',

@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Kanobot",
-    "description": "Companion runtime with initial configuration and lifecycle checks."
+    "description": "Companion runtime with DSH/standalone hosting, memory, initiative, and configurable model providers."
   }
 }

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>Kanobot · M4 聊天、主动性与陪伴</title>
+    <title>Kanobot · M4.5 聊天、主动性与陪伴</title>
     <link rel="stylesheet" href="/kanobot/app.css">
   </head>
   <body>
@@ -13,14 +13,14 @@
         <div class="brand-block">
           <span class="brand-mark" aria-hidden="true">K</span>
           <div>
-            <p class="eyebrow">Kanobot / M4</p>
-            <h1>聊天、记忆与主动性</h1>
+            <p class="eyebrow">Kanobot / M4.5</p>
+            <h1>聊天、记忆、主动性与模型设置</h1>
           </div>
         </div>
         <div class="topbar-actions">
           <span id="model-badge" class="badge">读取状态中</span>
           <span id="control-badge" class="badge control-badge">状态读取中</span>
-          <a class="quiet-link" href="/">返回 DSH</a>
+          <a class="quiet-link" href="/">宿主首页</a>
         </div>
       </header>
 
@@ -111,6 +111,15 @@
               aria-controls="tab-audit"
               data-tab="audit"
             >审计 <span id="audit-badge" class="tab-count">0</span></button>
+            <button
+              id="tab-button-settings"
+              class="tab-button"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="tab-settings"
+              data-tab="settings"
+            >设置</button>
           </div>
 
           <section id="tab-status" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-status">
@@ -386,6 +395,216 @@
               <div id="audit-list" class="audit-list"></div>
               <p id="audit-empty" class="memory-empty">还没有审计记录。</p>
             </section>
+          </section>
+
+          <section
+            id="tab-settings"
+            class="tab-panel settings-panel"
+            role="tabpanel"
+            aria-labelledby="tab-button-settings"
+            hidden
+          >
+            <section class="panel-card">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">运行时覆盖</p>
+                  <h2>模型连接</h2>
+                </div>
+                <button id="settings-refresh" class="small-button" type="button">
+                  重新读取
+                </button>
+              </div>
+              <p class="settings-note">
+                聊天模型和视觉模型分开配置。保存前会实际检查端点、精确模型、
+                输出上限和视觉能力；保存后需要重启当前宿主才会切换。
+              </p>
+              <p id="settings-readonly" class="settings-warning" hidden>
+                当前是仓库示例配置，只能测试，不能保存。请使用独立运行配置目录。
+              </p>
+              <p id="settings-host-note" class="settings-warning" hidden></p>
+              <p id="settings-error" class="inline-error" role="alert" hidden></p>
+              <p id="settings-status" class="settings-status" role="status" hidden></p>
+            </section>
+
+            <form id="settings-form" class="settings-form">
+              <section class="panel-card">
+                <p class="eyebrow">主模型</p>
+                <h2>聊天</h2>
+
+                <div class="field-row">
+                  <label class="field">
+                    <span>Provider</span>
+                    <select id="settings-chat-provider">
+                      <option value="mock">mock（本地测试）</option>
+                      <option value="magpie">Magpie</option>
+                      <option value="dsh">DSH 宿主路由</option>
+                      <option value="openai-compatible">OpenAI-compatible</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>精确模型名</span>
+                    <input id="settings-chat-name" type="text" maxlength="128" required>
+                  </label>
+                  <label id="settings-chat-route-field" class="field" hidden>
+                    <span>DSH provider route</span>
+                    <input id="settings-chat-route" type="text" maxlength="128">
+                  </label>
+                </div>
+
+                <label id="settings-chat-base-field" class="field settings-wide-field">
+                  <span>Base URL（必须以 /v1 结尾）</span>
+                  <input id="settings-chat-base-url" type="url" maxlength="512">
+                </label>
+
+                <div class="field-row">
+                  <label class="field">
+                    <span>超时（毫秒）</span>
+                    <input id="settings-chat-timeout" type="number" min="1000" max="600000" step="1000" required>
+                  </label>
+                  <label class="field">
+                    <span>重试次数</span>
+                    <input id="settings-chat-retries" type="number" min="0" max="5" step="1" required>
+                  </label>
+                  <label class="field">
+                    <span>最大输出 Token</span>
+                    <input id="settings-chat-max-output" type="number" min="1" max="65536" step="1">
+                  </label>
+                </div>
+
+                <div class="field-row">
+                  <label class="field">
+                    <span>推理档位（可留空）</span>
+                    <input id="settings-chat-reasoning" type="text" maxlength="32" placeholder="low">
+                  </label>
+                  <label class="check-field">
+                    <input id="settings-chat-private" type="checkbox">
+                    <span>允许私网 / 回环 HTTP 端点</span>
+                  </label>
+                </div>
+
+                <div class="settings-credential">
+                  <label class="field">
+                    <span>API key 来源</span>
+                    <select id="settings-chat-credential-mode">
+                      <option value="keep">保留当前来源</option>
+                      <option value="none">不配置</option>
+                      <option value="environment">环境变量</option>
+                      <option value="new">写入新的本地密钥</option>
+                    </select>
+                  </label>
+                  <p id="settings-chat-credential-status" class="credential-status">
+                    读取凭据状态中…
+                  </p>
+                  <label id="settings-chat-env-field" class="field" hidden>
+                    <span>环境变量名</span>
+                    <input id="settings-chat-env" type="text" maxlength="128" placeholder="MODEL_API_KEY">
+                  </label>
+                  <label id="settings-chat-secret-field" class="field" hidden>
+                    <span>新 API key（只写入，不回显）</span>
+                    <input id="settings-chat-secret" type="password" maxlength="8192" autocomplete="new-password">
+                  </label>
+                </div>
+              </section>
+
+              <section class="panel-card">
+                <div class="panel-heading">
+                  <div>
+                    <p class="eyebrow">独立调用</p>
+                    <h2>视觉</h2>
+                  </div>
+                  <label class="check-field">
+                    <input id="settings-vision-enabled" type="checkbox">
+                    <span>启用图片理解</span>
+                  </label>
+                </div>
+                <p class="settings-note">
+                  视觉模型只接收当轮图片，不写入数据库。启用时必须由上游明确声明图片输入能力。
+                </p>
+
+                <div id="settings-vision-fields" class="settings-vision-fields">
+                  <div class="field-row">
+                    <label class="field">
+                      <span>Provider</span>
+                      <select id="settings-vision-provider">
+                        <option value="magpie">Magpie</option>
+                        <option value="openai-compatible">OpenAI-compatible</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>精确模型名</span>
+                      <input id="settings-vision-name" type="text" maxlength="128">
+                    </label>
+                    <label class="field">
+                      <span>最大输出 Token</span>
+                      <input id="settings-vision-max-output" type="number" min="1" max="65536" step="1">
+                    </label>
+                  </div>
+
+                  <label class="field settings-wide-field">
+                    <span>Base URL（必须以 /v1 结尾）</span>
+                    <input id="settings-vision-base-url" type="url" maxlength="512">
+                  </label>
+
+                  <div class="field-row">
+                    <label class="field">
+                      <span>超时（毫秒）</span>
+                      <input id="settings-vision-timeout" type="number" min="1000" max="600000" step="1000" required>
+                    </label>
+                    <label class="field">
+                      <span>重试次数</span>
+                      <input id="settings-vision-retries" type="number" min="0" max="5" step="1" required>
+                    </label>
+                    <label class="field">
+                      <span>最大图片字节</span>
+                      <input id="settings-vision-image-bytes" type="number" min="1" max="5242880" step="1" required>
+                    </label>
+                  </div>
+
+                  <div class="field-row">
+                    <label class="field">
+                      <span>最大转述字数</span>
+                      <input id="settings-vision-description-chars" type="number" min="200" max="4000" step="1" required>
+                    </label>
+                    <label class="check-field">
+                      <input id="settings-vision-private" type="checkbox">
+                      <span>允许私网 / 回环 HTTP 端点</span>
+                    </label>
+                  </div>
+
+                  <div class="settings-credential">
+                    <label class="field">
+                      <span>API key 来源</span>
+                      <select id="settings-vision-credential-mode">
+                        <option value="keep">保留当前来源</option>
+                        <option value="none">不配置</option>
+                        <option value="environment">环境变量</option>
+                        <option value="new">写入新的本地密钥</option>
+                      </select>
+                    </label>
+                    <p id="settings-vision-credential-status" class="credential-status">
+                      读取凭据状态中…
+                    </p>
+                    <label id="settings-vision-env-field" class="field" hidden>
+                      <span>环境变量名</span>
+                      <input id="settings-vision-env" type="text" maxlength="128" placeholder="VISION_API_KEY">
+                    </label>
+                    <label id="settings-vision-secret-field" class="field" hidden>
+                      <span>新 API key（只写入，不回显）</span>
+                      <input id="settings-vision-secret" type="password" maxlength="8192" autocomplete="new-password">
+                    </label>
+                  </div>
+                </div>
+              </section>
+
+              <div class="settings-actions">
+                <button id="settings-test" class="secondary-button" type="button" disabled>
+                  测试连接与能力
+                </button>
+                <button id="settings-save" class="primary-button" type="submit" disabled>
+                  测试并保存
+                </button>
+              </div>
+            </form>
           </section>
         </aside>
       </main>
