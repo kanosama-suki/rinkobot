@@ -1,6 +1,6 @@
 # 项目文件结构
 
-以下路径相对于项目根目录 `a/`。当前仓库处于 M4.5 已完成、等待日常观察和下一阶段选择的状态：已有 DSH Host 插件、正式独立程序、开发入口、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、网页聊天和 SSE、长期记忆与中文检索、单次 JSON 信封、所有者面板、风格检查、上下文预算、独立视觉模型、schema v9 的主动性与提醒闭环，以及聊天/视觉分开的 provider 设置页、运行时覆盖、环境变量/本地加密 secret store 和第三方端点治理。真实第三方 API、日常观察、QQ、浏览器 worker、VM、游戏、自进化和公开发送仍不存在。双形态是“同一核心 + DSH 插件 + 独立程序”，两者共用数据库契约；`src/dev` 仍只是开发工具，不是产品。
+以下路径相对于项目根目录 `a/`。当前仓库处于 M4.6.1 已完成、等待日常观察和下一阶段选择的状态：已有 DSH Host 插件、正式独立程序、开发入口、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、网页聊天和 SSE、固定高度聊天/审计滚动区、长期记忆与中文检索、提醒/记忆确定性仲裁、候选冷却、单次 JSON 信封、所有者面板、风格检查、上下文预算、独立视觉模型、schema v10 的主动性与提醒闭环，以及聊天/视觉分开的 provider 设置页、只读模型发现、可点选模型卡片、运行时覆盖、环境变量/本地加密 secret store 和第三方端点治理。真实第三方 API、日常观察、QQ、浏览器 worker、VM、游戏、自进化和公开发送仍不存在。双形态是“同一核心 + DSH 插件 + 独立程序”，两者共用数据库契约；`src/dev` 仍只是开发工具，不是产品。
 
 ## 1. 当前结构
 
@@ -61,12 +61,14 @@ kanobot/a/
 │   │   │   ├── service.ts            校验、视觉/聊天模型流、正文/记忆/appraisal/承诺写入
 │   │   │   ├── style.ts              确定性回复风格检查和违规代码
 │   │   │   ├── mock-model.ts         不联网的明确占位模型
-│   │   │   └── magpie-model.ts       Magpie OpenAI-compatible 流式网关
+│   │   │   ├── magpie-model.ts       Magpie OpenAI-compatible 流式网关
+│   │   │   └── model-catalog.ts      OpenAI-compatible 模型列表、能力和价格的共享解析
 │   │   ├── memory/
 │   │   │   ├── index.ts              长期记忆模块公开导出
 │   │   │   ├── types.ts              记忆写入、纠正和检索输入契约
 │   │   │   ├── service.ts            候选规则、纠正、候选转正、检索和面板视图
 │   │   │   ├── candidate.ts          单条记忆候选的引用、敏感和来源门禁
+│   │   │   ├── arbiter.ts            纯提醒、混合提醒和长期记忆的确定性仲裁
 │   │   │   ├── explicit.ts           显式“记住这个”的识别和确定性提取
 │   │   │   └── recall.ts             问题意图、主题相关性、排序和重复抑制
 │   │   ├── state/
@@ -132,6 +134,7 @@ kanobot/a/
     ├── m4.0-memory-acceptance.md      M4 第 0 步记忆质量门控验收
     ├── m4-acceptance.md               M4 主动性、提醒、每日整理和 schema v9 验收
     ├── m4.5-acceptance.md             M4.5 双形态、provider、设置页和安全边界验收
+    ├── m4.6-acceptance.md             M4.6/M4.6.1 提醒/记忆边界、冷却、模型发现和界面收口验收
     ├── m1-acceptance.md              M1 八项验收、证据和已知边界
     ├── m2-acceptance.md              M2 五项验收、运行证据和已知边界
     ├── m3-acceptance.md              M3.0 聊天骨架验收、证据和未完成项
@@ -173,10 +176,11 @@ kanobot/a/
 - `docs/m4.0-memory-acceptance.md` 记录 M4 第 0 步的问题意图、相关性门槛、显式记忆兜底、配置和 181 项自动测试结果。
 - `docs/m4-acceptance.md` 记录 M4 的单一调度、软计划、主动消息、outbox、提醒、每日整理、浏览器通知、schema v9、201 项自动测试和未验证边界。
 - `docs/m4.5-acceptance.md` 记录 M4.5 的双形态、provider、设置页、密钥/端点治理、4100 加载回归、241 项自动测试和未验证边界。
+- `docs/m4.6-acceptance.md` 记录 M4.6 的提醒/记忆仲裁、候选冷却、schema v10、模型发现、三尺寸浏览器验收、256 项自动测试和未验证边界，以及 M4.6.1 的固定高度滚动区和模型卡片选择修复。
 
 ## 2. 目标结构
 
-M4.5 的 `src/app` 和 `src/model-providers` 已落地；其余目录仍按里程碑逐步出现。目录可以按实际工作量调整，但模块职责和配置归属不能混在一起。
+M4.5 的 `src/app`、`src/model-providers` 和 M4.6 的记忆仲裁/模型发现已落地；其余目录仍按里程碑逐步出现。目录可以按实际工作量调整，但模块职责和配置归属不能混在一起。
 
 ```text
 kanobot/a/
@@ -234,7 +238,7 @@ M2/M3 的实际数据布局：
 
 ```text
 <dataDir>/
-├── kanobot.sqlite                    主库（schema v9）：事件、快照、正文、对话/消息、模型调用审计、记忆、FTS5、风格检查、所有者审计、紧急状态、主动性状态/计划/提醒/关心/摘要/运行记录、outbox、墓碑投影
+├── kanobot.sqlite                    主库（schema v10）：事件、快照、正文、对话/消息、模型调用审计、记忆、记忆边界决策、FTS5、风格检查、所有者审计、紧急状态、主动性状态/计划/提醒/关心/摘要/运行记录、outbox、墓碑投影
 ├── tombstones.sqlite                 独立墓碑库，不进入主库备份
 └── backups/
     └── kanobot-backup-*.sqlite       最近 7 份主库一致性备份
@@ -276,7 +280,7 @@ ui.toml
 
 `channels.toml` 是群列表、私聊白名单、@ 规则和投递策略的唯一配置来源。配置加载器统一做 schema 校验、默认值、跨文件引用检查和 fail-closed，不把参数散落到各模块。
 
-`system.toml` 的 `[context]` 保存单轮上下文的字符预算和分块上限；`[model]` 保存聊天 provider、精确模型、可选推理档位和凭据引用；`[vision]` 保存独立视觉模型的开关、provider、精确模型名和请求上限。`initiative.toml` 保存 tick、软计划、主动消息、提醒、outbox 和每日整理参数。聊天 provider 支持本机 Magpie、DSH `ctx.llm`、受控 OpenAI-compatible 和 mock；视觉 provider 支持本机 Magpie 或受控 OpenAI-compatible。`memory.toml` 的 `[trash]` 保存回收站期限，`[recall]` 保存相关性和候选上限。`[storage]` 只写相对数据目录的路径；主库、墓碑库和备份目录的实际绝对路径由 `dataDir` 解析并在存储层再次检查目录逃逸。
+`system.toml` 的 `[context]` 保存单轮上下文的字符预算和分块上限；`[model]` 保存聊天 provider、精确模型、可选推理档位和凭据引用；`[vision]` 保存独立视觉模型的开关、provider、精确模型名和请求上限。`initiative.toml` 保存 tick、软计划、主动消息、提醒、outbox 和每日整理参数。聊天 provider 支持本机 Magpie、DSH `ctx.llm`、受控 OpenAI-compatible 和 mock；视觉 provider 支持本机 Magpie 或受控 OpenAI-compatible；设置页的只读模型发现复用同一 provider 草稿和端点治理，但不保存配置。`memory.toml` 的 `candidate_archive_days` 保存普通候选冷却期限，`[trash]` 保存回收站期限，`[recall]` 保存相关性和候选上限。`[storage]` 只写相对数据目录的路径；主库、墓碑库和备份目录的实际绝对路径由 `dataDir` 解析并在存储层再次检查目录逃逸。
 
 模型来源、聊天/视觉模型、`separate`/`unified` 视觉模式、人格复核模式、主动渠道、QQ 聚合参数和记忆相关性门槛都属于可配置选项。示例配置只放脱敏默认值；设置页修改配置目录中 Git 忽略的 `model-settings.json` 和 `secrets/`，不回显密钥，不直接改仓库模板。运行时覆盖只允许 `model` 和 `vision` 段，未改配置需要重启宿主才生效。
 

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>Kanobot · M4.5 聊天、主动性与陪伴</title>
+    <title>Kanobot · M4.6.1 聊天、记忆与模型设置</title>
     <link rel="stylesheet" href="/kanobot/app.css">
   </head>
   <body>
@@ -13,7 +13,7 @@
         <div class="brand-block">
           <span class="brand-mark" aria-hidden="true">K</span>
           <div>
-            <p class="eyebrow">Kanobot / M4.5</p>
+            <p class="eyebrow">Kanobot / M4.6.1</p>
             <h1>聊天、记忆、主动性与模型设置</h1>
           </div>
         </div>
@@ -347,6 +347,9 @@
                 <button class="memory-filter" type="button" data-status="candidate">
                   候选 <span id="count-candidate">0</span>
                 </button>
+                <button class="memory-filter" type="button" data-status="archived">
+                  归档 <span id="count-archived">0</span>
+                </button>
                 <button class="memory-filter" type="button" data-status="trash">
                   回收站 <span id="count-trash">0</span>
                 </button>
@@ -394,6 +397,9 @@
               <p id="audit-error" class="inline-error" role="alert" hidden></p>
               <div id="audit-list" class="audit-list"></div>
               <p id="audit-empty" class="memory-empty">还没有审计记录。</p>
+              <button id="audit-more" class="small-button audit-more" type="button" hidden>
+                显示更多
+              </button>
             </section>
           </section>
 
@@ -410,9 +416,14 @@
                   <p class="eyebrow">运行时覆盖</p>
                   <h2>模型连接</h2>
                 </div>
-                <button id="settings-refresh" class="small-button" type="button">
-                  重新读取
-                </button>
+                <div class="settings-heading-actions">
+                  <button id="settings-discover" class="small-button" type="button" disabled>
+                    获取模型
+                  </button>
+                  <button id="settings-refresh" class="small-button" type="button">
+                    重新读取
+                  </button>
+                </div>
               </div>
               <p class="settings-note">
                 聊天模型和视觉模型分开配置。保存前会实际检查端点、精确模型、
@@ -442,7 +453,7 @@
                     </select>
                   </label>
                   <label class="field">
-                    <span>精确模型名</span>
+                    <span>精确模型名（也可手动输入）</span>
                     <input id="settings-chat-name" type="text" maxlength="128" required>
                   </label>
                   <label id="settings-chat-route-field" class="field" hidden>
@@ -450,6 +461,75 @@
                     <input id="settings-chat-route" type="text" maxlength="128">
                   </label>
                 </div>
+
+                <section id="settings-chat-discovery" class="model-discovery" hidden>
+                  <div class="model-discovery-head">
+                    <div>
+                      <p class="model-discovery-title">发现的模型</p>
+                      <p
+                        id="settings-chat-discovery-summary"
+                        class="model-discovery-summary"
+                      ></p>
+                    </div>
+                    <div class="model-discovery-actions">
+                      <button
+                        id="settings-chat-rediscover"
+                        class="small-button"
+                        type="button"
+                        disabled
+                      >
+                        重新获取模型
+                      </button>
+                    </div>
+                  </div>
+
+                  <section
+                    id="settings-chat-provider-section"
+                    class="model-discovery-section"
+                    hidden
+                  >
+                    <div class="model-discovery-section-head">
+                      <p class="model-discovery-section-title">DSH provider</p>
+                      <span
+                        id="settings-chat-provider-count"
+                        class="model-discovery-count"
+                      ></span>
+                    </div>
+                    <div
+                      id="settings-chat-provider-chips"
+                      class="model-choice-list"
+                    ></div>
+                  </section>
+
+                  <section
+                    id="settings-chat-model-section"
+                    class="model-discovery-section"
+                    hidden
+                  >
+                    <div class="model-discovery-section-head">
+                      <p class="model-discovery-section-title">可用聊天模型</p>
+                      <span
+                        id="settings-chat-model-count"
+                        class="model-discovery-count"
+                      ></span>
+                    </div>
+                    <div
+                      id="settings-chat-model-chips"
+                      class="model-choice-list"
+                    ></div>
+                    <button
+                      id="settings-chat-model-more"
+                      class="model-more-button"
+                      type="button"
+                      hidden
+                    ></button>
+                    <p
+                      id="settings-chat-model-note"
+                      class="settings-note"
+                      hidden
+                    ></p>
+                  </section>
+                </section>
 
                 <label id="settings-chat-base-field" class="field settings-wide-field">
                   <span>Base URL（必须以 /v1 结尾）</span>
@@ -531,7 +611,7 @@
                       </select>
                     </label>
                     <label class="field">
-                      <span>精确模型名</span>
+                      <span>精确模型名（也可手动输入）</span>
                       <input id="settings-vision-name" type="text" maxlength="128">
                     </label>
                     <label class="field">
@@ -539,6 +619,89 @@
                       <input id="settings-vision-max-output" type="number" min="1" max="65536" step="1">
                     </label>
                   </div>
+
+                  <section id="settings-vision-discovery" class="model-discovery" hidden>
+                    <div class="model-discovery-head">
+                      <div>
+                        <p class="model-discovery-title">发现的视觉模型</p>
+                        <p
+                          id="settings-vision-discovery-summary"
+                          class="model-discovery-summary"
+                        ></p>
+                      </div>
+                      <div class="model-discovery-actions">
+                        <button
+                          id="settings-vision-rediscover"
+                          class="small-button"
+                          type="button"
+                          disabled
+                        >
+                          重新获取模型
+                        </button>
+                      </div>
+                    </div>
+
+                    <section
+                      id="settings-vision-supported-section"
+                      class="model-discovery-section"
+                      hidden
+                    >
+                      <div class="model-discovery-section-head">
+                        <p class="model-discovery-section-title">
+                          明确声明支持图片
+                        </p>
+                        <span
+                          id="settings-vision-supported-count"
+                          class="model-discovery-count"
+                        ></span>
+                      </div>
+                      <div
+                        id="settings-vision-supported-chips"
+                        class="model-choice-list"
+                      ></div>
+                      <button
+                        id="settings-vision-supported-more"
+                        class="model-more-button"
+                        type="button"
+                        hidden
+                      ></button>
+                    </section>
+
+                    <section
+                      id="settings-vision-unknown-section"
+                      class="model-discovery-section"
+                      hidden
+                    >
+                      <div class="model-discovery-section-head">
+                        <p class="model-discovery-section-title">
+                          图片能力未知
+                        </p>
+                        <span
+                          id="settings-vision-unknown-count"
+                          class="model-discovery-count"
+                        ></span>
+                      </div>
+                      <p class="settings-note">
+                        这些模型没有明确声明图片输入能力；可以选择，但保存前必须通过图片能力测试。
+                      </p>
+                      <div
+                        id="settings-vision-unknown-chips"
+                        class="model-choice-list"
+                      ></div>
+                      <button
+                        id="settings-vision-unknown-more"
+                        class="model-more-button"
+                        type="button"
+                        hidden
+                      ></button>
+                    </section>
+
+                    <p
+                      id="settings-vision-empty-note"
+                      class="settings-note"
+                      hidden
+                    ></p>
+                  </section>
 
                   <label class="field settings-wide-field">
                     <span>Base URL（必须以 /v1 结尾）</span>
@@ -598,7 +761,7 @@
 
               <div class="settings-actions">
                 <button id="settings-test" class="secondary-button" type="button" disabled>
-                  测试连接与能力
+                  测试模型
                 </button>
                 <button id="settings-save" class="primary-button" type="submit" disabled>
                   测试并保存

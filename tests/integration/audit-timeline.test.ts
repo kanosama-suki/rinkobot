@@ -41,6 +41,15 @@ test('the unified audit merges sources without leaking prompt or reply text', as
       targetId: record.id,
       occurredAt: '2026-11-05T00:00:02.000Z',
     })
+    const candidateSecret = '虚构候选正文-KB-AUDIT-CANDIDATE'
+    const candidate = memory.remember({
+      text: candidateSecret,
+      kind: 'small_talk',
+      source: 'user_stated',
+    })
+    memory.archiveExpiredCandidates(
+      new Date('2026-12-31T00:00:00.000Z'),
+    )
 
     const chat = new KanobotChatService(store, new AuditChatModel())
     const events = await collect(
@@ -63,6 +72,7 @@ test('the unified audit merges sources without leaking prompt or reply text', as
 
     const serialized = JSON.stringify(all)
     assert.equal(serialized.includes(memorySecret), false)
+    assert.equal(serialized.includes(candidateSecret), false)
     assert.equal(serialized.includes('虚构用户正文-KB-AUDIT-USER'), false)
     assert.equal(serialized.includes('虚构回复正文-KB-AUDIT-REPLY'), false)
     assert.equal(serialized.includes('reply must be'), false)
@@ -79,6 +89,12 @@ test('the unified audit merges sources without leaking prompt or reply text', as
     const chatEntry = all.find(entry => entry.source === 'chat')
     assert.ok(chatEntry?.chat)
     assert.equal(chatEntry.targetId, done.message.id)
+
+    const decision = all.find(entry => entry.kind === 'memory.decision')
+    assert.ok(decision?.memoryDecision)
+    assert.equal(decision.targetId, candidate.id)
+    assert.equal(decision.memoryDecision.action, 'archived')
+    assert.equal(decision.memoryDecision.reasonCode, 'candidate_cooling_expired')
   } finally {
     store.close()
   }

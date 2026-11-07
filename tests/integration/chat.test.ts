@@ -23,6 +23,7 @@ import {
 import {
   createWorkspace,
   dropCurrentInitiativeTables,
+  downgradeMemoriesToV9,
   tickEvent,
 } from '../helpers/storage-fixture.ts'
 import { chatEnvelopeText } from '../helpers/chat-envelope.ts'
@@ -184,14 +185,8 @@ test('an M2 schema migrates in place and preserves existing records', () => {
     db.exec('DROP TABLE messages')
     db.exec('DROP TABLE conversations')
     dropCurrentInitiativeTables(db)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(9)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(8)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(7)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(6)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(5)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(4)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(3)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(2)
+    downgradeMemoriesToV9(db)
+    db.exec('DELETE FROM schema_migrations')
     db.prepare(
       'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
     ).run(1, '2026-11-05T00:00:00.000Z')
@@ -217,7 +212,7 @@ test('an M2 schema migrates in place and preserves existing records', () => {
       ).all() as Array<Record<string, unknown>>
       assert.deepEqual(
         versions.map(row => Number(row.version)),
-        [1, 2, 3, 4, 5, 6, 7, 8, 9],
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
       )
       const modelCalls = check.prepare(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'model_calls'",
@@ -252,13 +247,8 @@ test('an M3.0 schema v2 migrates to the current schema without losing chat recor
     db.exec('DROP TABLE memory_search')
     db.exec('DROP TABLE model_calls')
     dropCurrentInitiativeTables(db)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(9)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(8)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(7)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(6)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(5)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(4)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(3)
+    downgradeMemoriesToV9(db)
+    db.exec('DELETE FROM schema_migrations')
     db.prepare(
       'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
     ).run(2, '2026-11-05T00:00:00.000Z')
@@ -277,7 +267,7 @@ test('an M3.0 schema v2 migrates to the current schema without losing chat recor
       ).all() as Array<Record<string, unknown>>
       assert.deepEqual(
         versions.map(row => Number(row.version)),
-        [2, 3, 4, 5, 6, 7, 8, 9],
+        [2, 3, 4, 5, 6, 7, 8, 9, 10],
       )
     } finally {
       check.close()

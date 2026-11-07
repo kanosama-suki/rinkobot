@@ -2,7 +2,7 @@
 
 ## 0. 项目一句话
 
-在 DSH 宿主中自研一个连续、可恢复、可审计的陪伴型机器人；M3 网页聊天闭环、M4 自动化和 M4.5 发行基础已完成，包括网页聊天、长期记忆、风格控制、单次对话信封、上下文预算、可配置视觉、统一审计、单一调度循环、软性生活计划、主动消息、outbox、提醒、每日整理、回收站清除、浏览器通知，以及同一核心的 DSH 插件/独立程序、DSH/Magpie/OpenAI-compatible/mock provider、设置页、密钥和端点治理。M4 的压缩真实使用验收已完成；一到两周日常观察、Windows 通知人工确认、真实第三方 API 试用和主模型选型待续。下一阶段由 kano 在 M5 和 M6 之间选择。
+在 DSH 宿主中自研一个连续、可恢复、可审计的陪伴型机器人；M3 网页聊天闭环、M4 自动化、M4.5 发行基础和 M4.6/M4.6.1 界面收口已完成，包括网页聊天、固定高度聊天/审计滚动区、长期记忆、提醒/记忆确定性仲裁、候选冷却、风格控制、单次对话信封、上下文预算、可配置视觉、统一审计、单一调度循环、软性生活计划、主动消息、outbox、提醒、每日整理、回收站清除、浏览器通知，以及同一核心的 DSH 插件/独立程序、DSH/Magpie/OpenAI-compatible/mock provider、只读模型发现、可点选模型卡片、设置页、密钥和端点治理。M4 的压缩真实使用验收已完成；一到两周日常观察、Windows 通知人工确认、真实第三方 API 试用和主模型选型待续。下一阶段由 kano 在 M5 和 M6 之间选择。
 
 ## 1. 必读顺序
 
@@ -75,12 +75,12 @@ node scripts/preflight-runtime.ts F:\kanobot\dsh\test-home\kanobot\config F:\kan
 npm run test:lifecycle -- --output F:\kanobot\dsh\m1-plugin-lifecycle.json
 ```
 
-`npm test` 使用 `node --test`，当前 241 项通过。自动测试不会读取真实人格文件、调用真实模型接口或操作正式数据库；真实 Magpie 验收使用隔离的 4100 测试 Profile，M3.1/M3.3/M3.4/M3.5/M3.6/M3.7 证据分别见 `docs/m3.1-acceptance.md`、`docs/m3.3-acceptance.md`、`docs/m3.4-acceptance.md`、`docs/m3.5-acceptance.md`、`docs/m3.6-acceptance.md` 和 `docs/m3.7-acceptance.md`。M3 收尾见 `docs/m3-completion-acceptance.md`；M4 第 0 步见 `docs/m4.0-memory-acceptance.md`；M4 见 `docs/m4-acceptance.md`；M4 真实使用见 `docs/m4-real-use-acceptance.md`；M4.5 双形态、provider 和设置页见 `docs/m4.5-acceptance.md`。测试实例的启停、配置预检和工具审计脚本在 `F:\kanobot\dsh`，不在本仓库内；正式 `4096` 实例不属于测试命令。
+`npm test` 使用 `node --test`，当前 256 项通过。自动测试不会读取真实人格文件、调用真实模型接口或操作正式数据库；真实 Magpie 验收使用隔离的 4100 测试 Profile，M3.1/M3.3/M3.4/M3.5/M3.6/M3.7 证据分别见 `docs/m3.1-acceptance.md`、`docs/m3.3-acceptance.md`、`docs/m3.4-acceptance.md`、`docs/m3.5-acceptance.md`、`docs/m3.6-acceptance.md` 和 `docs/m3.7-acceptance.md`。M3 收尾见 `docs/m3-completion-acceptance.md`；M4 第 0 步见 `docs/m4.0-memory-acceptance.md`；M4 见 `docs/m4-acceptance.md`；M4 真实使用见 `docs/m4-real-use-acceptance.md`；M4.5 双形态、provider 和设置页见 `docs/m4.5-acceptance.md`；M4.6 边界、模型发现、固定高度滚动区和模型卡片选择见 `docs/m4.6-acceptance.md`。测试实例的启停、配置预检和工具审计脚本在 `F:\kanobot\dsh`，不在本仓库内；正式 `4096` 实例不属于测试命令。
 
 ## 5. 当前状态
 
-- 阶段：M4.5 发行基础已完成（2026-11-07，版本 `0.14.0`）。一到两周日常观察、Windows 通知中心人工确认、真实第三方 API 试用和主模型选型仍待后续；下一阶段由 kano 选择 M5 或 M6。
-- 已存在：M1～M4 全部基线、schema v9，以及正式独立程序、DSH 插件双形态、provider 工厂（`mock`/`magpie`/`dsh`/`openai-compatible`）、聊天/视觉分开的设置页、运行时 `model-settings.json`、环境变量/本地 AES-GCM secret store、第三方 URL/DNS 私网拦截、一次性 bootstrap 登录和 Cookie 鉴权。
+- 阶段：M4.6.1 界面修复已完成（2026-11-07，版本 `0.15.1`）。一到两周日常观察、Windows 通知中心人工确认、真实第三方 API 试用和主模型选型仍待后续；下一阶段由 kano 选择 M5 或 M6。
+- 已存在：M1～M4 全部基线、schema v10，以及提醒/记忆确定性仲裁、候选冷却和归档恢复、脱敏记忆决策审计、正式独立程序、DSH 插件双形态、provider 工厂（`mock`/`magpie`/`dsh`/`openai-compatible`）、只读模型发现、聊天/视觉分开的设置页、运行时 `model-settings.json`、环境变量/本地 AES-GCM secret store、第三方 URL/DNS 私网拦截、一次性 bootstrap 登录和 Cookie 鉴权。
 - 尚未存在：一到两周真实日常试用、Windows 通知中心人工确认、真实第三方付费 API 验收、DSH provider 在 4100 的真实生成回归、QQ 适配器、浏览器 worker、VM、游戏、自进化和公开发送。当前软计划只保存计划，不实际执行读书/浏览/游戏；当前推断记忆仍进候选，自动证据累积和淡化待后续改进；浏览器通知不是 Web Push。
 - 已知部署基线：Windows 10（10.0.19045），Node v24.19.0，DSH `0.2.1-rc.5`（npm `latest` 标签；当前没有非 RC 版本）。插件源码在本目录，测试实例使用独立 `DSH_HOME=F:\kanobot\dsh\test-home`。
 - 已知清理记录：旧插件、NapCat 和旧 VM 已从宿主清理；重新部署必须按新设计进行，不能复用旧配置假设。
@@ -100,6 +100,7 @@ npm run test:lifecycle -- --output F:\kanobot\dsh\m1-plugin-lifecycle.json
 - M4 的单一调度、软计划、主动消息、outbox、提醒、每日整理、浏览器通知和 schema v9 见 `docs/m4-acceptance.md`。
 - M4 真实使用验收的运行环境、场景结果、P1 修复、P2 边界、未验证项和进入 M4.5 的判断见 `docs/m4-real-use-acceptance.md`。
 - M4.5 的双形态、provider、设置页、密钥/端点治理、4100 加载回归和未验证项见 `docs/m4.5-acceptance.md`。
+- M4.6/M4.6.1 的提醒/记忆边界、候选冷却、schema v10、模型发现、固定高度滚动区、模型卡片选择、三尺寸浏览器验收、256 项测试和未验证项见 `docs/m4.6-acceptance.md`。
 - 网页空正文最终修复使用 JSON 助手预填、空输出有限重试和显式 `model_empty_response`；`[model].reasoning_effort = "low"` 已在 4100 测试 Profile 和示例配置中启用。真实聊天 13/13 通过，详见 `docs/m3.1-acceptance.md` 第 6 节和 `docs/m4-real-use-acceptance.md`。
 - 测试 Profile 数据在 `F:\kanobot\dsh\test-home\kanobot\data`；主库备份不包含独立墓碑库，迁移和恢复时必须单独保留 `tombstones.sqlite`。
 - 最近更新时间：2026-11-07。

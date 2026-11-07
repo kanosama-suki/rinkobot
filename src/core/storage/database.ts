@@ -21,13 +21,14 @@ import { dirname } from 'node:path'
 
 import { DatabaseSync } from 'node:sqlite'
 
+import { canonicalJson } from '../state/canonical.ts'
 import {
   SchemaCompatibilityError,
   StorageError,
   StorageIntegrityError,
 } from './errors.ts'
 
-export const STORAGE_SCHEMA_VERSION = 9
+export const STORAGE_SCHEMA_VERSION = 10
 export const TOMBSTONE_STORE_SCHEMA_VERSION = 1
 
 type DatabaseKind = 'main' | 'tombstones'
@@ -245,6 +246,23 @@ const MAIN_REQUIRED_COLUMNS_V9: Record<string, readonly string[]> = {
     'kind',
     'outcome',
     'detail_code',
+    'target_id',
+  ],
+}
+
+const MAIN_REQUIRED_COLUMNS_V10: Record<string, readonly string[]> = {
+  ...MAIN_REQUIRED_COLUMNS_V9,
+  memories: [
+    ...MAIN_REQUIRED_COLUMNS_V9.memories,
+    'explicitly_requested',
+    'candidate_since',
+  ],
+  memory_decisions: [
+    'id',
+    'occurred_at',
+    'action',
+    'reason_code',
+    'source',
     'target_id',
   ],
 }
@@ -705,6 +723,67 @@ CREATE TABLE initiative_runs (
 CREATE INDEX initiative_runs_occurred_index ON initiative_runs(occurred_at);
 `
 
+/**
+ * M4.6 的记忆边界与冷却。
+ *
+ * memories 依赖旧表的 CHECK 约束无法原地扩展，因此重建并复制全部历史行。
+ * `record_json` 在同一个迁移函数里随后升级到 schemaVersion 2，并写入
+ * explicitlyRequested=false；这两步必须一起成功，否则整个事务回滚。
+ */
+const MEMORY_BOUNDARY_SCHEMA_V10_BASE = `
+CREATE TABLE memories_v10 (
+  id TEXT PRIMARY KEY,
+  schema_version INTEGER NOT NULL CHECK (schema_version = 2),
+  kind TEXT NOT NULL,
+  content_ref TEXT NOT NULL,
+  quote_ref TEXT,
+  source TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  confidence REAL NOT NULL,
+  sensitivity TEXT NOT NULL,
+  importance TEXT NOT NULL,
+  explicitly_requested INTEGER NOT NULL DEFAULT 0
+    CHECK (explicitly_requested IN (0, 1)),
+  candidate_since TEXT,
+  last_recalled_at TEXT,
+  status TEXT NOT NULL CHECK (status IN (
+    'candidate', 'active', 'archived', 'replaced', 'deleted'
+  )),
+  previous_status TEXT CHECK (previous_status IN (
+    'candidate', 'active', 'archived', 'replaced'
+  )),
+  replaced_by TEXT,
+  deleted_at TEXT,
+  purge_after TEXT,
+  record_json TEXT NOT NULL
+) STRICT;
+`
+
+const MEMORY_BOUNDARY_INDEXES_V10 = `
+DROP TABLE memories;
+ALTER TABLE memories_v10 RENAME TO memories;
+CREATE INDEX memories_content_ref_index ON memories(content_ref);
+CREATE INDEX memories_quote_ref_index ON memories(quote_ref);
+CREATE INDEX memories_status_index ON memories(status);
+
+CREATE TABLE memory_decisions (
+  id TEXT PRIMARY KEY,
+  occurred_at TEXT NOT NULL,
+  action TEXT NOT NULL CHECK (action IN (
+    'retained', 'suppressed', 'extracted', 'archived', 'restored'
+  )),
+  reason_code TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN (
+    'chat_candidate', 'explicit_fallback', 'cooling', 'owner'
+  )),
+  target_id TEXT
+) STRICT;
+CREATE INDEX memory_decisions_occurred_index
+  ON memory_decisions(occurred_at);
+CREATE INDEX memory_decisions_target_index
+  ON memory_decisions(target_id);
+`
+
 const TOMBSTONE_SCHEMA = `
 CREATE TABLE schema_migrations (
   version INTEGER PRIMARY KEY,
@@ -827,7 +906,7 @@ function initializeDatabase(
     kind === 'main' ? STORAGE_SCHEMA_VERSION : TOMBSTONE_STORE_SCHEMA_VERSION
   const schema =
     kind === 'main'
-      ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}\n${MODEL_CALLS_SCHEMA_V3}\n${MEMORY_SEARCH_SCHEMA_V4}\n${MODEL_CALL_PURPOSE_SCHEMA_V5}\n${CONTROL_SCHEMA_V6}\n${MODEL_CALL_PURPOSE_SCHEMA_V7}\n${STYLE_RETRY_SCHEMA_V8}\n${INITIATIVE_SCHEMA_V9}`
+      ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}\n${MODEL_CALLS_SCHEMA_V3}\n${MEMORY_SEARCH_SCHEMA_V4}\n${MODEL_CALL_PURPOSE_SCHEMA_V5}\n${CONTROL_SCHEMA_V6}\n${MODEL_CALL_PURPOSE_SCHEMA_V7}\n${STYLE_RETRY_SCHEMA_V8}\n${INITIATIVE_SCHEMA_V9}\n${MEMORY_BOUNDARY_SCHEMA_V10_BASE}\n${MEMORY_BOUNDARY_INDEXES_V10}`
       : TOMBSTONE_SCHEMA
   db.exec('BEGIN IMMEDIATE')
   try {
@@ -948,7 +1027,7 @@ function assertSchemaCompatible(
   const latest = versions.at(-1)
   const supported =
     kind === 'main'
-      ? [1, 2, 3, 4, 5, 6, 7, 8, 9]
+      ? [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       : [TOMBSTONE_STORE_SCHEMA_VERSION]
   if (
     latest === undefined ||
@@ -978,7 +1057,9 @@ function assertSchemaCompatible(
                   ? MAIN_REQUIRED_COLUMNS_V6
                   : latest === 8
                     ? MAIN_REQUIRED_COLUMNS_V8
-                    : MAIN_REQUIRED_COLUMNS_V9
+                    : latest === 9
+                      ? MAIN_REQUIRED_COLUMNS_V9
+                      : MAIN_REQUIRED_COLUMNS_V10
   for (const [table, columns] of Object.entries(required)) {
     const tableRows = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -1115,6 +1196,22 @@ function migrateDatabaseIfNeeded(
         'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
       ).run(9, nowIso)
     }
+    if (
+      latest === 1 ||
+      latest === 2 ||
+      latest === 3 ||
+      latest === 4 ||
+      latest === 5 ||
+      latest === 6 ||
+      latest === 7 ||
+      latest === 8 ||
+      latest === 9
+    ) {
+      migrateMemoryBoundaryToV10(db)
+      db.prepare(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+      ).run(10, nowIso)
+    }
     db.exec(`PRAGMA user_version = ${STORAGE_SCHEMA_VERSION}`)
     db.exec('COMMIT')
   } catch (error) {
@@ -1128,6 +1225,85 @@ function migrateDatabaseIfNeeded(
       path,
       error,
     )
+  }
+}
+
+/**
+ * v9 的 memories 表把 schema_version 固定为 1，SQLite 无法原地放宽 CHECK。
+ * 因此先复制历史行，再统一升级 canonical record_json。迁移过程中任何
+ * 一条记录无法解析都会让整个事务回滚，不能带着新旧混合记录启动。
+ */
+function migrateMemoryBoundaryToV10(db: DatabaseSync): void {
+  const columns = new Set(
+    (db.prepare('PRAGMA table_info("memories")').all() as Array<
+      Record<string, unknown>
+    >).map(row => String(row.name)),
+  )
+  const hasExplicit = columns.has('explicitly_requested')
+  const hasCandidateSince = columns.has('candidate_since')
+  const explicitExpression = hasExplicit ? 'explicitly_requested' : '0'
+  const candidateSinceExpression = hasCandidateSince
+    ? "COALESCE(candidate_since, CASE WHEN status = 'candidate' THEN created_at END)"
+    : "CASE WHEN status = 'candidate' THEN created_at END"
+
+  db.exec(MEMORY_BOUNDARY_SCHEMA_V10_BASE)
+  db.exec(`
+    INSERT INTO memories_v10
+      (id, schema_version, kind, content_ref, quote_ref, source, created_at,
+       confidence, sensitivity, importance, explicitly_requested,
+       candidate_since, last_recalled_at, status, previous_status, replaced_by,
+       deleted_at, purge_after, record_json)
+    SELECT
+      id, 2, kind, content_ref, quote_ref, source, created_at,
+      confidence, sensitivity, importance, ${explicitExpression},
+      ${candidateSinceExpression}, last_recalled_at, status, previous_status,
+      replaced_by, deleted_at, purge_after, record_json
+    FROM memories
+  `)
+  db.exec(MEMORY_BOUNDARY_INDEXES_V10)
+
+  const rows = db.prepare(
+    `SELECT id, record_json,
+            ${hasExplicit ? 'explicitly_requested' : '0'} AS explicitly_requested
+     FROM memories ORDER BY id`,
+  ).all() as Array<Record<string, unknown>>
+  const update = db.prepare(
+    'UPDATE memories SET record_json = ? WHERE id = ?',
+  )
+  for (const row of rows) {
+    if (typeof row.id !== 'string' || typeof row.record_json !== 'string') {
+      throw new StorageIntegrityError(
+        'memory migration encountered an invalid row',
+        ':memories:',
+      )
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(row.record_json)
+    } catch (error) {
+      throw new StorageIntegrityError(
+        `memory "${row.id}" record_json is not valid JSON`,
+        ':memories:',
+        error,
+      )
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new StorageIntegrityError(
+        `memory "${row.id}" record_json is not an object`,
+        ':memories:',
+      )
+    }
+    const record = parsed as Record<string, unknown>
+    const explicitlyRequested =
+      typeof record.explicitlyRequested === 'boolean'
+        ? record.explicitlyRequested
+        : Number(row.explicitly_requested) === 1
+    const upgraded = {
+      ...record,
+      schemaVersion: 2,
+      explicitlyRequested,
+    }
+    update.run(canonicalJson(upgraded), row.id)
   }
 }
 

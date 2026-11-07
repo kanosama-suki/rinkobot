@@ -4,6 +4,15 @@
 
 export { MagpieChatModel } from './magpie-model.ts'
 export type { MagpieChatModelOptions } from './magpie-model.ts'
+export {
+  ModelCatalogError,
+  modelCatalogMap,
+  parseOpenAIModelCatalog,
+} from './model-catalog.ts'
+export type {
+  ModelCatalogEntry,
+  ModelImageInput,
+} from './model-catalog.ts'
 export { MockChatModel, MOCK_MODEL_ID } from './mock-model.ts'
 export { KanobotChatService } from './service.ts'
 export type { ChatInitiativeOptions, ChatServiceOptions } from './service.ts'

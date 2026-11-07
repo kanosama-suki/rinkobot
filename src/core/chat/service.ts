@@ -22,11 +22,14 @@ import {
 } from '../storage/index.ts'
 import { StorageError } from '../storage/index.ts'
 import {
+  arbitrateExplicitMemoryText,
+  arbitrateMemoryCandidates,
   extractExplicitMemoryText,
+  guardMemorySensitivity,
   hasExplicitRememberInstruction,
   type KanobotMemoryService,
+  type MemoryArbitrationItem,
   type MemoryExtractionSummary,
-  type ParsedMemoryCandidate,
 } from '../memory/index.ts'
 import {
   CHAT_CONVERSATION_ID,
@@ -697,24 +700,35 @@ export class KanobotChatService {
       let memory: MemoryExtractionSummary | null = null
       if (this.memory !== undefined) {
         const explicitlyRequested = hasExplicitRememberInstruction(turn.text)
-        memory = envelope === null
-          ? {
-              status: 'failed',
-              createdCount: 0,
-              candidateCount: 0,
-              skippedCount: 0,
-              errorCode: envelopeError ?? 'chat_envelope_invalid',
-            }
-          : this.persistMemoryCandidates(
-              envelope.memoryCandidates,
-              envelope.skippedMemoryCandidates,
-              assistantMessage.createdAt,
-              explicitlyRequested,
-            )
+        if (envelope === null) {
+          memory = {
+            status: 'failed',
+            createdCount: 0,
+            candidateCount: 0,
+            skippedCount: 0,
+            errorCode: envelopeError ?? 'chat_envelope_invalid',
+          }
+        } else {
+          // 提醒和长期记忆来自同一个模型信封。先按用户原话、提醒动作词
+          // 和时间词做确定性仲裁，避免“明早提醒我吃药”同时写进长期记忆。
+          const arbitration = arbitrateMemoryCandidates({
+            candidates: envelope.memoryCandidates,
+            reminders: envelope.reminderCandidates,
+            userText: turn.text,
+            explicitlyRequested,
+          })
+          memory = this.persistMemoryCandidates(
+            arbitration.items,
+            envelope.skippedMemoryCandidates,
+            assistantMessage.createdAt,
+            explicitlyRequested,
+          )
+        }
         if (memory.createdCount === 0) {
           const fallback = this.persistExplicitMemoryFallback(
             turn.text,
             assistantMessage.createdAt,
+            envelope?.reminderCandidates ?? [],
           )
           if (fallback !== null) {
             memory = mergeMemorySummaries(memory, fallback)
@@ -996,7 +1010,7 @@ export class KanobotChatService {
   }
 
   private persistMemoryCandidates(
-    candidates: ParsedMemoryCandidate[],
+    items: MemoryArbitrationItem[],
     skippedBeforeWrite: number,
     createdAt: string,
     explicitlyRequested: boolean,
@@ -1014,8 +1028,26 @@ export class KanobotChatService {
     let createdCount = 0
     let candidateCount = 0
     let skippedCount = skippedBeforeWrite
+    let auditError: string | null = null
     const seen = new Set<string>()
-    for (const candidate of candidates) {
+    for (const item of items) {
+      const candidate = item.candidate
+      if (item.action === 'suppressed') {
+        skippedCount += 1
+        try {
+          this.storage.recordMemoryDecision({
+            action: 'suppressed',
+            reasonCode: item.reasonCode,
+            source: 'chat_candidate',
+            targetId: null,
+            occurredAt: createdAt,
+          })
+        } catch {
+          // 审计失败要显式上报，但不能把已经生成的回复变成未发送。
+          auditError = 'memory_decision_audit_failed'
+        }
+        continue
+      }
       const key = candidate.text.toLowerCase()
       if (seen.has(key) || memory.hasEquivalentText(candidate.text)) {
         skippedCount += 1
@@ -1036,16 +1068,29 @@ export class KanobotChatService {
         })
         createdCount += 1
         if (record.status === 'candidate') candidateCount += 1
+        if (item.action === 'extracted') {
+          try {
+            this.storage.recordMemoryDecision({
+              action: 'extracted',
+              reasonCode: item.reasonCode,
+              source: 'chat_candidate',
+              targetId: record.id,
+              occurredAt: createdAt,
+            })
+          } catch {
+            auditError = 'memory_decision_audit_failed'
+          }
+        }
       } catch {
         skippedCount += 1
       }
     }
     return {
-      status: 'succeeded',
+      status: auditError === null ? 'succeeded' : 'failed',
       createdCount,
       candidateCount,
       skippedCount,
-      errorCode: null,
+      errorCode: auditError,
     }
   }
 
@@ -1056,21 +1101,79 @@ export class KanobotChatService {
   private persistExplicitMemoryFallback(
     userText: string,
     createdAt: string,
+    reminders: readonly { text: string; dueAt: string }[],
   ): MemoryExtractionSummary | null {
     const memory = this.memory
     if (memory === undefined) return null
-    const text = extractExplicitMemoryText(userText)
-    if (text === null || memory.hasEquivalentText(text)) return null
+    const extracted = extractExplicitMemoryText(userText)
+    if (extracted === null) return null
+    // 显式“记住”是兜底，不是绕过提醒边界的后门。纯提醒动作仍然拒绝；
+    // 混合句只保留确定性抽取出的稳定事实。
+    const arbitration = arbitrateExplicitMemoryText({
+      text: extracted,
+      reminders,
+      userText,
+    })
+    if (arbitration.text === null) {
+      try {
+        this.storage.recordMemoryDecision({
+          action: 'suppressed',
+          reasonCode: arbitration.reasonCode,
+          source: 'explicit_fallback',
+          targetId: null,
+          occurredAt: createdAt,
+        })
+      } catch {
+        return {
+          status: 'failed',
+          createdCount: 0,
+          candidateCount: 0,
+          skippedCount: 1,
+          errorCode: 'memory_decision_audit_failed',
+        }
+      }
+      return {
+        status: 'succeeded',
+        createdCount: 0,
+        candidateCount: 0,
+        skippedCount: 1,
+        errorCode: null,
+      }
+    }
+    if (memory.hasEquivalentText(arbitration.text)) return null
     try {
-      memory.remember({
-        text,
-        quoteText: text,
+      const sensitivity = guardMemorySensitivity(
+        `${arbitration.text}\n${extracted}`,
+      )
+      const record = memory.remember({
+        text: arbitration.text,
+        quoteText: extracted,
         kind: 'owner_request',
         source: 'user_stated',
+        sensitivity,
         importance: 'important',
         createdAt,
         explicitlyRequested: true,
       })
+      if (arbitration.action === 'extracted') {
+        try {
+          this.storage.recordMemoryDecision({
+            action: 'extracted',
+            reasonCode: arbitration.reasonCode,
+            source: 'explicit_fallback',
+            targetId: record.id,
+            occurredAt: createdAt,
+          })
+        } catch {
+          return {
+            status: 'failed',
+            createdCount: 1,
+            candidateCount: 0,
+            skippedCount: 0,
+            errorCode: 'memory_decision_audit_failed',
+          }
+        }
+      }
       return {
         status: 'succeeded',
         createdCount: 1,
@@ -1325,7 +1428,7 @@ function mergeMemorySummaries(
     skippedCount: base.skippedCount + fallback.skippedCount,
     // 信封损坏会单独体现在 done.envelope；显式记忆兜底成功时，
     // 记忆子系统本身不再报告失败。
-    errorCode: null,
+    errorCode: base.errorCode ?? fallback.errorCode,
   }
 }
 

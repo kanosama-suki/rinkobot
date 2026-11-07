@@ -84,7 +84,7 @@ export function parseMemoryCandidate(
   ) {
     return null
   }
-  const sensitivity = guardSensitivity(
+  const sensitivity = guardMemorySensitivity(
     `${text}\n${quote}`,
     claimedSensitivity,
   )
@@ -121,9 +121,15 @@ export function parseMemoryCandidate(
   }
 }
 
-function guardSensitivity(
+/**
+ * 统一的敏感级别守卫。
+ *
+ * 模型候选和显式“记住”的确定性兜底都必须经过这里；后者虽然跳过了模型
+ * 输出解析，但不能因为用户说了“记住”就绕过敏感内容的候选门禁。
+ */
+export function guardMemorySensitivity(
   text: string,
-  claimed: Sensitivity,
+  claimed: Sensitivity = 'normal',
 ): Sensitivity {
   if (claimed === 'sensitive') return 'sensitive'
   if (SENSITIVE_PATTERNS.some(pattern => pattern.test(text))) {

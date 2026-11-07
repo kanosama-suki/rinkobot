@@ -259,6 +259,16 @@ export class KanobotInitiativeService {
       nowIso,
     )
     this.storage.expireCareItems(nowIso)
+    // 记忆冷却和回收站清理都属于维护阶段；归档失败不能让本轮主动消息
+    // 直接失败，但会通过 initiative run 的脱敏错误码暴露。
+    try {
+      const archived = this.memory?.archiveExpiredCandidates(now) ?? []
+      if (archived.length > 0) {
+        this.recordRun('tick', 'allowed', 'memory_candidates_archived')
+      }
+    } catch (error) {
+      this.recordRun('tick', 'failed', errorCode(error))
+    }
     const state = this.storage.getInitiativeState()
     if (state.lastTrashPurgeDay !== today) {
       try {

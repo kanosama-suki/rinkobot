@@ -11,7 +11,7 @@ export const STATE_EVENT_SCHEMA_VERSION = 1
 export const STATE_SNAPSHOT_SCHEMA_VERSION = 1
 export const APPRAISAL_SCHEMA_VERSION = 1
 export const POLICY_DECISION_SCHEMA_VERSION = 1
-export const MEMORY_SCHEMA_VERSION = 1
+export const MEMORY_SCHEMA_VERSION = 2
 export const TOMBSTONE_SCHEMA_VERSION = 1
 
 export type EventSource =
@@ -152,10 +152,15 @@ export interface StateSnapshot {
 export type MemorySource = 'user_stated' | 'rinko_inferred' | 'external'
 export type Sensitivity = 'normal' | 'sensitive' | 'third_party'
 export type Importance = 'normal' | 'important' | 'permanent'
-export type MemoryStatus = 'candidate' | 'active' | 'replaced' | 'deleted'
+export type MemoryStatus =
+  | 'candidate'
+  | 'active'
+  | 'archived'
+  | 'replaced'
+  | 'deleted'
 
 export interface MemoryRecord {
-  schemaVersion: 1
+  schemaVersion: 2
   id: string
   kind: string
   contentRef: string
@@ -165,6 +170,11 @@ export interface MemoryRecord {
   confidence: number
   sensitivity: Sensitivity
   importance: Importance
+  /**
+   * 由确定性指令或所有者操作确认，不是模型自报。
+   * 冷却归档必须跳过这些记录。
+   */
+  explicitlyRequested: boolean
   lastRecalledAt: string | null
   status: MemoryStatus
   replacedBy: string | null

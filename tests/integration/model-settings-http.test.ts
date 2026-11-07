@@ -161,6 +161,50 @@ test('settings HTTP requires owner auth and never returns the credential value',
     assert.equal(view.chat.credential.mode, 'local-secret')
     assert.equal(view.chat.credential.configured, true)
 
+    const unauthenticatedDiscovery = await fetch(
+      `${baseUrl}/kanobot/api/settings/models/discover`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
+    )
+    assert.equal(unauthenticatedDiscovery.status, 401)
+
+    const discovery = await fetch(
+      `${baseUrl}/kanobot/api/settings/models/discover`,
+      {
+        method: 'POST',
+        headers: {
+          ...authHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          chat: {
+            provider: 'mock',
+            route: null,
+            baseUrl: null,
+            timeoutMs: 5_000,
+            allowPrivateNetwork: false,
+            credential: { mode: 'none' },
+          },
+          vision: {
+            enabled: false,
+            provider: null,
+            baseUrl: null,
+            timeoutMs: 5_000,
+            allowPrivateNetwork: false,
+            credential: { mode: 'none' },
+          },
+        }),
+      },
+    )
+    assert.equal(discovery.status, 200)
+    const discoveryBody = await discovery.json() as {
+      chat: { models: unknown[] }
+      vision: { enabled: boolean; supported: unknown[]; unknown: unknown[] }
+    }
+    assert.deepEqual(discoveryBody.chat.models, [])
+    assert.equal(discoveryBody.vision.enabled, false)
+    assert.deepEqual(discoveryBody.vision.supported, [])
+    assert.deepEqual(discoveryBody.vision.unknown, [])
+
     const draft = draftFromView(view)
     draft.chat = {
       provider: 'mock',

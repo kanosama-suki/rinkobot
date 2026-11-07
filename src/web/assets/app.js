@@ -1,5 +1,5 @@
 /**
- * M4.0 聊天、记忆、主动性、状态、视觉、审计与紧急停止面板。
+ * M4.6 聊天、记忆、主动性、状态、视觉、审计、设置与紧急停止面板。
  *
  * 所有来自服务器和模型的文本都通过 textContent 渲染；SSE 只接受本页面
  * 固定的聊天流格式。记忆操作必须经过 DSH 登录态，页面不保存任何凭据。
@@ -75,6 +75,7 @@ const elements = {
   memoryError: document.querySelector('#memory-error'),
   countActive: document.querySelector('#count-active'),
   countCandidate: document.querySelector('#count-candidate'),
+  countArchived: document.querySelector('#count-archived'),
   countTrash: document.querySelector('#count-trash'),
   dialog: document.querySelector('#memory-dialog'),
   dialogTitle: document.querySelector('#memory-dialog-title'),
@@ -95,7 +96,9 @@ const elements = {
   auditList: document.querySelector('#audit-list'),
   auditEmpty: document.querySelector('#audit-empty'),
   auditError: document.querySelector('#audit-error'),
+  auditMore: document.querySelector('#audit-more'),
   settingsForm: document.querySelector('#settings-form'),
+  settingsDiscover: document.querySelector('#settings-discover'),
   settingsRefresh: document.querySelector('#settings-refresh'),
   settingsReadOnly: document.querySelector('#settings-readonly'),
   settingsHostNote: document.querySelector('#settings-host-note'),
@@ -104,6 +107,17 @@ const elements = {
   settingsTest: document.querySelector('#settings-test'),
   settingsSave: document.querySelector('#settings-save'),
   settingsChatProvider: document.querySelector('#settings-chat-provider'),
+  settingsChatDiscovery: document.querySelector('#settings-chat-discovery'),
+  settingsChatDiscoverySummary: document.querySelector('#settings-chat-discovery-summary'),
+  settingsChatRediscover: document.querySelector('#settings-chat-rediscover'),
+  settingsChatProviderSection: document.querySelector('#settings-chat-provider-section'),
+  settingsChatProviderCount: document.querySelector('#settings-chat-provider-count'),
+  settingsChatProviderChips: document.querySelector('#settings-chat-provider-chips'),
+  settingsChatModelSection: document.querySelector('#settings-chat-model-section'),
+  settingsChatModelCount: document.querySelector('#settings-chat-model-count'),
+  settingsChatModelChips: document.querySelector('#settings-chat-model-chips'),
+  settingsChatModelMore: document.querySelector('#settings-chat-model-more'),
+  settingsChatModelNote: document.querySelector('#settings-chat-model-note'),
   settingsChatName: document.querySelector('#settings-chat-name'),
   settingsChatRouteField: document.querySelector('#settings-chat-route-field'),
   settingsChatRoute: document.querySelector('#settings-chat-route'),
@@ -124,6 +138,18 @@ const elements = {
   settingsVisionFields: document.querySelector('#settings-vision-fields'),
   settingsVisionProvider: document.querySelector('#settings-vision-provider'),
   settingsVisionName: document.querySelector('#settings-vision-name'),
+  settingsVisionDiscovery: document.querySelector('#settings-vision-discovery'),
+  settingsVisionDiscoverySummary: document.querySelector('#settings-vision-discovery-summary'),
+  settingsVisionRediscover: document.querySelector('#settings-vision-rediscover'),
+  settingsVisionSupportedSection: document.querySelector('#settings-vision-supported-section'),
+  settingsVisionSupportedCount: document.querySelector('#settings-vision-supported-count'),
+  settingsVisionSupportedChips: document.querySelector('#settings-vision-supported-chips'),
+  settingsVisionSupportedMore: document.querySelector('#settings-vision-supported-more'),
+  settingsVisionUnknownSection: document.querySelector('#settings-vision-unknown-section'),
+  settingsVisionUnknownCount: document.querySelector('#settings-vision-unknown-count'),
+  settingsVisionUnknownChips: document.querySelector('#settings-vision-unknown-chips'),
+  settingsVisionUnknownMore: document.querySelector('#settings-vision-unknown-more'),
+  settingsVisionEmptyNote: document.querySelector('#settings-vision-empty-note'),
   settingsVisionBaseUrl: document.querySelector('#settings-vision-base-url'),
   settingsVisionTimeout: document.querySelector('#settings-vision-timeout'),
   settingsVisionRetries: document.querySelector('#settings-vision-retries'),
@@ -142,6 +168,7 @@ const elements = {
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 const POLL_INTERVAL_MS = 30_000
+const MODEL_CHOICE_LIMIT = 8
 
 const state = {
   sending: false,
@@ -153,13 +180,18 @@ const state = {
   memoryStatus: 'active',
   memoryQuery: '',
   editingMemoryId: null,
-  counts: { active: 0, candidate: 0, trash: 0 },
+  counts: { active: 0, candidate: 0, archived: 0, trash: 0 },
   memories: [],
   emergency: null,
   auditSource: 'all',
   auditEntries: [],
+  auditVisible: 50,
   initiative: null,
   modelSettings: null,
+  discovery: null,
+  chatModelsExpanded: false,
+  visionSupportedExpanded: false,
+  visionUnknownExpanded: false,
   settingsBusy: false,
 }
 
@@ -256,7 +288,7 @@ async function refreshConversation() {
 }
 
 async function fetchConversation() {
-  const response = await fetch('/kanobot/api/conversation', {
+  const response = await fetch('/kanobot/api/conversation?limit=100', {
     credentials: 'same-origin',
     headers: { accept: 'application/json' },
   })
@@ -986,6 +1018,28 @@ function renderReminders(reminders) {
     return
   }
   elements.reminderEmpty.hidden = true
+  const current = reminders.filter(reminder =>
+    reminder.status === 'confirmed' || reminder.status === 'queued',
+  )
+  const history = reminders.filter(reminder =>
+    reminder.status !== 'confirmed' && reminder.status !== 'queued',
+  )
+  appendReminderGroup('当前提醒', current, '没有等待中的提醒。')
+  appendReminderGroup('历史提醒', history, '还没有已送达、取消或失败的提醒。')
+}
+
+function appendReminderGroup(label, reminders, emptyText) {
+  const heading = document.createElement('p')
+  heading.className = 'initiative-group-label'
+  heading.textContent = label
+  elements.reminderList.append(heading)
+  if (reminders.length === 0) {
+    const empty = document.createElement('p')
+    empty.className = 'initiative-group-empty'
+    empty.textContent = emptyText
+    elements.reminderList.append(empty)
+    return
+  }
   for (const reminder of reminders) {
     const cancellable =
       reminder.status === 'confirmed' || reminder.status === 'queued'
@@ -1342,6 +1396,7 @@ async function loadAudit() {
     elements.auditList.replaceChildren()
     elements.auditEmpty.hidden = false
     elements.auditEmpty.textContent = '当前插件没有提供审计接口。'
+    elements.auditMore.hidden = true
     return
   }
   if (!response.ok) {
@@ -1349,6 +1404,7 @@ async function loadAudit() {
   }
   const payload = await response.json()
   state.auditEntries = Array.isArray(payload.timeline) ? payload.timeline : []
+  state.auditVisible = 50
   renderAudit()
   hideAuditError()
 }
@@ -1357,6 +1413,7 @@ function renderAudit() {
   elements.auditList.replaceChildren()
   elements.auditBadge.textContent = String(state.auditEntries.length)
   if (state.auditEntries.length === 0) {
+    elements.auditMore.hidden = true
     elements.auditEmpty.hidden = false
     elements.auditEmpty.textContent = state.auditSource === 'all'
       ? '还没有审计记录。'
@@ -1364,7 +1421,9 @@ function renderAudit() {
     return
   }
   elements.auditEmpty.hidden = true
-  for (const entry of state.auditEntries) {
+  const fragment = document.createDocumentFragment()
+  const visible = state.auditEntries.slice(0, state.auditVisible)
+  for (const entry of visible) {
     const article = document.createElement('article')
     article.className = 'audit-item'
 
@@ -1386,13 +1445,17 @@ function renderAudit() {
     target.className = 'audit-target'
     target.textContent = auditEntryDetail(entry)
     article.append(target)
-    elements.auditList.append(article)
+    fragment.append(article)
   }
+  elements.auditList.append(fragment)
+  elements.auditMore.hidden = state.auditVisible >= state.auditEntries.length
 }
 
 function auditEntryTitle(entry) {
   if (entry.source === 'owner') return auditActionLabel(entry.kind)
-  if (entry.source === 'memory') return '记忆记录'
+  if (entry.source === 'memory') {
+    return entry.kind === 'memory.decision' ? '记忆边界决策' : '记忆记录'
+  }
   if (entry.source === 'model') return '模型调用'
   if (entry.source === 'style') return '回复风格检查'
   if (entry.source === 'chat') return '聊天回合'
@@ -1422,6 +1485,13 @@ function auditEntryDetail(entry) {
       (entry.detailCode ? ` · ${entry.detailCode}` : '')
   }
   if (entry.source === 'memory') {
+    if (entry.memoryDecision) {
+      const decision = entry.memoryDecision
+      return `动作 ${memoryDecisionActionLabel(decision.action)}` +
+        ` · 原因 ${decision.reasonCode}` +
+        ` · 来源 ${memoryDecisionSourceLabel(decision.source)}` +
+        ` · 对象 ${entry.targetId ?? '—'}`
+    }
     const memory = entry.memory
     if (!memory) return `记忆：${entry.targetId ?? '—'}`
     return `记忆：${memory.memoryId} · ${kindLabel(memory.kind)}` +
@@ -1467,6 +1537,38 @@ function auditEntryDetail(entry) {
   return entry.targetId === null
     ? String(entry.kind ?? '')
     : `对象：${entry.targetId}`
+}
+
+function memoryDecisionActionLabel(value) {
+  switch (value) {
+    case 'retained':
+      return '保留'
+    case 'suppressed':
+      return '抑制'
+    case 'extracted':
+      return '抽取稳定事实'
+    case 'archived':
+      return '冷却归档'
+    case 'restored':
+      return '恢复'
+    default:
+      return String(value ?? '未知')
+  }
+}
+
+function memoryDecisionSourceLabel(value) {
+  switch (value) {
+    case 'chat_candidate':
+      return '聊天候选'
+    case 'explicit_fallback':
+      return '明确记住兜底'
+    case 'cooling':
+      return '记忆冷却'
+    case 'owner':
+      return '所有者'
+    default:
+      return String(value ?? '未知')
+  }
 }
 
 function auditActionLabel(value) {
@@ -1586,6 +1688,7 @@ function applyModelSettings(view) {
     throw new Error('模型设置响应格式不正确')
   }
   state.modelSettings = view
+  clearDiscovery()
   const chat = view.chat ?? {}
   const vision = view.vision ?? {}
   const dshChatAvailable =
@@ -1705,6 +1808,7 @@ function syncSettingsForm() {
 
   syncCredentialFields('chat')
   syncCredentialFields('vision')
+  renderDiscoveryOptions()
   updateSettingsButtons()
 }
 
@@ -1738,6 +1842,454 @@ function credentialStatusText(credential) {
       : '本地密钥不可用，请重新填写或改用环境变量'
   }
   return '未配置 API key'
+}
+
+async function discoverModels() {
+  if (state.settingsBusy) return
+  setSettingsBusy(true)
+  hideSettingsError()
+  try {
+    const result = await modelSettingsRequest(
+      'POST',
+      '/kanobot/api/settings/models/discover',
+      buildModelDiscoveryDraft(),
+    )
+    state.discovery = result
+    state.chatModelsExpanded = false
+    state.visionSupportedExpanded = false
+    state.visionUnknownExpanded = false
+    renderDiscoveryOptions()
+    const chatCount = Array.isArray(result.chat?.models)
+      ? result.chat.models.length
+      : 0
+    const providerCount = Array.isArray(result.chat?.providers)
+      ? result.chat.providers.length
+      : 0
+    const visionCount =
+      (Array.isArray(result.vision?.supported)
+        ? result.vision.supported.length
+        : 0) +
+      (Array.isArray(result.vision?.unknown)
+        ? result.vision.unknown.length
+        : 0)
+    const routeHint =
+      result.chat?.provider === 'dsh' && chatCount === 0 && providerCount > 0
+        ? `；已发现 ${providerCount} 个 DSH provider，点选后会自动获取模型`
+        : ''
+    const mockHint =
+      result.chat?.provider === 'mock'
+        ? '；mock 是本地测试模型，不使用远程模型列表'
+        : ''
+    showSettingsStatus(
+      `模型发现完成：聊天 ${chatCount} 个` +
+      `${result.vision?.enabled === true ? `，视觉 ${visionCount} 个` : ''}` +
+      `${routeHint}${mockHint}。发现结果不会保存配置。`,
+    )
+  } catch (error) {
+    showSettingsError(errorMessage(error))
+  } finally {
+    setSettingsBusy(false)
+  }
+}
+
+function renderDiscoveryOptions() {
+  const discovery = state.discovery
+  const chatProvider = elements.settingsChatProvider.value
+  const chatDiscovery =
+    discovery?.chat?.provider === chatProvider ? discovery.chat : null
+  const providers =
+    chatProvider === 'dsh' && Array.isArray(chatDiscovery?.providers)
+      ? chatDiscovery.providers
+      : []
+  const chatModels = Array.isArray(chatDiscovery?.models)
+    ? chatDiscovery.models
+    : []
+  const visionEnabled = elements.settingsVisionEnabled.checked
+  const visionDiscovery =
+    visionEnabled &&
+    discovery?.vision?.enabled === true &&
+    discovery.vision.provider === elements.settingsVisionProvider.value
+      ? discovery.vision
+      : null
+  const visionSupported = Array.isArray(visionDiscovery?.supported)
+    ? visionDiscovery.supported
+    : []
+  const visionUnknown = Array.isArray(visionDiscovery?.unknown)
+    ? visionDiscovery.unknown
+    : []
+
+  elements.settingsChatDiscovery.hidden = chatDiscovery === null
+  if (chatDiscovery === null) {
+    elements.settingsChatProviderSection.hidden = true
+    elements.settingsChatModelSection.hidden = true
+    elements.settingsChatProviderChips.replaceChildren()
+    elements.settingsChatModelChips.replaceChildren()
+  } else {
+    const route =
+      chatDiscovery.route ?? elements.settingsChatRoute.value.trim()
+    elements.settingsChatDiscoverySummary.textContent = [
+      `Provider：${chatProvider}`,
+      route === '' ? null : `route：${route}`,
+      providers.length > 0 ? `${providers.length} 个 provider` : null,
+      chatModels.length > 0 ? `${chatModels.length} 个模型` : null,
+    ].filter(Boolean).join(' · ')
+
+    elements.settingsChatProviderSection.hidden = providers.length === 0
+    elements.settingsChatProviderCount.textContent =
+      providers.length === 0 ? '' : `${providers.length} 个`
+    renderProviderChoices(providers, route)
+
+    const showChatModels =
+      chatProvider !== 'dsh' || route !== ''
+    elements.settingsChatModelSection.hidden = !showChatModels
+    if (showChatModels) {
+      const visible = renderModelChoices(
+        elements.settingsChatModelChips,
+        chatModels,
+        {
+          selectedId: elements.settingsChatName.value.trim(),
+          includeImage: false,
+          group: 'chat',
+          expanded: state.chatModelsExpanded,
+        },
+      )
+      elements.settingsChatModelCount.textContent =
+        `${chatModels.length} 个`
+      updateMoreButton(
+        elements.settingsChatModelMore,
+        chatModels.length,
+        visible,
+        state.chatModelsExpanded,
+        '个模型',
+      )
+      elements.settingsChatModelNote.hidden = false
+      elements.settingsChatModelNote.textContent =
+        chatModels.length > 0
+          ? '点选模型会填入上方“精确模型名”；也可以手动修改。'
+          : chatProvider === 'mock'
+            ? 'mock 是本地测试模型，不需要获取远程模型列表。'
+            : '没有发现模型；请检查 Base URL、凭据，或手动输入精确模型名。'
+    } else {
+      elements.settingsChatModelChips.replaceChildren()
+      elements.settingsChatModelMore.hidden = true
+      elements.settingsChatModelNote.hidden = true
+    }
+  }
+
+  elements.settingsVisionDiscovery.hidden = visionDiscovery === null
+  if (visionDiscovery === null) {
+    elements.settingsVisionSupportedSection.hidden = true
+    elements.settingsVisionUnknownSection.hidden = true
+    elements.settingsVisionSupportedChips.replaceChildren()
+    elements.settingsVisionUnknownChips.replaceChildren()
+    elements.settingsVisionSupportedMore.hidden = true
+    elements.settingsVisionUnknownMore.hidden = true
+    elements.settingsVisionEmptyNote.hidden = true
+  } else {
+    const visionTotal = visionSupported.length + visionUnknown.length
+    elements.settingsVisionDiscoverySummary.textContent =
+      `Provider：${visionDiscovery.provider ?? elements.settingsVisionProvider.value}` +
+      ` · 明确支持 ${visionSupported.length} 个` +
+      ` · 能力未知 ${visionUnknown.length} 个`
+
+    elements.settingsVisionSupportedSection.hidden =
+      visionSupported.length === 0
+    elements.settingsVisionSupportedCount.textContent =
+      visionSupported.length === 0 ? '' : `${visionSupported.length} 个`
+    const supportedVisible = renderModelChoices(
+      elements.settingsVisionSupportedChips,
+      visionSupported,
+      {
+        selectedId: elements.settingsVisionName.value.trim(),
+        includeImage: true,
+        group: 'supported',
+        expanded: state.visionSupportedExpanded,
+      },
+    )
+    updateMoreButton(
+      elements.settingsVisionSupportedMore,
+      visionSupported.length,
+      supportedVisible,
+      state.visionSupportedExpanded,
+      '个模型',
+    )
+
+    elements.settingsVisionUnknownSection.hidden = visionUnknown.length === 0
+    elements.settingsVisionUnknownCount.textContent =
+      visionUnknown.length === 0 ? '' : `${visionUnknown.length} 个`
+    const unknownVisible = renderModelChoices(
+      elements.settingsVisionUnknownChips,
+      visionUnknown,
+      {
+        selectedId: elements.settingsVisionName.value.trim(),
+        includeImage: true,
+        group: 'unknown',
+        expanded: state.visionUnknownExpanded,
+      },
+    )
+    updateMoreButton(
+      elements.settingsVisionUnknownMore,
+      visionUnknown.length,
+      unknownVisible,
+      state.visionUnknownExpanded,
+      '个模型',
+    )
+
+    elements.settingsVisionEmptyNote.hidden = visionTotal !== 0
+    elements.settingsVisionEmptyNote.textContent =
+      visionTotal === 0
+        ? '没有发现可用的视觉模型；可以手动输入精确模型名，保存前仍会测试图片能力。'
+        : ''
+  }
+}
+
+function renderProviderChoices(providers, selectedRoute) {
+  const container = elements.settingsChatProviderChips
+  container.replaceChildren()
+  for (const provider of providers) {
+    const id = String(provider.id ?? '')
+    if (id === '') continue
+    const name = String(provider.name ?? id)
+    const button = createModelChoiceButton({
+      label: name === id ? id : name,
+      meta: name === id ? 'DSH provider' : `DSH provider · ${id}`,
+      selected: id === selectedRoute,
+      dataName: 'providerId',
+      value: id,
+    })
+    container.append(button)
+  }
+}
+
+function renderModelChoices(container, models, options) {
+  container.replaceChildren()
+  const visibleCount = options.expanded
+    ? models.length
+    : Math.min(models.length, MODEL_CHOICE_LIMIT)
+  for (const model of models.slice(0, visibleCount)) {
+    const button = createModelChoiceButton({
+      label: model.id,
+      meta: discoveredModelMeta(model, options.includeImage, options.group),
+      selected: model.id === options.selectedId,
+      dataName: 'modelId',
+      value: model.id,
+    })
+    button.dataset.modelGroup = options.group
+    container.append(button)
+  }
+  return visibleCount
+}
+
+function createModelChoiceButton({ label, meta, selected, dataName, value }) {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'model-choice'
+  button.setAttribute('aria-pressed', selected ? 'true' : 'false')
+  button.title = value
+  button.dataset[dataName] = value
+
+  const mark = document.createElement('span')
+  mark.className = 'model-choice-mark'
+  mark.setAttribute('aria-hidden', 'true')
+  mark.textContent = '✓'
+
+  const text = document.createElement('span')
+  text.className = 'model-choice-text'
+  const id = document.createElement('span')
+  id.className = 'model-choice-id'
+  id.textContent = label
+  text.append(id)
+  if (meta !== '') {
+    const detail = document.createElement('span')
+    detail.className = 'model-choice-meta'
+    detail.textContent = meta
+    text.append(detail)
+  }
+
+  button.append(mark, text)
+  return button
+}
+
+function updateMoreButton(button, total, visible, expanded, suffix) {
+  const remaining = Math.max(0, total - visible)
+  button.hidden = expanded || remaining === 0
+  button.textContent = `显示其余 ${remaining} ${suffix}`
+}
+
+function discoveredModelMeta(model, includeImage, group) {
+  const details = []
+  if (typeof model.maxOutputTokens === 'number') {
+    details.push(`最多 ${formatCount(model.maxOutputTokens)} 输出`)
+  }
+  if (
+    Array.isArray(model.reasoningEfforts) &&
+    model.reasoningEfforts.length > 0
+  ) {
+    details.push(`推理 ${model.reasoningEfforts.join(' / ')}`)
+  }
+  if (includeImage) {
+    details.push(
+      group === 'supported' || model.imageInput === 'supported'
+        ? '声明支持图片'
+        : '图片能力未知',
+    )
+  }
+  return details.join(' · ')
+}
+
+function clearDiscovery() {
+  state.discovery = null
+  state.chatModelsExpanded = false
+  state.visionSupportedExpanded = false
+  state.visionUnknownExpanded = false
+  elements.settingsChatDiscovery.hidden = true
+  elements.settingsChatDiscoverySummary.textContent = ''
+  elements.settingsChatProviderSection.hidden = true
+  elements.settingsChatModelSection.hidden = true
+  elements.settingsChatProviderChips.replaceChildren()
+  elements.settingsChatModelChips.replaceChildren()
+  elements.settingsChatModelMore.hidden = true
+  elements.settingsChatModelNote.hidden = true
+  elements.settingsVisionDiscovery.hidden = true
+  elements.settingsVisionDiscoverySummary.textContent = ''
+  elements.settingsVisionSupportedSection.hidden = true
+  elements.settingsVisionUnknownSection.hidden = true
+  elements.settingsVisionSupportedChips.replaceChildren()
+  elements.settingsVisionUnknownChips.replaceChildren()
+  elements.settingsVisionSupportedMore.hidden = true
+  elements.settingsVisionUnknownMore.hidden = true
+  elements.settingsVisionEmptyNote.hidden = true
+}
+
+function refreshProviderChoiceSelection() {
+  const route = elements.settingsChatRoute.value.trim()
+  for (const button of elements.settingsChatProviderChips.querySelectorAll(
+    'button[data-provider-id]',
+  )) {
+    button.setAttribute(
+      'aria-pressed',
+      button.dataset.providerId === route ? 'true' : 'false',
+    )
+  }
+}
+
+function refreshModelChoiceSelection() {
+  const chatModel = elements.settingsChatName.value.trim()
+  for (const button of elements.settingsChatModelChips.querySelectorAll(
+    'button[data-model-id]',
+  )) {
+    button.setAttribute(
+      'aria-pressed',
+      button.dataset.modelId === chatModel ? 'true' : 'false',
+    )
+  }
+
+  const visionModel = elements.settingsVisionName.value.trim()
+  for (const container of [
+    elements.settingsVisionSupportedChips,
+    elements.settingsVisionUnknownChips,
+  ]) {
+    for (const button of container.querySelectorAll(
+      'button[data-model-id]',
+    )) {
+      button.setAttribute(
+        'aria-pressed',
+        button.dataset.modelId === visionModel ? 'true' : 'false',
+      )
+    }
+  }
+}
+
+function selectChatModelFromChoice(modelId) {
+  const models = state.discovery?.chat?.models
+  if (!Array.isArray(models)) return
+  const model = models.find(item => item.id === modelId)
+  if (model === undefined) return
+  elements.settingsChatName.value = model.id
+  applyModelDiscoveryDefaults('chat', model)
+  refreshModelChoiceSelection()
+  showSettingsStatus(
+    `已选择聊天模型 ${model.id}；发现结果尚未保存，请先测试再保存。`,
+  )
+}
+
+function selectVisionModelFromChoice(modelId, group) {
+  const vision = state.discovery?.vision
+  const models = group === 'supported'
+    ? vision?.supported
+    : vision?.unknown
+  if (!Array.isArray(models)) return
+  const model = models.find(item => item.id === modelId)
+  if (model === undefined) return
+  elements.settingsVisionName.value = model.id
+  applyModelDiscoveryDefaults('vision', model)
+  refreshModelChoiceSelection()
+  showSettingsStatus(
+    group === 'unknown'
+      ? `已选择视觉模型 ${model.id}；该模型没有声明图片能力，保存前会执行图片能力测试。`
+      : `已选择视觉模型 ${model.id}；发现结果尚未保存，请先测试再保存。`,
+  )
+}
+
+function applyModelDiscoveryDefaults(prefix, model) {
+  const maxOutput = prefix === 'chat'
+    ? elements.settingsChatMaxOutput
+    : elements.settingsVisionMaxOutput
+  if (
+    maxOutput.value.trim() === '' &&
+    Number.isSafeInteger(model.maxOutputTokens) &&
+    model.maxOutputTokens > 0
+  ) {
+    maxOutput.value = String(model.maxOutputTokens)
+  }
+
+  if (
+    prefix === 'chat' &&
+    !elements.settingsChatReasoning.disabled &&
+    elements.settingsChatReasoning.value.trim() === '' &&
+    Array.isArray(model.reasoningEfforts) &&
+    model.reasoningEfforts.length > 0
+  ) {
+    const preferred = model.reasoningEfforts.includes('low')
+      ? 'low'
+      : model.reasoningEfforts.find(level => level !== 'none')
+    if (preferred !== undefined) {
+      elements.settingsChatReasoning.value = preferred
+    }
+  }
+}
+
+function buildModelDiscoveryDraft() {
+  const chatProvider = elements.settingsChatProvider.value
+  const chatNeedsEndpoint =
+    chatProvider === 'magpie' || chatProvider === 'openai-compatible'
+  const visionEnabled = elements.settingsVisionEnabled.checked
+  return {
+    chat: {
+      provider: chatProvider,
+      route: chatProvider === 'dsh'
+        ? nullableSettingText(elements.settingsChatRoute)
+        : null,
+      baseUrl: chatNeedsEndpoint
+        ? requiredSettingText(elements.settingsChatBaseUrl, '聊天 Base URL')
+        : null,
+      timeoutMs: settingInteger(elements.settingsChatTimeout, '聊天超时'),
+      allowPrivateNetwork: elements.settingsChatPrivate.checked,
+      credential: settingCredential('chat'),
+    },
+    vision: {
+      enabled: visionEnabled,
+      provider: visionEnabled ? elements.settingsVisionProvider.value : null,
+      baseUrl: visionEnabled
+        ? requiredSettingText(elements.settingsVisionBaseUrl, '视觉 Base URL')
+        : null,
+      timeoutMs: settingInteger(elements.settingsVisionTimeout, '视觉超时'),
+      allowPrivateNetwork: elements.settingsVisionPrivate.checked,
+      credential: visionEnabled
+        ? settingCredential('vision')
+        : { mode: 'none' },
+    },
+  }
 }
 
 async function testModelSettings() {
@@ -1933,6 +2485,14 @@ function setSettingsBusy(busy) {
 
 function updateSettingsButtons() {
   const readOnly = state.modelSettings?.readOnly === true
+  elements.settingsDiscover.disabled =
+    state.settingsBusy || state.modelSettings === null
+  elements.settingsChatRediscover.disabled =
+    state.settingsBusy || state.modelSettings === null
+  elements.settingsVisionRediscover.disabled =
+    state.settingsBusy ||
+    state.modelSettings === null ||
+    !elements.settingsVisionEnabled.checked
   elements.settingsTest.disabled =
     state.settingsBusy || state.modelSettings === null
   elements.settingsSave.disabled =
@@ -2054,6 +2614,18 @@ elements.settingsRefresh.addEventListener('click', () => {
   )
 })
 
+elements.settingsDiscover.addEventListener('click', () => {
+  void discoverModels()
+})
+
+elements.settingsChatRediscover.addEventListener('click', () => {
+  void discoverModels()
+})
+
+elements.settingsVisionRediscover.addEventListener('click', () => {
+  void discoverModels()
+})
+
 elements.settingsForm.addEventListener('submit', event => {
   event.preventDefault()
   void saveModelSettings()
@@ -2070,7 +2642,91 @@ for (const element of [
   elements.settingsVisionProvider,
   elements.settingsVisionCredentialMode,
 ]) {
-  element.addEventListener('change', () => syncSettingsForm())
+  element.addEventListener('change', () => {
+    clearDiscovery()
+    syncSettingsForm()
+  })
+}
+
+for (const element of [
+  elements.settingsChatBaseUrl,
+  elements.settingsVisionBaseUrl,
+]) {
+  element.addEventListener('change', () => {
+    clearDiscovery()
+    syncSettingsForm()
+  })
+}
+
+elements.settingsChatProvider.addEventListener('change', () => {
+  if (elements.settingsChatProvider.value === 'dsh') {
+    void discoverModels()
+  }
+})
+
+elements.settingsChatProviderChips.addEventListener('click', event => {
+  const button = event.target.closest('button[data-provider-id]')
+  if (!(button instanceof HTMLButtonElement)) return
+  const providerId = button.dataset.providerId
+  if (providerId === undefined || providerId === '') return
+  elements.settingsChatRoute.value = providerId
+  if (state.discovery?.chat) {
+    state.discovery.chat.route = providerId
+    state.discovery.chat.models = []
+  }
+  state.chatModelsExpanded = false
+  renderDiscoveryOptions()
+  showSettingsStatus(`已选择 DSH provider ${providerId}，正在获取模型…`)
+  void discoverModels()
+})
+
+elements.settingsChatModelChips.addEventListener('click', event => {
+  const button = event.target.closest('button[data-model-id]')
+  if (!(button instanceof HTMLButtonElement)) return
+  const modelId = button.dataset.modelId
+  if (modelId === undefined || modelId === '') return
+  selectChatModelFromChoice(modelId)
+})
+
+for (const container of [
+  elements.settingsVisionSupportedChips,
+  elements.settingsVisionUnknownChips,
+]) {
+  container.addEventListener('click', event => {
+    const button = event.target.closest('button[data-model-id]')
+    if (!(button instanceof HTMLButtonElement)) return
+    const modelId = button.dataset.modelId
+    const group = button.dataset.modelGroup
+    if (modelId === undefined || modelId === '') return
+    if (group !== 'supported' && group !== 'unknown') return
+    selectVisionModelFromChoice(modelId, group)
+  })
+}
+
+elements.settingsChatModelMore.addEventListener('click', () => {
+  state.chatModelsExpanded = true
+  renderDiscoveryOptions()
+})
+
+elements.settingsVisionSupportedMore.addEventListener('click', () => {
+  state.visionSupportedExpanded = true
+  renderDiscoveryOptions()
+})
+
+elements.settingsVisionUnknownMore.addEventListener('click', () => {
+  state.visionUnknownExpanded = true
+  renderDiscoveryOptions()
+})
+
+for (const element of [
+  elements.settingsChatName,
+  elements.settingsVisionName,
+  elements.settingsChatRoute,
+]) {
+  element.addEventListener('input', () => {
+    refreshProviderChoiceSelection()
+    refreshModelChoiceSelection()
+  })
 }
 
 elements.notificationEnable.addEventListener('click', () => {
@@ -2082,7 +2738,14 @@ elements.notificationEnable.addEventListener('click', () => {
 for (const button of elements.memoryFilters) {
   button.addEventListener('click', () => {
     const status = button.dataset.status
-    if (status !== 'active' && status !== 'candidate' && status !== 'trash') return
+    if (
+      status !== 'active' &&
+      status !== 'candidate' &&
+      status !== 'archived' &&
+      status !== 'trash'
+    ) {
+      return
+    }
     state.memoryStatus = status
     state.memoryQuery = ''
     elements.memorySearchInput.value = ''
@@ -2106,6 +2769,10 @@ elements.memorySearch.addEventListener('submit', event => {
 elements.memoryAdd.addEventListener('click', () => openMemoryDialog())
 elements.auditRefresh.addEventListener('click', () => {
   void loadAudit().catch(error => showAuditError(errorMessage(error)))
+})
+elements.auditMore.addEventListener('click', () => {
+  state.auditVisible += 50
+  renderAudit()
 })
 elements.auditSource.addEventListener('change', () => {
   const source = elements.auditSource.value
@@ -2152,6 +2819,7 @@ async function loadMemories() {
     state.counts = {
       active: Number(payload.counts.active) || 0,
       candidate: Number(payload.counts.candidate) || 0,
+      archived: Number(payload.counts.archived) || 0,
       trash: Number(payload.counts.trash) || 0,
     }
   }
@@ -2163,6 +2831,7 @@ async function loadMemories() {
 function renderMemoryCounts() {
   elements.countActive.textContent = String(state.counts.active)
   elements.countCandidate.textContent = String(state.counts.candidate)
+  elements.countArchived.textContent = String(state.counts.archived)
   elements.countTrash.textContent = String(state.counts.trash)
   elements.memoryBadge.textContent = String(state.counts.candidate)
 }
@@ -2200,6 +2869,9 @@ function renderMemoryCard(memory) {
     chip(sourceLabel(memory.source)),
     chip(formatDate(memory.createdAt)),
   )
+  if (memory.status === 'archived') {
+    meta.append(chip('已归档 · 不参与召回'))
+  }
   article.append(meta)
 
   if (
@@ -2234,6 +2906,11 @@ function renderMemoryCard(memory) {
   } else if (memory.status === 'candidate') {
     actions.append(
       actionButton('转正', 'promote', memory.id, false),
+      actionButton('删除', 'trash', memory.id, true),
+    )
+  } else if (memory.status === 'archived') {
+    actions.append(
+      actionButton('恢复为候选', 'restore', memory.id, false),
       actionButton('删除', 'trash', memory.id, true),
     )
   } else if (memory.status === 'deleted') {

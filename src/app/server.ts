@@ -147,6 +147,7 @@ export async function createAppServer(
     storage.maybeCreateDailyBackup()
     const memory = new KanobotMemoryService(storage, clock, {
       recall: loaded.memory.recall,
+      candidateArchiveDays: loaded.memory.candidateArchiveDays,
     })
     const audit = new OwnerAuditService(storage, clock)
     const timeline = new AuditTimelineService(storage)

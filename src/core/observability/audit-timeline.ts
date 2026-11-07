@@ -8,6 +8,8 @@
 import type {
   ChatTurnAuditRecord,
   KanobotStorage,
+  MemoryDecisionAction,
+  MemoryDecisionSource,
   ModelCallPurpose,
   ModelCallStatus,
   OwnerAuditAction,
@@ -53,6 +55,11 @@ export interface AuditTimelineEntry {
     source: string
     sensitivity: string
     importance: string
+  }
+  memoryDecision?: {
+    action: MemoryDecisionAction
+    reasonCode: string
+    source: MemoryDecisionSource
   }
   modelCall?: {
     purpose: ModelCallPurpose
@@ -137,6 +144,22 @@ export class AuditTimelineService {
             source: memory.source,
             sensitivity: memory.sensitivity,
             importance: memory.importance,
+          },
+        })),
+      )
+      entries.push(
+        ...this.storage.listMemoryDecisions(limit).map(decision => ({
+          id: `memory-decision:${decision.id}`,
+          source: 'memory' as const,
+          kind: 'memory.decision',
+          occurredAt: decision.occurredAt,
+          outcome: 'info' as const,
+          targetId: decision.targetId,
+          detailCode: decision.reasonCode,
+          memoryDecision: {
+            action: decision.action,
+            reasonCode: decision.reasonCode,
+            source: decision.source,
           },
         })),
       )

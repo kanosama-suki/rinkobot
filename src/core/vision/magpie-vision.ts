@@ -10,6 +10,11 @@
 
 import type { ChatModelPricing, ChatUsage } from '../chat/types.ts'
 import {
+  ModelCatalogError,
+  modelCatalogMap,
+  parseOpenAIModelCatalog,
+} from '../chat/model-catalog.ts'
+import {
   VISION_IMAGE_MIME_TYPES,
   VisionModelError,
   type VisionDescription,
@@ -47,12 +52,6 @@ export interface MagpieVisionModelOptions {
   mode?: string
   sendSessionHeader?: boolean
   preflight?: (() => Promise<void>) | null
-}
-
-interface MagpieVisionDescriptor {
-  pricing: ChatModelPricing | null
-  maxOutputTokens: number | null
-  acceptsImages: boolean | null
 }
 
 interface ParsedVisionResponse {
@@ -145,7 +144,20 @@ export class MagpieVisionModel implements VisionModel {
         throw httpStatusError(response.status, 1)
       }
       const payload = await readJson(response, 1)
-      const descriptor = modelList(payload).get(this.id)
+      let entries
+      try {
+        entries = parseOpenAIModelCatalog(payload)
+      } catch (error) {
+        if (error instanceof ModelCatalogError) {
+          throw new VisionModelError(
+            'vision_protocol_error',
+            error.message,
+            1,
+          )
+        }
+        throw error
+      }
+      const descriptor = modelCatalogMap(entries).get(this.id)
       if (descriptor === undefined) {
         throw new VisionModelError(
           'vision_model_not_found',
@@ -153,7 +165,7 @@ export class MagpieVisionModel implements VisionModel {
           1,
         )
       }
-      if (descriptor.acceptsImages !== true) {
+      if (descriptor.imageInput !== 'supported') {
         throw new VisionModelError(
           'vision_model_not_image_capable',
           `Magpie model "${this.id}" does not explicitly advertise image input`,
@@ -490,71 +502,6 @@ function optionalTokenCount(
   return value === undefined || value === null
     ? 0
     : tokenCount(value, field, attempt)
-}
-
-function modelList(payload: unknown): Map<string, MagpieVisionDescriptor> {
-  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
-    throw new VisionModelError(
-      'vision_protocol_error',
-      'Magpie model list is not an object',
-      1,
-    )
-  }
-  const data = (payload as Record<string, unknown>).data
-  if (!Array.isArray(data)) {
-    throw new VisionModelError(
-      'vision_protocol_error',
-      'Magpie model list has no data array',
-      1,
-    )
-  }
-  const result = new Map<string, MagpieVisionDescriptor>()
-  for (const value of data) {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-      continue
-    }
-    const model = value as Record<string, unknown>
-    if (typeof model.id !== 'string' || model.id === '') continue
-    const maxOutput =
-      Number.isSafeInteger(model.max_output_tokens) &&
-      (model.max_output_tokens as number) > 0
-        ? model.max_output_tokens as number
-        : null
-    result.set(model.id, {
-      pricing: parsePricing(model.pricing),
-      maxOutputTokens: maxOutput,
-      acceptsImages: parseImageModality(model.modalities),
-    })
-  }
-  return result
-}
-
-function parseImageModality(value: unknown): boolean | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return null
-  }
-  const input = (value as Record<string, unknown>).input
-  if (!Array.isArray(input)) return null
-  return input.includes('image')
-}
-
-function parsePricing(value: unknown): ChatModelPricing | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return null
-  }
-  const pricing = value as Record<string, unknown>
-  return {
-    prompt: parsePrice(pricing.prompt),
-    completion: parsePrice(pricing.completion),
-    cacheRead: parsePrice(pricing.input_cache_read),
-    cacheWrite: parsePrice(pricing.input_cache_write),
-  }
-}
-
-function parsePrice(value: unknown): number | null {
-  if (typeof value !== 'number' && typeof value !== 'string') return null
-  const price = Number(value)
-  return Number.isFinite(price) && price >= 0 ? price : null
 }
 
 /**

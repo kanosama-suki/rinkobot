@@ -27,12 +27,22 @@ import {
   type VisionProvider,
 } from '../core/config/index.ts'
 import type { ChatModel } from '../core/chat/index.ts'
+import {
+  ModelCatalogError,
+  parseOpenAIModelCatalog,
+  type ModelCatalogEntry,
+  type ModelImageInput,
+} from '../core/chat/model-catalog.ts'
 import type { VisionModel } from '../core/vision/index.ts'
 import {
   createChatModelFromConfig,
   createVisionModelFromConfig,
+  createEndpointPreflight,
   LocalSecretStore,
   type DshLlmBridge,
+  type DshProviderInfo,
+  type DshResolvedModelInfo,
+  resolveCredential,
 } from '../model-providers/index.ts'
 
 export type CredentialMode =
@@ -126,6 +136,49 @@ export interface ModelSettingsTestResult {
   vision: VisionProviderTestResult
 }
 
+export interface ModelDiscoveryDraft {
+  chat: {
+    provider: ChatProvider
+    route: string | null
+    baseUrl: string | null
+    timeoutMs: number
+    allowPrivateNetwork: boolean
+    credential: CredentialDraft
+  }
+  vision: {
+    enabled: boolean
+    provider: VisionProvider | null
+    baseUrl: string | null
+    timeoutMs: number
+    allowPrivateNetwork: boolean
+    credential: CredentialDraft
+  }
+}
+
+export interface DiscoveredModel {
+  id: string
+  maxOutputTokens: number | null
+  reasoningEfforts: readonly string[] | null
+  imageInput: ModelImageInput
+}
+
+export interface ModelDiscoveryResult {
+  chat: {
+    provider: ChatProvider
+    route: string | null
+    providers: DshProviderInfo[]
+    models: DiscoveredModel[]
+  }
+  vision: {
+    enabled: boolean
+    provider: VisionProvider | null
+    /** 上游明确声明支持图片输入。 */
+    supported: DiscoveredModel[]
+    /** 上游没有声明图片能力；只能手选，保存前仍必须连接测试。 */
+    unknown: DiscoveredModel[]
+  }
+}
+
 export class ModelSettingsError extends Error {
   readonly code: string
 
@@ -142,6 +195,8 @@ export interface ModelSettingsServiceOptions {
   llm?: DshLlmBridge
   secretStore?: LocalSecretStore
   readOnly?: boolean
+  /** 模型发现请求的总超时；默认 10 秒，测试可缩短。 */
+  discoveryTimeoutMs?: number
 }
 
 interface ResolvedDraft {
@@ -165,11 +220,46 @@ interface ParsedSettingsDraft {
   vision: ParsedVisionDraft
 }
 
+interface ParsedDiscoveryChatDraft
+  extends Omit<ModelDiscoveryDraft['chat'], 'credential'> {
+  credential: ParsedCredential
+}
+
+interface ParsedDiscoveryVisionDraft
+  extends Omit<ModelDiscoveryDraft['vision'], 'credential'> {
+  credential: ParsedCredential
+}
+
+interface ParsedDiscoveryDraft {
+  chat: ParsedDiscoveryChatDraft
+  vision: ParsedDiscoveryVisionDraft
+}
+
+interface ResolvedDiscoveryDraft {
+  chat: {
+    provider: ChatProvider
+    route: string | null
+    baseUrl: string | null
+    timeoutMs: number
+    allowPrivateNetwork: boolean
+    apiKey: string | null
+  }
+  vision: {
+    enabled: boolean
+    provider: VisionProvider | null
+    baseUrl: string | null
+    timeoutMs: number
+    allowPrivateNetwork: boolean
+    apiKey: string | null
+  }
+}
+
 export class ModelSettingsService {
   private readonly configDir: string
   private readonly secretStore: LocalSecretStore
   private readonly llm: DshLlmBridge | undefined
   private readonly readOnly: boolean
+  private readonly discoveryTimeoutMs: number
   private loaded: LoadedConfig
 
   constructor(options: ModelSettingsServiceOptions) {
@@ -177,6 +267,9 @@ export class ModelSettingsService {
     this.loaded = options.loaded
     this.llm = options.llm
     this.readOnly = options.readOnly ?? false
+    this.discoveryTimeoutMs = validateDiscoveryTimeout(
+      options.discoveryTimeoutMs ?? 10_000,
+    )
     this.secretStore =
       options.secretStore ?? new LocalSecretStore(options.configDir)
   }
@@ -256,6 +349,27 @@ export class ModelSettingsService {
         model: vision?.id ?? '',
       },
     }
+  }
+
+  /**
+   * 只读模型发现。请求体来自当前页面草稿，但不会写 runtime overlay，
+   * 不会保存新密钥，也不会把密钥、secret 引用或完整草稿回显给页面。
+   */
+  async discover(input: unknown): Promise<ModelDiscoveryResult> {
+    let resolved: ResolvedDiscoveryDraft
+    try {
+      resolved = this.resolveDiscoveryDraft(input)
+    } catch (error) {
+      if (error instanceof ModelSettingsError) throw error
+      throw new ModelSettingsError(
+        'model_discovery_failed',
+        safeDiscoveryMessage(error, '模型发现配置无法解析'),
+      )
+    }
+    const chatPromise = this.discoverChat(resolved.chat)
+    const visionPromise = this.discoverVision(resolved.vision)
+    const [chat, vision] = await Promise.all([chatPromise, visionPromise])
+    return { chat, vision }
   }
 
   async save(input: unknown): Promise<ModelSettingsView> {
@@ -419,6 +533,199 @@ export class ModelSettingsService {
     }
   }
 
+  private async discoverChat(
+    draft: ResolvedDiscoveryDraft['chat'],
+  ): Promise<ModelDiscoveryResult['chat']> {
+    if (draft.provider === 'mock') {
+      return {
+        provider: draft.provider,
+        route: null,
+        providers: [],
+        models: [],
+      }
+    }
+    if (draft.provider === 'dsh') {
+      const llm = this.llm
+      if (llm === undefined) {
+        throw new ModelSettingsError(
+          'model_discovery_host_unavailable',
+          '当前宿主没有提供 ctx.llm，无法发现 DSH 模型。',
+        )
+      }
+      try {
+        const providers = llm.listProviders().map(provider => ({
+          id: provider.id,
+          name: provider.name,
+        }))
+        const route = draft.route
+        if (route === null) {
+          return {
+            provider: draft.provider,
+            route: null,
+            providers,
+            models: [],
+          }
+        }
+        const models = await withDiscoveryTimeout(
+          llm.listModels(route),
+          this.discoveryTimeoutMs,
+        )
+        return {
+          provider: draft.provider,
+          route,
+          providers,
+          models: models.map(dshModelToDiscoveredModel),
+        }
+      } catch (error) {
+        if (error instanceof ModelSettingsError) throw error
+        throw new ModelSettingsError(
+          'model_discovery_dsh_failed',
+          safeDiscoveryMessage(error, 'DSH 模型列表读取失败'),
+        )
+      }
+    }
+
+    if (draft.baseUrl === null) {
+      throw new ModelSettingsError(
+        'model_discovery_invalid_config',
+        '模型发现需要完整的 Base URL。',
+      )
+    }
+    const entries = await discoverOpenAIModels({
+      baseUrl: draft.baseUrl,
+      provider: draft.provider,
+      allowPrivateNetwork: draft.allowPrivateNetwork,
+      timeoutMs: Math.min(draft.timeoutMs, this.discoveryTimeoutMs),
+      apiKey: draft.apiKey,
+    })
+    return {
+      provider: draft.provider,
+      route: null,
+      providers: [],
+      models: entries.map(toDiscoveredModel),
+    }
+  }
+
+  private async discoverVision(
+    draft: ResolvedDiscoveryDraft['vision'],
+  ): Promise<ModelDiscoveryResult['vision']> {
+    if (!draft.enabled || draft.provider === null) {
+      return {
+        enabled: false,
+        provider: null,
+        supported: [],
+        unknown: [],
+      }
+    }
+    if (draft.baseUrl === null) {
+      throw new ModelSettingsError(
+        'model_discovery_invalid_config',
+        '视觉模型发现需要完整的 Base URL。',
+      )
+    }
+    const entries = await discoverOpenAIModels({
+      baseUrl: draft.baseUrl,
+      provider: draft.provider,
+      allowPrivateNetwork: draft.allowPrivateNetwork,
+      timeoutMs: Math.min(draft.timeoutMs, this.discoveryTimeoutMs),
+      apiKey: draft.apiKey,
+    })
+    const supported: DiscoveredModel[] = []
+    const unknown: DiscoveredModel[] = []
+    for (const entry of entries) {
+      if (entry.imageInput === 'unsupported') continue
+      const model = toDiscoveredModel(entry)
+      if (entry.imageInput === 'supported') supported.push(model)
+      else unknown.push(model)
+    }
+    return {
+      enabled: true,
+      provider: draft.provider,
+      supported,
+      unknown,
+    }
+  }
+
+  private resolveDiscoveryDraft(input: unknown): ResolvedDiscoveryDraft {
+    const draft = parseDiscoveryDraft(input)
+    const currentModel = this.loaded.system.model
+    const currentVision = this.loaded.system.vision
+    validateCredentialReuse(
+      draft.chat.credential,
+      currentModel.provider,
+      currentModel.route,
+      currentModel.baseUrl,
+      currentModel.apiKeyEnv,
+      currentModel.apiKeySecret,
+      draft.chat.provider,
+      draft.chat.route,
+      draft.chat.baseUrl,
+      'chat',
+    )
+    validateCredentialReuse(
+      draft.vision.credential,
+      currentVision.provider ?? 'magpie',
+      currentVision.route,
+      currentVision.baseUrl,
+      currentVision.apiKeyEnv,
+      currentVision.apiKeySecret,
+      draft.vision.provider ?? 'magpie',
+      null,
+      draft.vision.baseUrl,
+      'vision',
+      !draft.vision.enabled,
+    )
+    validateDiscoveryProviderFields(draft.chat, draft.vision)
+    const chatBaseUrl = normalizeDraftBaseUrl(
+      draft.chat.baseUrl,
+      'chat.baseUrl',
+      draft.chat.provider,
+      draft.chat.allowPrivateNetwork,
+    )
+    const visionBaseUrl = normalizeDraftBaseUrl(
+      draft.vision.baseUrl,
+      'vision.baseUrl',
+      draft.vision.provider ?? 'magpie',
+      draft.vision.allowPrivateNetwork,
+    )
+    const chatCredential = resolveDraftCredential(
+      draft.chat.credential,
+      currentModel.apiKeyEnv,
+      currentModel.apiKeySecret,
+      draft.chat.provider,
+    )
+    const visionCredential = resolveDraftCredential(
+      draft.vision.credential,
+      currentVision.apiKeyEnv,
+      currentVision.apiKeySecret,
+      draft.vision.provider ?? 'magpie',
+    )
+    return {
+      chat: {
+        provider: draft.chat.provider,
+        route: draft.chat.provider === 'dsh' ? draft.chat.route : null,
+        baseUrl: chatBaseUrl,
+        timeoutMs: draft.chat.timeoutMs,
+        allowPrivateNetwork: draft.chat.allowPrivateNetwork,
+        apiKey: resolveDiscoveryApiKey(chatCredential, this.secretStore, 'chat'),
+      },
+      vision: {
+        enabled: draft.vision.enabled,
+        provider: draft.vision.provider,
+        baseUrl: visionBaseUrl,
+        timeoutMs: draft.vision.timeoutMs,
+        allowPrivateNetwork: draft.vision.allowPrivateNetwork,
+        apiKey: draft.vision.enabled
+          ? resolveDiscoveryApiKey(
+              visionCredential,
+              this.secretStore,
+              'vision',
+            )
+          : null,
+      },
+    }
+  }
+
   private async createCheckedVision(
     resolved: ResolvedDraft,
   ): Promise<VisionModel> {
@@ -499,6 +806,371 @@ export class ModelSettingsService {
       rmSync(temp, { force: true })
     }
   }
+}
+
+const MAX_DISCOVERY_RESPONSE_BYTES = 1024 * 1024
+
+function parseDiscoveryDraft(value: unknown): ParsedDiscoveryDraft {
+  const root = asObject(value, '模型发现请求')
+  assertOnlyKeys(root, ['chat', 'vision'], '模型发现请求')
+  return {
+    chat: parseDiscoveryChatDraft(root.chat),
+    vision: parseDiscoveryVisionDraft(root.vision),
+  }
+}
+
+function parseDiscoveryChatDraft(value: unknown): ParsedDiscoveryChatDraft {
+  const input = asObject(value, 'chat')
+  assertOnlyKeys(
+    input,
+    [
+      'provider',
+      'route',
+      'baseUrl',
+      'timeoutMs',
+      'allowPrivateNetwork',
+      'credential',
+    ],
+    'chat',
+  )
+  return {
+    provider: parseChatProvider(input.provider),
+    route: nullableString(input.route, 'chat.route', 128),
+    baseUrl: nullableString(input.baseUrl, 'chat.baseUrl', 512),
+    timeoutMs: integerIn(input.timeoutMs, 'chat.timeoutMs', 1_000, 600_000),
+    allowPrivateNetwork: booleanValue(
+      input.allowPrivateNetwork,
+      'chat.allowPrivateNetwork',
+    ),
+    credential: parseCredential(input.credential, 'chat.credential'),
+  }
+}
+
+function parseDiscoveryVisionDraft(
+  value: unknown,
+): ParsedDiscoveryVisionDraft {
+  const input = asObject(value, 'vision')
+  assertOnlyKeys(
+    input,
+    [
+      'enabled',
+      'provider',
+      'baseUrl',
+      'timeoutMs',
+      'allowPrivateNetwork',
+      'credential',
+    ],
+    'vision',
+  )
+  return {
+    enabled: booleanValue(input.enabled, 'vision.enabled'),
+    provider: nullableVisionProvider(input.provider),
+    baseUrl: nullableString(input.baseUrl, 'vision.baseUrl', 512),
+    timeoutMs: integerIn(input.timeoutMs, 'vision.timeoutMs', 1_000, 600_000),
+    allowPrivateNetwork: booleanValue(
+      input.allowPrivateNetwork,
+      'vision.allowPrivateNetwork',
+    ),
+    credential: parseCredential(input.credential, 'vision.credential'),
+  }
+}
+
+function validateDiscoveryProviderFields(
+  chat: ParsedDiscoveryChatDraft,
+  vision: ParsedDiscoveryVisionDraft,
+): void {
+  if (chat.provider === 'dsh') {
+    if (chat.baseUrl !== null) {
+      throw new ModelSettingsError(
+        'model_discovery_invalid_config',
+        'DSH provider 不能填写 Base URL。',
+      )
+    }
+    if (
+      chat.credential.mode === 'environment' ||
+      chat.credential.mode === 'new'
+    ) {
+      throw new ModelSettingsError(
+        'model_discovery_invalid_config',
+        'DSH provider 的凭据由宿主管理，不能提交 API key。',
+      )
+    }
+  } else if (chat.route !== null) {
+    throw new ModelSettingsError(
+      'model_discovery_invalid_config',
+      '只有 DSH provider 接受 route。',
+    )
+  }
+  if (chat.provider === 'mock') {
+    if (
+      chat.baseUrl !== null ||
+      chat.credential.mode === 'environment' ||
+      chat.credential.mode === 'new'
+    ) {
+      throw new ModelSettingsError(
+        'model_discovery_invalid_config',
+        'mock provider 不接受端点和凭据。',
+      )
+    }
+  } else if (
+    chat.provider === 'magpie' ||
+    chat.provider === 'openai-compatible'
+  ) {
+    if (chat.baseUrl === null) {
+      throw new ModelSettingsError(
+        'model_discovery_invalid_config',
+        '模型发现需要完整的 Base URL。',
+      )
+    }
+  }
+  if (vision.enabled) {
+    if (vision.provider === null || vision.baseUrl === null) {
+      throw new ModelSettingsError(
+        'model_discovery_invalid_config',
+        '启用视觉时必须填写 provider 和 Base URL。',
+      )
+    }
+  } else if (
+    vision.credential.mode === 'environment' ||
+    vision.credential.mode === 'new'
+  ) {
+    throw new ModelSettingsError(
+      'model_discovery_invalid_config',
+      '视觉未启用时不应提交新的 API key。',
+    )
+  }
+}
+
+function resolveDiscoveryApiKey(
+  credential: {
+    env: string | null
+    secret: string | null
+    newValue: string | null
+  },
+  store: LocalSecretStore,
+  label: string,
+): string | null {
+  if (credential.newValue !== null) return credential.newValue
+  return resolveCredential(
+    credential.env,
+    credential.secret,
+    store,
+    `${label}.model_discovery`,
+  )
+}
+
+async function discoverOpenAIModels(input: {
+  baseUrl: string
+  provider: ChatProvider | VisionProvider
+  allowPrivateNetwork: boolean
+  timeoutMs: number
+  apiKey: string | null
+}): Promise<ModelCatalogEntry[]> {
+  const controller = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, input.timeoutMs)
+  const preflight = input.provider === 'openai-compatible'
+    ? createEndpointPreflight(input.baseUrl, {
+        allowPrivateNetwork: input.allowPrivateNetwork,
+      })
+    : null
+  try {
+    await preflight?.()
+    const headers: Record<string, string> = {
+      accept: 'application/json',
+    }
+    if (input.apiKey !== null) {
+      headers.authorization = `Bearer ${input.apiKey}`
+    }
+    const response = await fetch(`${input.baseUrl}/models`, {
+      method: 'GET',
+      headers,
+      signal: controller.signal,
+      redirect: 'error',
+    })
+    if (!response.ok) {
+      await cancelResponseBody(response)
+      throw discoveryHttpError(response.status)
+    }
+    const payload = await readDiscoveryJson(response)
+    try {
+      return parseOpenAIModelCatalog(payload)
+    } catch (error) {
+      if (error instanceof ModelCatalogError) {
+        throw new ModelSettingsError(
+          'model_discovery_invalid_response',
+          '模型列表响应格式不合法。',
+        )
+      }
+      throw error
+    }
+  } catch (error) {
+    if (error instanceof ModelSettingsError) throw error
+    if (timedOut || (error instanceof Error && error.name === 'AbortError')) {
+      throw new ModelSettingsError(
+        'model_discovery_timeout',
+        `模型发现超过 ${input.timeoutMs} ms。`,
+      )
+    }
+    throw new ModelSettingsError(
+      'model_discovery_unavailable',
+      safeDiscoveryMessage(error, '无法连接模型服务。'),
+    )
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function discoveryHttpError(status: number): ModelSettingsError {
+  if (status === 401 || status === 403) {
+    return new ModelSettingsError(
+      'model_discovery_auth_failed',
+      '模型服务拒绝了当前凭据（HTTP 401/403）。',
+    )
+  }
+  if (status === 408 || status === 504) {
+    return new ModelSettingsError(
+      'model_discovery_timeout',
+      `模型服务报告超时（HTTP ${status}）。`,
+    )
+  }
+  return new ModelSettingsError(
+    'model_discovery_http_error',
+    `模型服务返回 HTTP ${status}。`,
+  )
+}
+
+async function readDiscoveryJson(response: Response): Promise<unknown> {
+  const declaredLength = Number(response.headers.get('content-length'))
+  if (
+    Number.isFinite(declaredLength) &&
+    declaredLength > MAX_DISCOVERY_RESPONSE_BYTES
+  ) {
+    await cancelResponseBody(response)
+    throw new ModelSettingsError(
+      'model_discovery_invalid_response',
+      '模型列表响应过大。',
+    )
+  }
+  if (response.body === null) {
+    throw new ModelSettingsError(
+      'model_discovery_invalid_response',
+      '模型列表响应为空。',
+    )
+  }
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (true) {
+      const result = await reader.read()
+      if (result.done) break
+      total += result.value.byteLength
+      if (total > MAX_DISCOVERY_RESPONSE_BYTES) {
+        throw new ModelSettingsError(
+          'model_discovery_invalid_response',
+          '模型列表响应过大。',
+        )
+      }
+      chunks.push(result.value)
+    }
+  } finally {
+    try {
+      await reader.cancel()
+    } catch {
+      // 读取失败时释放连接；原始错误仍然保留。
+    }
+  }
+  const text = Buffer.concat(chunks.map(chunk => Buffer.from(chunk))).toString('utf8')
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    throw new ModelSettingsError(
+      'model_discovery_invalid_response',
+      '模型列表响应不是合法 JSON。',
+    )
+  }
+}
+
+async function cancelResponseBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel()
+  } catch {
+    // 错误正文不读取、不返回、不写日志。
+  }
+}
+
+function toDiscoveredModel(entry: ModelCatalogEntry): DiscoveredModel {
+  return {
+    id: entry.id,
+    maxOutputTokens: entry.maxOutputTokens,
+    reasoningEfforts:
+      entry.reasoningEfforts === null ? null : [...entry.reasoningEfforts],
+    imageInput: entry.imageInput,
+  }
+}
+
+function dshModelToDiscoveredModel(
+  model: DshResolvedModelInfo,
+): DiscoveredModel {
+  return {
+    id: model.id,
+    maxOutputTokens:
+      Number.isSafeInteger(model.defaultMaxTokens) &&
+      (model.defaultMaxTokens ?? 0) > 0
+        ? model.defaultMaxTokens as number
+        : null,
+    reasoningEfforts:
+      model.reasoning === undefined
+        ? null
+        : model.reasoning.efforts.map(effort => effort.id),
+    imageInput:
+      model.inputModalities === undefined
+        ? 'unknown'
+        : model.inputModalities.includes('image')
+          ? 'supported'
+          : 'unsupported',
+  }
+}
+
+async function withDiscoveryTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new ModelSettingsError(
+            'model_discovery_timeout',
+            `DSH 模型发现超过 ${timeoutMs} ms。`,
+          ))
+        }, timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
+function safeDiscoveryMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message !== '') {
+    // 适配器和 fetch 的错误消息不含请求头或密钥值。
+    return error.message
+  }
+  return fallback
+}
+
+function validateDiscoveryTimeout(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > 60_000) {
+    throw new RangeError('discoveryTimeoutMs must be between 1 and 60000')
+  }
+  return value
 }
 
 function parseDraft(value: unknown): ParsedSettingsDraft {

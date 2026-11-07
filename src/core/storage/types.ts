@@ -484,6 +484,42 @@ export interface MemoryListOptions {
   onlyDeleted?: boolean
 }
 
+export type MemoryDecisionAction =
+  | 'retained'
+  | 'suppressed'
+  | 'extracted'
+  | 'archived'
+  | 'restored'
+
+export type MemoryDecisionSource =
+  | 'chat_candidate'
+  | 'explicit_fallback'
+  | 'cooling'
+  | 'owner'
+
+/**
+ * 记忆仲裁与冷却的脱敏审计记录。
+ *
+ * 只保存动作代码、对象 ID 和原因代码，永远不保存候选或用户原文。
+ */
+export interface MemoryDecisionRecord {
+  id: string
+  occurredAt: string
+  action: MemoryDecisionAction
+  reasonCode: string
+  source: MemoryDecisionSource
+  targetId: string | null
+}
+
+export interface RecordMemoryDecisionInput {
+  action: MemoryDecisionAction
+  reasonCode: string
+  source: MemoryDecisionSource
+  targetId?: string | null
+  occurredAt?: string
+  id?: string
+}
+
 export interface MemorySearchOptions {
   limit?: number
   markRecalled?: boolean

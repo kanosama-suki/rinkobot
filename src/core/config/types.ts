@@ -135,6 +135,11 @@ export interface LifeStateConfig {
 
 export interface MemoryConfig {
   schemaVersion: 1
+  /**
+   * 普通候选超过这个天数后转入 archived：不再召回，但所有者仍可查看和恢复。
+   * 旧配置省略该字段时使用 30 天，避免升级时必须先改 TOML。
+   */
+  candidateArchiveDays: number
   trash: {
     retentionDays: number
   }

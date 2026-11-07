@@ -282,7 +282,7 @@ test('unknown fields, wrong sources and invalid numbers are rejected', () => {
 
 test('memory, policy decision and tombstone contracts reject content-bearing extras', () => {
   const memory = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: 'memory-1',
     kind: 'preference',
     contentRef: 'body-1',
@@ -292,6 +292,7 @@ test('memory, policy decision and tombstone contracts reject content-bearing ext
     confidence: 1,
     sensitivity: 'normal',
     importance: 'important',
+    explicitlyRequested: false,
     lastRecalledAt: null,
     status: 'active',
     replacedBy: null,

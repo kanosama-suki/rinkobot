@@ -32,6 +32,7 @@ import {
 import {
   ModelSettingsError,
   ModelSettingsService,
+  type ModelDiscoveryDraft,
   type ModelSettingsDraft,
   type ModelSettingsView,
 } from '../../src/settings/index.ts'
@@ -73,6 +74,37 @@ function draftFromView(view: ModelSettingsView): ModelSettingsDraft {
       maxImageBytes: view.vision.maxImageBytes,
       maxDescriptionChars: view.vision.maxDescriptionChars,
       credential: { mode: 'none' },
+    },
+  }
+}
+
+function discoveryDraft(input: {
+  chatProvider?: 'mock' | 'magpie' | 'dsh' | 'openai-compatible'
+  chatBaseUrl?: string | null
+  chatRoute?: string | null
+  chatCredential?: ModelDiscoveryDraft['chat']['credential']
+  chatPrivate?: boolean
+  visionEnabled?: boolean
+  visionBaseUrl?: string | null
+  visionCredential?: ModelDiscoveryDraft['vision']['credential']
+  visionPrivate?: boolean
+} = {}): ModelDiscoveryDraft {
+  return {
+    chat: {
+      provider: input.chatProvider ?? 'openai-compatible',
+      route: input.chatRoute ?? null,
+      baseUrl: input.chatBaseUrl ?? null,
+      timeoutMs: 2_000,
+      allowPrivateNetwork: input.chatPrivate ?? true,
+      credential: input.chatCredential ?? { mode: 'none' },
+    },
+    vision: {
+      enabled: input.visionEnabled ?? false,
+      provider: input.visionEnabled ? 'openai-compatible' : null,
+      baseUrl: input.visionBaseUrl ?? null,
+      timeoutMs: 2_000,
+      allowPrivateNetwork: input.visionPrivate ?? true,
+      credential: input.visionCredential ?? { mode: 'none' },
     },
   }
 }
@@ -339,6 +371,284 @@ test('saving a new credential encrypts it and exposes only a local label', async
   }
 })
 
+test('model discovery groups vision capabilities without saving or leaking the key', async () => {
+  const configDir = copyExampleConfig()
+  const token = 'sk-discovery-must-not-leak'
+  let authorization = ''
+  const server = await startServer((request, response) => {
+    assert.equal(request.url, '/v1/models')
+    authorization = String(request.headers.authorization ?? '')
+    const body = Buffer.from(JSON.stringify({
+      data: [
+        {
+          id: 'chat/one',
+          max_output_tokens: 1024,
+          reasoning_levels: ['low', 'high'],
+        },
+        {
+          id: 'vision/supported',
+          modalities: { input: ['text', 'image'] },
+        },
+        {
+          id: 'vision/unknown',
+          max_output_tokens: 512,
+        },
+        {
+          id: 'vision/unsupported',
+          modalities: { input: ['text'] },
+        },
+      ],
+    }), 'utf8')
+    response.writeHead(200, {
+      'content-type': 'application/json',
+      'content-length': String(body.byteLength),
+    })
+    response.end(body)
+  })
+  try {
+    const service = new ModelSettingsService({
+      configDir,
+      loaded: loadConfigFromDirectory(configDir),
+    })
+    const result = await service.discover(discoveryDraft({
+      chatBaseUrl: server.baseUrl,
+      chatCredential: { mode: 'new', value: token },
+      visionEnabled: true,
+      visionBaseUrl: server.baseUrl,
+      visionCredential: { mode: 'new', value: token },
+    }))
+
+    assert.equal(authorization, `Bearer ${token}`)
+    assert.deepEqual(
+      result.chat.models.map(model => model.id),
+      ['chat/one', 'vision/supported', 'vision/unknown', 'vision/unsupported'],
+    )
+    assert.deepEqual(
+      result.vision.supported.map(model => model.id),
+      ['vision/supported'],
+    )
+    assert.deepEqual(
+      result.vision.unknown.map(model => model.id),
+      ['chat/one', 'vision/unknown'],
+    )
+    const serialized = JSON.stringify(result)
+    assert.equal(serialized.includes(token), false)
+    assert.equal(
+      existsSync(join(configDir, RUNTIME_MODEL_SETTINGS_FILENAME)),
+      false,
+    )
+  } finally {
+    await server.close()
+    rmSync(configDir, { recursive: true, force: true })
+  }
+})
+
+test('model discovery reports 401 and timeout without writing or leaking the key', async () => {
+  const configDir = copyExampleConfig()
+  const token = 'sk-discovery-error-must-not-leak'
+  const unauthorized = await startServer((_request, response) => {
+    response.writeHead(401, { 'content-type': 'application/json' })
+    response.end('{"error":{"message":"do not echo sk-discovery-error-must-not-leak"}}')
+  })
+  try {
+    const service = new ModelSettingsService({
+      configDir,
+      loaded: loadConfigFromDirectory(configDir),
+    })
+    await assert.rejects(
+      () => service.discover(discoveryDraft({
+        chatBaseUrl: unauthorized.baseUrl,
+        chatCredential: { mode: 'new', value: token },
+      })),
+      (error: unknown) =>
+        error instanceof ModelSettingsError &&
+        error.code === 'model_discovery_auth_failed' &&
+        !error.message.includes(token),
+    )
+    assert.equal(
+      existsSync(join(configDir, RUNTIME_MODEL_SETTINGS_FILENAME)),
+      false,
+    )
+  } finally {
+    await unauthorized.close()
+  }
+
+  const slow = await startServer((_request, response) => {
+    setTimeout(() => {
+      if (response.destroyed) return
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end('{"data":[]}')
+    }, 200)
+  })
+  try {
+    const service = new ModelSettingsService({
+      configDir,
+      loaded: loadConfigFromDirectory(configDir),
+      discoveryTimeoutMs: 20,
+    })
+    await assert.rejects(
+      () => service.discover(discoveryDraft({
+        chatBaseUrl: slow.baseUrl,
+        chatCredential: { mode: 'new', value: token },
+      })),
+      (error: unknown) =>
+        error instanceof ModelSettingsError &&
+        error.code === 'model_discovery_timeout' &&
+        !error.message.includes(token),
+    )
+    assert.equal(
+      existsSync(join(configDir, RUNTIME_MODEL_SETTINGS_FILENAME)),
+      false,
+    )
+  } finally {
+    await slow.close()
+    rmSync(configDir, { recursive: true, force: true })
+  }
+})
+
+test('model discovery rejects malformed responses', async () => {
+  const configDir = copyExampleConfig()
+  const server = await startServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end('{"models":[]}')
+  })
+  try {
+    const service = new ModelSettingsService({
+      configDir,
+      loaded: loadConfigFromDirectory(configDir),
+    })
+    await assert.rejects(
+      () => service.discover(discoveryDraft({
+        chatBaseUrl: server.baseUrl,
+      })),
+      (error: unknown) =>
+        error instanceof ModelSettingsError &&
+        error.code === 'model_discovery_invalid_response',
+    )
+  } finally {
+    await server.close()
+    rmSync(configDir, { recursive: true, force: true })
+  }
+})
+
+test('DSH discovery lists providers and exact models through the narrow host bridge', async () => {
+  const configDir = copyExampleConfig()
+  const llm: DshLlmBridge = {
+    listProviders: () => [
+      { id: 'mock', name: 'Mock Provider' },
+      { id: 'openai', name: 'OpenAI' },
+    ],
+    listModels: async route => {
+      assert.equal(route, 'openai')
+      return [{
+        provider: 'openai',
+        id: 'host/model-exact',
+        name: 'Host Model',
+        inputModalities: ['text', 'image'],
+        defaultMaxTokens: 4096,
+        reasoning: {
+          efforts: [{ id: 'low', name: 'Low' }],
+        },
+      }]
+    },
+    resolveModelInfo: async () => {
+      throw new Error('not used')
+    },
+    prepareCall: async () => {
+      throw new Error('not used')
+    },
+    stream: async function* () {
+      throw new Error('not used')
+    },
+  }
+  try {
+    const service = new ModelSettingsService({
+      configDir,
+      loaded: loadConfigFromDirectory(configDir),
+      llm,
+    })
+    const providers = await service.discover(discoveryDraft({
+      chatProvider: 'dsh',
+      chatRoute: null,
+      chatCredential: { mode: 'none' },
+    }))
+    assert.deepEqual(
+      providers.chat.providers.map(provider => provider.id),
+      ['mock', 'openai'],
+    )
+    assert.deepEqual(providers.chat.models, [])
+
+    const models = await service.discover(discoveryDraft({
+      chatProvider: 'dsh',
+      chatRoute: 'openai',
+      chatCredential: { mode: 'none' },
+    }))
+    assert.deepEqual(models.chat.models.map(model => model.id), [
+      'host/model-exact',
+    ])
+    assert.equal(models.chat.models[0]?.imageInput, 'supported')
+    assert.equal(models.chat.models[0]?.maxOutputTokens, 4096)
+    assert.deepEqual(models.chat.models[0]?.reasoningEfforts, ['low'])
+  } finally {
+    rmSync(configDir, { recursive: true, force: true })
+  }
+})
+
+test('a discovered vision model with unknown image capability still fails save', async () => {
+  const configDir = copyExampleConfig()
+  const server = await startServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({
+      data: [{ id: 'vision/unknown' }],
+    }))
+  })
+  try {
+    const service = new ModelSettingsService({
+      configDir,
+      loaded: loadConfigFromDirectory(configDir),
+    })
+    const draft = draftFromView(service.view())
+    draft.chat = {
+      provider: 'mock',
+      route: null,
+      name: 'kanobot-mock-v1',
+      baseUrl: null,
+      timeoutMs: 5_000,
+      maxRetries: 0,
+      maxOutputTokens: null,
+      reasoningEffort: null,
+      allowPrivateNetwork: false,
+      credential: { mode: 'none' },
+    }
+    draft.vision = {
+      enabled: true,
+      provider: 'openai-compatible',
+      name: 'vision/unknown',
+      baseUrl: server.baseUrl,
+      timeoutMs: 2_000,
+      maxRetries: 0,
+      maxOutputTokens: 256,
+      allowPrivateNetwork: true,
+      maxImageBytes: 5 * 1024 * 1024,
+      maxDescriptionChars: 2_000,
+      credential: { mode: 'none' },
+    }
+    await assert.rejects(
+      () => service.save(draft),
+      (error: unknown) =>
+        error instanceof ModelSettingsError &&
+        error.code === 'vision_model_test_failed',
+    )
+    assert.equal(
+      existsSync(join(configDir, RUNTIME_MODEL_SETTINGS_FILENAME)),
+      false,
+    )
+  } finally {
+    await server.close()
+    rmSync(configDir, { recursive: true, force: true })
+  }
+})
+
 test('the bundled example directory is read-only for settings', async () => {
   const service = new ModelSettingsService({
     configDir: examplesDir,
@@ -352,3 +662,32 @@ test('the bundled example directory is read-only for settings', async () => {
       error.code === 'settings_read_only',
   )
 })
+
+async function startServer(
+  handler: (
+    request: import('node:http').IncomingMessage,
+    response: import('node:http').ServerResponse,
+  ) => void,
+): Promise<{
+  baseUrl: string
+  close(): Promise<void>
+}> {
+  const server = createServer(handler)
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject)
+      resolve()
+    })
+  })
+  const address = server.address() as AddressInfo
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    async close(): Promise<void> {
+      server.closeAllConnections()
+      await new Promise<void>((resolve, reject) => {
+        server.close(error => (error ? reject(error) : resolve()))
+      })
+    },
+  }
+}

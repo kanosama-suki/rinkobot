@@ -68,6 +68,11 @@ export interface MemoryRecallSettings {
 
 export interface MemoryServiceOptions {
   recall?: Partial<MemoryRecallSettings>
+  /**
+   * 普通候选的冷却天数。到期后只转入 archived，不删除正文，也不影响
+   * active / permanent / explicitlyRequested 记录。
+   */
+  candidateArchiveDays?: number
 }
 
 export const DEFAULT_MEMORY_RECALL_SETTINGS: MemoryRecallSettings = {
@@ -77,10 +82,13 @@ export const DEFAULT_MEMORY_RECALL_SETTINGS: MemoryRecallSettings = {
   candidateLimit: 24,
 }
 
+export const DEFAULT_CANDIDATE_ARCHIVE_DAYS = 30
+
 export class KanobotMemoryService {
   private readonly storage: KanobotStorage
   private readonly clock: Clock
   private readonly recallSettings: MemoryRecallSettings
+  private readonly candidateArchiveDays: number
 
   constructor(
     storage: KanobotStorage,
@@ -93,6 +101,9 @@ export class KanobotMemoryService {
       ...DEFAULT_MEMORY_RECALL_SETTINGS,
       ...options.recall,
     })
+    this.candidateArchiveDays = validateCandidateArchiveDays(
+      options.candidateArchiveDays ?? DEFAULT_CANDIDATE_ARCHIVE_DAYS,
+    )
   }
 
   remember(input: RememberMemoryInput): MemoryRecord {
@@ -136,6 +147,7 @@ export class KanobotMemoryService {
         (explicitlyRequested || importance !== 'normal')
           ? 'active'
           : 'candidate',
+      explicitlyRequested,
       id: input.id,
       createdAt: input.createdAt,
     })
@@ -159,6 +171,7 @@ export class KanobotMemoryService {
       sensitivity,
       importance: input.importance ?? 'important',
       status: 'active',
+      explicitlyRequested: true,
       id: input.id,
       createdAt: input.createdAt,
     })
@@ -185,6 +198,7 @@ export class KanobotMemoryService {
       sensitivity,
       importance,
       status: 'active',
+      explicitlyRequested: true,
       id: input.id,
       createdAt: input.createdAt,
     })
@@ -200,7 +214,19 @@ export class KanobotMemoryService {
   }
 
   restore(id: string): MemoryRecord {
-    return this.storage.restoreMemory(id, this.clock.now().toISOString())
+    const current = this.storage.getMemory(id)
+    const at = this.clock.now().toISOString()
+    const restored = this.storage.restoreMemory(id, at)
+    if (current?.status === 'archived') {
+      this.storage.recordMemoryDecision({
+        action: 'restored',
+        reasonCode: 'owner_restored_archived',
+        source: 'owner',
+        targetId: restored.id,
+        occurredAt: at,
+      })
+    }
+    return restored
   }
 
   purge(id: string): void {
@@ -333,7 +359,7 @@ export class KanobotMemoryService {
   }
 
   listViews(
-    status: 'active' | 'candidate' | 'trash' | 'all' = 'active',
+    status: 'active' | 'candidate' | 'archived' | 'trash' | 'all' = 'active',
   ): MemoryView[] {
     const records = status === 'trash'
       ? this.storage.listMemories({ onlyDeleted: true })
@@ -341,6 +367,10 @@ export class KanobotMemoryService {
         ? this.storage.listMemories().filter(
             memory => memory.status === 'candidate',
           )
+        : status === 'archived'
+          ? this.storage.listMemories().filter(
+              memory => memory.status === 'archived',
+            )
         : status === 'all'
           ? this.storage.listMemories().filter(
               memory => memory.status !== 'replaced',
@@ -365,6 +395,28 @@ export class KanobotMemoryService {
     return this.storage.listMemories({ onlyDeleted: true })
   }
 
+  /**
+   * 定时维护调用。只归档普通候选；每条归档都写脱敏决策审计。
+   * 时间由调用方传入，测试可以固定时钟，不依赖真实等待。
+   */
+  archiveExpiredCandidates(at: Date = this.clock.now()): MemoryRecord[] {
+    const nowIso = at.toISOString()
+    const cutoff = new Date(
+      at.getTime() - this.candidateArchiveDays * 86_400_000,
+    ).toISOString()
+    const archived = this.storage.archiveExpiredCandidates(cutoff, nowIso)
+    for (const record of archived) {
+      this.storage.recordMemoryDecision({
+        action: 'archived',
+        reasonCode: 'candidate_cooling_expired',
+        source: 'cooling',
+        targetId: record.id,
+        occurredAt: nowIso,
+      })
+    }
+    return archived
+  }
+
   private prepareRecord(input: {
     text: string
     quoteText: string | null | undefined
@@ -374,6 +426,7 @@ export class KanobotMemoryService {
     sensitivity: Sensitivity
     importance: Importance
     status: 'active' | 'candidate'
+    explicitlyRequested: boolean
     id?: string
     createdAt?: string
   }): MemoryRecord {
@@ -398,7 +451,7 @@ export class KanobotMemoryService {
       : this.writeQuoteBody(quoteText, createdAt)
 
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       id,
       kind,
       contentRef,
@@ -408,6 +461,7 @@ export class KanobotMemoryService {
       confidence: input.confidence,
       sensitivity: input.sensitivity,
       importance: input.importance,
+      explicitlyRequested: input.explicitlyRequested,
       lastRecalledAt: null,
       status: input.status,
       replacedBy: null,
@@ -453,6 +507,20 @@ function validateRecallSettings(
     )
   }
   return settings
+}
+
+function validateCandidateArchiveDays(value: number): number {
+  if (
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > 3_650
+  ) {
+    throw new MemoryInputError(
+      'invalid_candidate_archive_days',
+      'memory candidateArchiveDays must be an integer between 1 and 3650',
+    )
+  }
+  return value
 }
 
 function requireMemorySource(value: unknown): MemorySource {

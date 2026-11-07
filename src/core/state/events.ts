@@ -384,6 +384,7 @@ export function validateMemoryRecord(value: unknown): MemoryRecord {
       'confidence',
       'sensitivity',
       'importance',
+      'explicitlyRequested',
       'lastRecalledAt',
       'status',
       'replacedBy',
@@ -422,6 +423,11 @@ export function validateMemoryRecord(value: unknown): MemoryRecord {
     'important',
     'permanent',
   ])
+  const explicitlyRequested = requireBoolean(
+    memory,
+    'explicitlyRequested',
+    '$.memory.explicitlyRequested',
+  )
   const lastRecalledAt = requireNullableInstant(
     memory,
     'lastRecalledAt',
@@ -430,6 +436,7 @@ export function validateMemoryRecord(value: unknown): MemoryRecord {
   const status = requireEnum(memory, 'status', '$.memory.status', [
     'candidate',
     'active',
+    'archived',
     'replaced',
     'deleted',
   ])
@@ -465,6 +472,7 @@ export function validateMemoryRecord(value: unknown): MemoryRecord {
     confidence,
     sensitivity,
     importance,
+    explicitlyRequested,
     lastRecalledAt,
     status,
     replacedBy,

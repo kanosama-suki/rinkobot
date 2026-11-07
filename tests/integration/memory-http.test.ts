@@ -31,10 +31,20 @@ test('owner can create, search, correct, trash, restore and purge memories', asy
     assert.equal(empty.status, 200)
     const emptyBody = await empty.json() as {
       memories: unknown[]
-      counts: { active: number; candidate: number; trash: number }
+      counts: {
+        active: number
+        candidate: number
+        archived: number
+        trash: number
+      }
     }
     assert.deepEqual(emptyBody.memories, [])
-    assert.deepEqual(emptyBody.counts, { active: 0, candidate: 0, trash: 0 })
+    assert.deepEqual(emptyBody.counts, {
+      active: 0,
+      candidate: 0,
+      archived: 0,
+      trash: 0,
+    })
 
     const createdResponse = await request(harness, '/kanobot/api/memories', {
       method: 'POST',
@@ -201,6 +211,58 @@ test('memory API rejects unknown fields and invalid enumeration values', async (
   }
 })
 
+test('archived candidates are visible, excluded from recall, and restorable', async () => {
+  const harness = await createHarness()
+  try {
+    const candidate = harness.memory.remember({
+      text: 'kano 提到过一本旧书。',
+      kind: 'small_talk',
+      source: 'user_stated',
+    })
+    harness.clock.advanceByMs(31 * 86_400_000)
+    assert.equal(
+      harness.memory.archiveExpiredCandidates(harness.clock.now()).length,
+      1,
+    )
+    assert.deepEqual(
+      harness.memory.search('旧书', { markRecalled: false }),
+      [],
+    )
+
+    const archived = await request(
+      harness,
+      '/kanobot/api/memories?status=archived',
+    )
+    assert.equal(archived.status, 200)
+    const archivedBody = await archived.json() as {
+      memories: Array<{ id: string; status: string }>
+      counts: { archived: number }
+    }
+    assert.deepEqual(
+      archivedBody.memories.map(memory => memory.id),
+      [candidate.id],
+    )
+    assert.equal(archivedBody.memories[0]?.status, 'archived')
+    assert.equal(archivedBody.counts.archived, 1)
+
+    const restored = await request(
+      harness,
+      `/kanobot/api/memories/${candidate.id}/restore`,
+      { method: 'POST' },
+    )
+    assert.equal(restored.status, 200)
+    const restoredBody = await restored.json() as {
+      memory: { status: string }
+      counts: { archived: number; candidate: number }
+    }
+    assert.equal(restoredBody.memory.status, 'candidate')
+    assert.equal(restoredBody.counts.archived, 0)
+    assert.equal(restoredBody.counts.candidate, 1)
+  } finally {
+    await harness.close()
+  }
+})
+
 async function request(
   harness: Awaited<ReturnType<typeof createHarness>>,
   path: string,
@@ -221,6 +283,7 @@ async function request(
 async function createHarness(): Promise<{
   baseUrl: string
   memory: KanobotMemoryService
+  clock: ReturnType<typeof createWorkspace>['clock']
   close(): Promise<void>
 }> {
   const ws = createWorkspace(test)
@@ -264,6 +327,7 @@ async function createHarness(): Promise<{
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     memory,
+    clock: ws.clock,
     async close(): Promise<void> {
       await new Promise<void>((resolve, reject) => {
         server.close(error => (error ? reject(error) : resolve()))

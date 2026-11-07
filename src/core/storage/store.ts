@@ -91,6 +91,9 @@ import type {
   FinishModelCallInput,
   InitiativeRunRecord,
   InitiativeStateRecord,
+  MemoryDecisionAction,
+  MemoryDecisionRecord,
+  MemoryDecisionSource,
   MemoryListOptions,
   MemorySearchOptions,
   MemorySearchResult,
@@ -113,6 +116,7 @@ import type {
   PutReplyStyleCheckInput,
   PutReminderCandidateInput,
   PutReminderInput,
+  RecordMemoryDecisionInput,
   RecordOwnerAuditInput,
   RecordInitiativeRunInput,
   ReminderCandidateRecord,
@@ -156,6 +160,21 @@ const OWNER_AUDIT_ACTIONS: readonly OwnerAuditAction[] = [
 const OWNER_AUDIT_TARGET_TYPES: readonly OwnerAuditTargetType[] = [
   'memory',
   'system',
+]
+
+const MEMORY_DECISION_ACTIONS: readonly MemoryDecisionAction[] = [
+  'retained',
+  'suppressed',
+  'extracted',
+  'archived',
+  'restored',
+]
+
+const MEMORY_DECISION_SOURCES: readonly MemoryDecisionSource[] = [
+  'chat_candidate',
+  'explicit_fallback',
+  'cooling',
+  'owner',
 ]
 
 const OUTBOX_KINDS: readonly OutboxKind[] = [
@@ -1082,6 +1101,48 @@ export class KanobotStorage {
     return rows.map(memoryFromRow)
   }
 
+  recordMemoryDecision(input: RecordMemoryDecisionInput): MemoryDecisionRecord {
+    this.assertOpen()
+    const action = validateMemoryDecisionAction(input.action)
+    const source = validateMemoryDecisionSource(input.source)
+    const reasonCode = validateReasonCode(
+      input.reasonCode,
+      'memoryDecision.reasonCode',
+    )
+    const targetId = input.targetId === undefined || input.targetId === null
+      ? null
+      : validateIdentifier(input.targetId, 'memoryDecision.targetId')
+    const occurredAt = validateInstant(
+      input.occurredAt ?? this.nowIso(),
+      'memoryDecision.occurredAt',
+    )
+    const id = validateIdentifier(
+      input.id ?? `memory-decision-${randomUUID()}`,
+      'memoryDecision.id',
+    )
+    try {
+      this.db.prepare(
+        `INSERT INTO memory_decisions
+          (id, occurred_at, action, reason_code, source, target_id)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(id, occurredAt, action, reasonCode, source, targetId)
+    } catch (error) {
+      throw mapInsertError(error, 'memory decision', id)
+    }
+    return { id, occurredAt, action, reasonCode, source, targetId }
+  }
+
+  listMemoryDecisions(limit = 100): MemoryDecisionRecord[] {
+    this.assertOpen()
+    assertAuditLimit(limit, 'memory decision audit')
+    const rows = this.db.prepare(
+      `SELECT * FROM memory_decisions
+       ORDER BY occurred_at DESC, id DESC
+       LIMIT ?`,
+    ).all(limit) as Array<Record<string, unknown>>
+    return rows.map(memoryDecisionFromRow)
+  }
+
   /**
    * 所有者审计只记录动作、对象 ID 和结果，不记录记忆正文。
    * 审计表不随记忆彻底清除而删除，保留“谁在何时做过什么”的事实。
@@ -1298,7 +1359,7 @@ export class KanobotStorage {
       status: 'active',
     })
     this.inTransaction(() => {
-      this.updateMemoryRow(promoted, null)
+      this.updateMemoryRow(promoted, null, true, null)
     })
     return promoted
   }
@@ -1461,8 +1522,19 @@ export class KanobotStorage {
     if (current === null) {
       throw new StorageError('REFERENCE_MISSING', `memory "${id}" does not exist`)
     }
-    if (current.status !== 'deleted') return current
     const now = Date.parse(validateInstant(at, 'memory.restoreAt'))
+    if (current.status === 'archived') {
+      const restored = validateMemoryRecord({
+        ...current,
+        status: 'candidate',
+      })
+      this.inTransaction(() => {
+        // 恢复后的候选重新获得完整冷却期，避免下一次维护立刻再次归档。
+        this.updateMemoryRow(restored, null, true, new Date(now).toISOString())
+      })
+      return restored
+    }
+    if (current.status !== 'deleted') return current
     if (current.purgeAfter === null || now > Date.parse(current.purgeAfter)) {
       throw new StorageError(
         'RECORD_INVALID',
@@ -1480,6 +1552,7 @@ export class KanobotStorage {
     if (
       storedPreviousStatus !== 'candidate' &&
       storedPreviousStatus !== 'active' &&
+      storedPreviousStatus !== 'archived' &&
       storedPreviousStatus !== 'replaced'
     ) {
       throw new StorageIntegrityError(
@@ -1495,9 +1568,48 @@ export class KanobotStorage {
       purgeAfter: null,
     })
     this.inTransaction(() => {
-      this.updateMemoryRow(restored, null)
+      this.updateMemoryRow(
+        restored,
+        null,
+        true,
+        restored.status === 'candidate' ? new Date(now).toISOString() : null,
+      )
     })
     return restored
+  }
+
+  /**
+   * 冷却只归档普通候选。active、permanent 和明确要求记住的记录不会被
+   * 自动移出可召回/可见范围；调用方负责记录脱敏审计。
+   */
+  archiveExpiredCandidates(
+    cutoff: string,
+    at: string = this.nowIso(),
+  ): MemoryRecord[] {
+    this.assertOpen()
+    const cutoffIso = validateInstant(cutoff, 'memory.candidateArchiveCutoff')
+    validateInstant(at, 'memory.archivedAt')
+    const rows = this.db.prepare(
+      `SELECT * FROM memories
+       WHERE status = 'candidate'
+         AND importance <> 'permanent'
+         AND explicitly_requested = 0
+         AND COALESCE(candidate_since, created_at) <= ?
+       ORDER BY created_at ASC, id ASC`,
+    ).all(cutoffIso) as Array<Record<string, unknown>>
+    const archived: MemoryRecord[] = []
+    this.inTransaction(() => {
+      for (const row of rows) {
+        const current = memoryFromRow(row)
+        const updated = validateMemoryRecord({
+          ...current,
+          status: 'archived',
+        })
+        this.updateMemoryRow(updated, null, true, null)
+        archived.push(updated)
+      }
+    })
+    return archived
   }
 
   purgeMemory(id: string, at: string = this.nowIso()): PurgeResult {
@@ -3325,12 +3437,19 @@ export class KanobotStorage {
     memory: MemoryRecord,
     previousStatus: MemoryRecord['status'] | null,
     syncSearch = true,
+    candidateSince?: string | null,
   ): void {
     const json = canonicalJson(memory)
+    const persistedCandidateSince = memory.status === 'candidate'
+      ? candidateSince === undefined
+        ? this.readCandidateSince(memory.id)
+        : candidateSince
+      : null
     this.db.prepare(
       `UPDATE memories SET
         status = ?, previous_status = ?, last_recalled_at = ?, replaced_by = ?,
-        deleted_at = ?, purge_after = ?, record_json = ?
+        deleted_at = ?, purge_after = ?, explicitly_requested = ?,
+        candidate_since = ?, record_json = ?
        WHERE id = ?`,
     ).run(
       memory.status,
@@ -3339,10 +3458,21 @@ export class KanobotStorage {
       memory.replacedBy,
       memory.deletedAt,
       memory.purgeAfter,
+      memory.explicitlyRequested ? 1 : 0,
+      persistedCandidateSince,
       json,
       memory.id,
     )
     if (syncSearch) this.syncMemorySearchRow(memory)
+  }
+
+  private readCandidateSince(memoryId: string): string | null {
+    const row = this.db.prepare(
+      'SELECT candidate_since FROM memories WHERE id = ?',
+    ).get(memoryId) as Record<string, unknown> | undefined
+    return row !== undefined && typeof row.candidate_since === 'string'
+      ? row.candidate_since
+      : null
   }
 
   private prepareMemoryWrite(input: MemoryRecord): MemoryRecord {
@@ -3361,9 +3491,10 @@ export class KanobotStorage {
       this.db.prepare(
         `INSERT INTO memories
           (id, schema_version, kind, content_ref, quote_ref, source, created_at,
-           confidence, sensitivity, importance, last_recalled_at, status, previous_status,
+           confidence, sensitivity, importance, explicitly_requested,
+           candidate_since, last_recalled_at, status, previous_status,
            replaced_by, deleted_at, purge_after, record_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
       ).run(
         memory.id,
         memory.schemaVersion,
@@ -3375,6 +3506,8 @@ export class KanobotStorage {
         memory.confidence,
         memory.sensitivity,
         memory.importance,
+        memory.explicitlyRequested ? 1 : 0,
+        memory.status === 'candidate' ? memory.createdAt : null,
         memory.lastRecalledAt,
         memory.status,
         memory.replacedBy,
@@ -3907,6 +4040,7 @@ function memoryFromRow(row: Record<string, unknown>): MemoryRecord {
     Number(row.confidence) === memory.confidence &&
     row.sensitivity === memory.sensitivity &&
     row.importance === memory.importance &&
+    Number(row.explicitly_requested) === (memory.explicitlyRequested ? 1 : 0) &&
     row.last_recalled_at === memory.lastRecalledAt &&
     row.status === memory.status &&
     row.replaced_by === memory.replacedBy &&
@@ -3919,7 +4053,50 @@ function memoryFromRow(row: Record<string, unknown>): MemoryRecord {
       ':memories:',
     )
   }
+  if (memory.status === 'candidate') {
+    if (typeof row.candidate_since !== 'string') {
+      throw new StorageIntegrityError(
+        'candidate memory has no cooling timestamp',
+        ':memories:',
+      )
+    }
+  } else if (row.candidate_since !== null) {
+    throw new StorageIntegrityError(
+      'non-candidate memory unexpectedly carries a cooling timestamp',
+      ':memories:',
+    )
+  }
   return memory
+}
+
+function memoryDecisionFromRow(
+  row: Record<string, unknown>,
+): MemoryDecisionRecord {
+  if (
+    typeof row.id !== 'string' ||
+    typeof row.occurred_at !== 'string' ||
+    typeof row.reason_code !== 'string' ||
+    (row.target_id !== null && typeof row.target_id !== 'string')
+  ) {
+    throw new StorageIntegrityError(
+      'memory decision row has invalid column types',
+      ':memory_decisions:',
+    )
+  }
+  return {
+    id: validateIdentifier(row.id, 'memoryDecision.id'),
+    occurredAt: validateInstant(row.occurred_at, 'memoryDecision.occurredAt'),
+    action: validateMemoryDecisionAction(row.action),
+    reasonCode: validateReasonCode(
+      row.reason_code,
+      'memoryDecision.reasonCode',
+    ),
+    source: validateMemoryDecisionSource(row.source),
+    targetId:
+      row.target_id === null
+        ? null
+        : validateIdentifier(row.target_id, 'memoryDecision.targetId'),
+  }
 }
 
 function outboxFromRow(row: Record<string, unknown>): OutboxRecord {
@@ -4516,6 +4693,24 @@ function validateOwnerAuditTargetType(value: unknown): OwnerAuditTargetType {
     invalid('ownerAudit.targetType', 'expected "memory" or "system"')
   }
   return value as OwnerAuditTargetType
+}
+
+function validateMemoryDecisionAction(
+  value: unknown,
+): MemoryDecisionAction {
+  if (!MEMORY_DECISION_ACTIONS.includes(value as MemoryDecisionAction)) {
+    invalid('memoryDecision.action', 'unsupported memory decision action')
+  }
+  return value as MemoryDecisionAction
+}
+
+function validateMemoryDecisionSource(
+  value: unknown,
+): MemoryDecisionSource {
+  if (!MEMORY_DECISION_SOURCES.includes(value as MemoryDecisionSource)) {
+    invalid('memoryDecision.source', 'unsupported memory decision source')
+  }
+  return value as MemoryDecisionSource
 }
 
 function validateAuditDetailCode(value: unknown): string {

@@ -1114,7 +1114,11 @@ function validateLifeState(table: TomlTable, file: string): LifeStateConfig {
 }
 
 function validateMemory(table: TomlTable, file: string): MemoryConfig {
-  knownKeys(table, ['schema_version', 'trash', 'recall'], '')
+  knownKeys(
+    table,
+    ['schema_version', 'candidate_archive_days', 'trash', 'recall'],
+    '',
+  )
   requireSchemaVersion(table, CONFIG_SCHEMA_VERSION)
 
   const trash = requiredTable(table, 'trash', 'trash')
@@ -1124,6 +1128,14 @@ function validateMemory(table: TomlTable, file: string): MemoryConfig {
 
   return {
     schemaVersion: CONFIG_SCHEMA_VERSION,
+    candidateArchiveDays:
+      optionalInteger(
+        table,
+        'candidate_archive_days',
+        'candidate_archive_days',
+        1,
+        3_650,
+      ) ?? 30,
     trash: {
       retentionDays: requiredInteger(
         trash,

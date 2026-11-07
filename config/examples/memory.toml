@@ -1,6 +1,10 @@
 # 记忆删除先进入回收站；到期自动彻底清除要等主动调度功能实现。
 schema_version = 1
 
+# 普通候选超过这个天数后转入 archived：不参与召回，但所有者仍可恢复。
+# active、permanent 和明确说“记住”的记忆不会被冷却自动归档。
+candidate_archive_days = 30
+
 [trash]
 retention_days = 30
 

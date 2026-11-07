@@ -17,6 +17,11 @@ import {
   type ChatModelStreamEvent,
   type ChatUsage,
 } from './types.ts'
+import {
+  ModelCatalogError,
+  modelCatalogMap,
+  parseOpenAIModelCatalog,
+} from './model-catalog.ts'
 
 const DEFAULT_RETRY_BASE_MS = 250
 const MAX_RETRY_DELAY_MS = 4_000
@@ -48,12 +53,6 @@ export interface MagpieChatModelOptions {
   /** 第三方端点每次请求前的 SSRF/DNS 检查；Magpie 默认不需要。 */
   preflight?: (() => Promise<void>) | null
   maxResponsePrefillChars?: number
-}
-
-interface MagpieModelDescriptor {
-  pricing: ChatModelPricing | null
-  maxOutputTokens: number | null
-  reasoningLevels: ReadonlySet<string> | null
 }
 
 interface AttemptState {
@@ -166,7 +165,16 @@ export class MagpieChatModel implements ChatModel {
         throw httpStatusError(response.status, 1)
       }
       const payload = await readJson(response)
-      const models = modelList(payload)
+      let entries
+      try {
+        entries = parseOpenAIModelCatalog(payload)
+      } catch (error) {
+        if (error instanceof ModelCatalogError) {
+          throw new ChatModelError('model_protocol_error', error.message, 1)
+        }
+        throw error
+      }
+      const models = modelCatalogMap(entries)
       const descriptor = models.get(this.id)
       if (descriptor === undefined) {
         throw new ChatModelError(
@@ -188,8 +196,8 @@ export class MagpieChatModel implements ChatModel {
       if (
         this.reasoningEffort !== null &&
         (
-          descriptor.reasoningLevels === null ||
-          !descriptor.reasoningLevels.has(this.reasoningEffort)
+          descriptor.reasoningEfforts === null ||
+          !descriptor.reasoningEfforts.includes(this.reasoningEffort)
         )
       ) {
         throw new ChatModelError(
@@ -605,83 +613,6 @@ function optionalTokenCount(
   return value === undefined || value === null
     ? 0
     : tokenCount(value, field, attempt)
-}
-
-function modelList(payload: unknown): Map<string, MagpieModelDescriptor> {
-  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
-    throw new ChatModelError(
-      'model_protocol_error',
-      'Magpie model list is not an object',
-      1,
-    )
-  }
-  const data = (payload as Record<string, unknown>).data
-  if (!Array.isArray(data)) {
-    throw new ChatModelError(
-      'model_protocol_error',
-      'Magpie model list has no data array',
-      1,
-    )
-  }
-  const result = new Map<string, MagpieModelDescriptor>()
-  for (const value of data) {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-      continue
-    }
-    const model = value as Record<string, unknown>
-    if (typeof model.id !== 'string' || model.id === '') continue
-    const maxOutput =
-      Number.isSafeInteger(model.max_output_tokens) &&
-      (model.max_output_tokens as number) > 0
-        ? model.max_output_tokens as number
-        : null
-    result.set(model.id, {
-      pricing: parsePricing(model.pricing),
-      maxOutputTokens: maxOutput,
-      reasoningLevels: parseReasoningLevels(model),
-    })
-  }
-  return result
-}
-
-function parseReasoningLevels(
-  model: Record<string, unknown>,
-): ReadonlySet<string> | null {
-  const levels = new Set<string>()
-  if (Array.isArray(model.reasoning_levels)) {
-    for (const value of model.reasoning_levels) {
-      if (typeof value === 'string' && value !== '') levels.add(value)
-    }
-  }
-  if (Array.isArray(model.supported_reasoning_levels)) {
-    for (const value of model.supported_reasoning_levels) {
-      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-        continue
-      }
-      const effort = (value as Record<string, unknown>).effort
-      if (typeof effort === 'string' && effort !== '') levels.add(effort)
-    }
-  }
-  return levels.size === 0 ? null : levels
-}
-
-function parsePricing(value: unknown): ChatModelPricing | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return null
-  }
-  const pricing = value as Record<string, unknown>
-  return {
-    prompt: parsePrice(pricing.prompt),
-    completion: parsePrice(pricing.completion),
-    cacheRead: parsePrice(pricing.input_cache_read),
-    cacheWrite: parsePrice(pricing.input_cache_write),
-  }
-}
-
-function parsePrice(value: unknown): number | null {
-  if (typeof value !== 'number' && typeof value !== 'string') return null
-  const price = Number(value)
-  return Number.isFinite(price) && price >= 0 ? price : null
 }
 
 /**

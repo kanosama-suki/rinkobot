@@ -275,7 +275,8 @@ async function handleRequest(
 
   if (
     pathname === `${CHAT_BASE_PATH}/api/settings/models` ||
-    pathname === `${CHAT_BASE_PATH}/api/settings/models/test`
+    pathname === `${CHAT_BASE_PATH}/api/settings/models/test` ||
+    pathname === `${CHAT_BASE_PATH}/api/settings/models/discover`
   ) {
     await handleModelSettingsRequest(req, res, pathname, options)
     return
@@ -293,6 +294,19 @@ async function handleModelSettingsRequest(
   const service = options.models
   if (service === undefined) {
     writeError(res, 404, 'not_found', '模型设置接口未启用', true)
+    return
+  }
+  if (pathname.endsWith('/discover')) {
+    if (req.method !== 'POST') {
+      writeMethodNotAllowed(res, ['POST'], true)
+      return
+    }
+    try {
+      const body = await readJsonBody(req)
+      writeJson(res, 200, await service.discover(body))
+    } catch (error) {
+      handleModelSettingsError(res, options.logger, error)
+    }
     return
   }
   if (pathname.endsWith('/test')) {
@@ -334,6 +348,8 @@ function handleModelSettingsError(
       error.code === 'settings_read_only' ||
       error.code === 'credential_reuse_refused'
         ? 409
+        : error.code.startsWith('model_discovery_')
+          ? 422
         : error.code.endsWith('_test_failed')
           ? 422
           : 400
@@ -432,7 +448,13 @@ async function handleInitiativeAction(
 }
 
 const MEMORY_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
-const MEMORY_STATUSES = ['active', 'candidate', 'trash', 'all'] as const
+const MEMORY_STATUSES = [
+  'active',
+  'candidate',
+  'archived',
+  'trash',
+  'all',
+] as const
 type MemoryStatus = typeof MEMORY_STATUSES[number]
 
 /**
@@ -492,7 +514,7 @@ async function handleMemoryCollection(
         res,
         400,
         'invalid_status',
-        'status 只能是 active、candidate、trash 或 all',
+        'status 只能是 active、candidate、archived、trash 或 all',
         true,
       )
       return
@@ -641,11 +663,13 @@ function parseMemoryStatus(raw: string | null): MemoryStatus | null {
 function memoryCounts(memory: KanobotMemoryService): {
   active: number
   candidate: number
+  archived: number
   trash: number
 } {
   return {
     active: memory.listViews('active').length,
     candidate: memory.listViews('candidate').length,
+    archived: memory.listViews('archived').length,
     trash: memory.listViews('trash').length,
   }
 }

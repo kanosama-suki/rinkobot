@@ -17,6 +17,7 @@ import {
 import {
   createWorkspace,
   dropCurrentInitiativeTables,
+  downgradeMemoriesToV9,
 } from '../helpers/storage-fixture.ts'
 
 test('explicit remember is durable while ordinary small talk stays a candidate', () => {
@@ -250,14 +251,10 @@ test('active memory search survives restart and a v3 to v6 migration', () => {
     db.exec('DROP TABLE emergency_state')
     db.exec('DROP TABLE memory_search')
     dropCurrentInitiativeTables(db)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(9)
+    downgradeMemoriesToV9(db)
     db.exec('DROP INDEX model_calls_purpose_index')
     db.exec('ALTER TABLE model_calls DROP COLUMN purpose')
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(8)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(7)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(6)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(5)
-    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(4)
+    db.exec('DELETE FROM schema_migrations')
     db.prepare(
       'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
     ).run(3, '2026-11-05T00:00:00.000Z')
@@ -280,7 +277,7 @@ test('active memory search survives restart and a v3 to v6 migration', () => {
       ).all() as Array<Record<string, unknown>>
       assert.deepEqual(
         versions.map(row => Number(row.version)),
-        [3, 4, 5, 6, 7, 8, 9],
+        [3, 4, 5, 6, 7, 8, 9, 10],
       )
     } finally {
       check.close()

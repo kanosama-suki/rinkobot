@@ -17,6 +17,7 @@ import {
 import {
   createWorkspace,
   dropCurrentInitiativeTables,
+  downgradeMemoriesToV9,
 } from '../helpers/storage-fixture.ts'
 
 test('a v6 model_calls table migrates to v7 without losing history', () => {
@@ -104,7 +105,7 @@ test('a v6 model_calls table migrates to v7 without losing history', () => {
       ).all() as Array<Record<string, unknown>>
       assert.deepEqual(
         versions.map(row => Number(row.version)),
-        [1, 2, 3, 4, 5, 6, 7, 8, 9],
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
       )
       const ddl = db.prepare(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'model_calls'",
@@ -188,6 +189,7 @@ function downgradeToV6(databasePath: string): void {
         ON reply_style_checks(checked_at);
     `)
     dropCurrentInitiativeTables(db)
+    downgradeMemoriesToV9(db)
     db.exec('DELETE FROM schema_migrations')
     const migration = db.prepare(
       'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',

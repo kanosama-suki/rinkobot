@@ -56,6 +56,76 @@ export function dropCurrentInitiativeTables(db: DatabaseSync): void {
   `)
 }
 
+/**
+ * 把当前 v10 的记忆表还原成 v9 形状，供迁移测试从真实旧结构重放。
+ * 只在测试夹具里使用；生产迁移永远只向前走。
+ */
+export function downgradeMemoriesToV9(db: DatabaseSync): void {
+  const rows = db.prepare('SELECT * FROM memories').all() as Array<
+    Record<string, unknown>
+  >
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    DROP TABLE IF EXISTS memory_decisions;
+    CREATE TABLE memories_v9 (
+      id TEXT PRIMARY KEY,
+      schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+      kind TEXT NOT NULL,
+      content_ref TEXT NOT NULL,
+      quote_ref TEXT,
+      source TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      confidence REAL NOT NULL,
+      sensitivity TEXT NOT NULL,
+      importance TEXT NOT NULL,
+      last_recalled_at TEXT,
+      status TEXT NOT NULL,
+      previous_status TEXT,
+      replaced_by TEXT,
+      deleted_at TEXT,
+      purge_after TEXT,
+      record_json TEXT NOT NULL
+    ) STRICT;
+  `)
+  const insert = db.prepare(
+    `INSERT INTO memories_v9
+      (id, schema_version, kind, content_ref, quote_ref, source, created_at,
+       confidence, sensitivity, importance, last_recalled_at, status,
+       previous_status, replaced_by, deleted_at, purge_after, record_json)
+     VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+  for (const row of rows) {
+    const record = JSON.parse(String(row.record_json)) as Record<string, unknown>
+    delete record.explicitlyRequested
+    record.schemaVersion = 1
+    insert.run(
+      row.id,
+      row.kind,
+      row.content_ref,
+      row.quote_ref,
+      row.source,
+      row.created_at,
+      row.confidence,
+      row.sensitivity,
+      row.importance,
+      row.last_recalled_at,
+      row.status,
+      row.previous_status,
+      row.replaced_by,
+      row.deleted_at,
+      row.purge_after,
+      JSON.stringify(record),
+    )
+  }
+  db.exec(`
+    DROP TABLE memories;
+    ALTER TABLE memories_v9 RENAME TO memories;
+    CREATE INDEX memories_content_ref_index ON memories(content_ref);
+    CREATE INDEX memories_quote_ref_index ON memories(quote_ref);
+    CREATE INDEX memories_status_index ON memories(status);
+  `)
+}
+
 export function createWorkspace(
   t: TestContext,
   options: WorkspaceOptions = {},
@@ -123,7 +193,7 @@ export function memoryFor(
   descriptionRef: string,
 ): MemoryRecord {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id,
     kind: 'preference',
     contentRef: descriptionRef,
@@ -133,6 +203,7 @@ export function memoryFor(
     confidence: 1,
     sensitivity: 'normal',
     importance: 'important',
+    explicitlyRequested: false,
     lastRecalledAt: null,
     status: 'active',
     replacedBy: null,
