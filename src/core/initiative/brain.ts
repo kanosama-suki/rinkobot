@@ -50,6 +50,11 @@ const INTERNAL_SYSTEM_PROMPT =
   '只输出严格 JSON，不要 Markdown、解释或思考过程。' +
   '不要读取、猜测或补造没有出现在上下文里的私人事实。'
 
+const JSON_ENVELOPE_PREFIX = '{"schemaVersion":1,'
+const PLAN_PREFILL = `${JSON_ENVELOPE_PREFIX}"items":[`
+const PROACTIVE_PREFILL = `${JSON_ENVELOPE_PREFIX}"shouldSend":`
+const REVIEW_PREFILL = `${JSON_ENVELOPE_PREFIX}"summary":"`
+
 export interface ModelInitiativeBrainOptions {
   model: ChatModel
   storage: KanobotStorage
@@ -92,6 +97,7 @@ export class ModelInitiativeBrain implements InitiativeBrain {
   }): Promise<DailyPlanDraft> {
     const raw = await this.run(
       'initiative',
+      PLAN_PREFILL,
       [
         '生成一份今天可以自己调整的软性生活计划。',
         '这不是用户已经确认的日程；不要覆盖睡眠、用户明确安排或承诺。',
@@ -120,6 +126,7 @@ export class ModelInitiativeBrain implements InitiativeBrain {
           .join('\n')
     const raw = await this.run(
       'initiative',
+      PROACTIVE_PREFILL,
       [
         '判断现在是否值得主动给 kano 发一条消息。没有内容就不发，不要为了保持存在感而发。',
         '不要每轮复述记忆。只有当前话题、到期关心事项或今天的生活里确有自然相关内容时才提。',
@@ -152,6 +159,7 @@ export class ModelInitiativeBrain implements InitiativeBrain {
   ): Promise<DailyReviewDraft> {
     const raw = await this.run(
       'daily_review',
+      REVIEW_PREFILL,
       [
         '整理这一天的聊天。输出供所有者查看的简短摘要，并挑选真正值得长期保留的候选。',
         '不要把寒暄、临时情绪、一次性安排或每句话都变成长期记忆。',
@@ -174,6 +182,7 @@ export class ModelInitiativeBrain implements InitiativeBrain {
 
   private async run(
     purpose: 'initiative' | 'daily_review',
+    responsePrefill: string,
     prompt: string,
     signal: AbortSignal,
   ): Promise<string> {
@@ -207,6 +216,7 @@ export class ModelInitiativeBrain implements InitiativeBrain {
         systemPrompt: this.systemPrompt,
         messages: [{ role: 'user', text: prompt }],
         jsonMode: true,
+        responsePrefill,
         signal,
       })) {
         if (event.type === 'text') {

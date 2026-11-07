@@ -10,6 +10,7 @@ import type { AddressInfo } from 'node:net'
 import test from 'node:test'
 
 import {
+  ChatModelError,
   KanobotChatService,
   MockChatModel,
   type ChatModel,
@@ -192,6 +193,53 @@ test('the chat API rejects unknown body fields before opening an SSE stream', as
   }
 })
 
+test('empty model output reaches the page as an explicit SSE error', async () => {
+  const harness = await createHarness(
+    store => new KanobotChatService(store, new EmptyOutputChatModel()),
+  )
+  try {
+    const response = await fetch(`${harness.baseUrl}/kanobot/api/chat`, {
+      method: 'POST',
+      headers: {
+        ...authHeaders(),
+        accept: 'text/event-stream',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ text: '这条虚构消息会触发空正文错误' }),
+    })
+    assert.equal(response.status, 200)
+    const events = parseSse(await response.text())
+    assert.equal(events[0]?.type, 'ready')
+    const error = events.at(-1)
+    assert.equal(error?.type, 'error')
+    assert.equal(
+      error?.type === 'error' ? error.code : null,
+      'model_empty_response',
+    )
+    assert.match(
+      error?.type === 'error' ? error.message : '',
+      /没有返回可用正文/,
+    )
+    assert.equal(events.some(event => event.type === 'done'), false)
+
+    const conversation = await fetch(
+      `${harness.baseUrl}/kanobot/api/conversation`,
+      { headers: authHeaders() },
+    )
+    const body = await conversation.json() as {
+      messages: Array<{ role: string }>
+      modelUsage: {
+        lastCall: { status: string; errorCode: string | null } | null
+      }
+    }
+    assert.deepEqual(body.messages.map(message => message.role), ['user'])
+    assert.equal(body.modelUsage.lastCall?.status, 'failed')
+    assert.equal(body.modelUsage.lastCall?.errorCode, 'model_empty_response')
+  } finally {
+    await harness.close()
+  }
+})
+
 type TestStore = ReturnType<ReturnType<typeof createWorkspace>['open']>
 
 async function createHarness(
@@ -316,5 +364,21 @@ class HttpChatModel implements ChatModel {
         responseId: 'http-chat-response',
       },
     }
+  }
+}
+
+class EmptyOutputChatModel implements ChatModel {
+  readonly id = 'empty-output-test-model'
+  readonly mode = 'test'
+  readonly provider = 'test'
+
+  async *stream(
+    _request: ChatModelRequest,
+  ): AsyncIterable<ChatModelStreamEvent> {
+    throw new ChatModelError(
+      'model_empty_response',
+      'model produced no visible text',
+      2,
+    )
   }
 }

@@ -224,7 +224,7 @@ test('an explicit startup report proves successful activation', async () => {
     assert.equal(report.provider, 'mock')
     assert.equal(report.model, 'kanobot-mock-v1')
     assert.equal(report.configuredProvider, 'magpie')
-    assert.equal(report.configuredModel, 'deepseek/deepseek-flash')
+    assert.equal(report.configuredModel, 'dsdsdsds/deepseek-flash')
     assert.equal(report.contextMaxPromptChars, 20_000)
     assert.equal(report.timezone, 'Asia/Shanghai')
     assert.equal(report.identity, 'placeholder')

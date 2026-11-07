@@ -85,6 +85,31 @@ test('an explicit memory question can retrieve the matching old preference', () 
   }
 })
 
+test('a request to recall an explicitly remembered test code is not rejected by meta words', () => {
+  const ws = createWorkspace(test)
+  const store = ws.open()
+  try {
+    const memory = new KanobotMemoryService(store, ws.clock)
+    const code = memory.remember({
+      text: '我的测试暗号是蓝鲸雨伞。',
+      kind: 'fact',
+      source: 'user_stated',
+      importance: 'important',
+      explicitlyRequested: true,
+    })
+
+    const recalled = memory.recall(
+      '我刚才让你记住的虚构测试暗号是什么？只回答暗号。',
+      5,
+      { markRecalled: false },
+    )
+    assert.equal(recalled[0]?.memory.id, code.id)
+    assert.equal(recalled[0]?.relevance, 1)
+  } finally {
+    store.close()
+  }
+})
+
 test('generic activity questions recall no memory when there is no topic', () => {
   const ws = createWorkspace(test)
   const store = ws.open()

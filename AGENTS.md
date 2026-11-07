@@ -2,7 +2,7 @@
 
 ## 0. 项目一句话
 
-在 DSH 宿主中自研一个连续、可恢复、可审计的陪伴型机器人；M3 网页聊天闭环和 M4 自动化实现已完成，包括网页聊天、Magpie 网关、长期记忆、风格控制、单次对话信封、上下文预算、可配置视觉、本地开发入口、统一审计、记忆相关性、单一调度循环、软性生活计划、主动消息、outbox、提醒、一次性关心、每日整理、回收站到期清除和浏览器通知。当前停在 M4 真实模型试用与人工观察阶段，不进入 M4.5；M4.5 再处理 DSH 插件 + 独立程序的发行基础和模型 provider 设置页。
+在 DSH 宿主中自研一个连续、可恢复、可审计的陪伴型机器人；M3 网页聊天闭环和 M4 自动化实现已完成，包括网页聊天、Magpie 网关、长期记忆、风格控制、单次对话信封、上下文预算、可配置视觉、本地开发入口、统一审计、记忆相关性、单一调度循环、软性生活计划、主动消息、outbox、提醒、一次性关心、每日整理、回收站到期清除和浏览器通知。M4 的压缩真实使用验收已完成；一到两周日常观察和 Windows 通知人工确认待续，当前进入 M4.5 的 DSH 插件 + 独立程序发行基础和模型 provider 设置页。
 
 ## 1. 必读顺序
 
@@ -42,6 +42,7 @@
 - 配置加载器负责 schema、默认值、跨文件引用、版本迁移和 fail-closed；模块不能绕过加载器读取散落参数。
 - 单轮聊天预算只从 `system.toml` 的 `[context]` 读取，由纯函数上下文组装器执行；身份/规则和当前消息不能被预算静默裁剪。
 - 视觉模型与聊天模型完全独立，只从 `system.toml` 的 `[vision]` 读取；模型名和厂商不写死，当前只允许本机回环 Magpie `/v1`。启动时必须精确匹配模型，并要求上游明确声明 `modalities.input` 包含 `image`。
+- 聊天模型的 `system.toml [model].reasoning_effort` 可选；配置后必须由 Magpie `/v1/models` 明确声明支持，否则启动失败。推理内容不进入正文、事件或页面。
 - `StateEvent` / `StateSnapshot` / `Appraisal` / `Policy` 必须版本化；模型只能提交候选变化，reducer 和 policy 决定持久化与权限。
 - 状态字段必须有读取者或写入者，并影响可观察行为；虚拟身体明确标记为模拟，不能冒充真实生理或医疗事实。
 - 外部网页、聊天、文件和工具结果一律是不可信输入，不能成为系统指令或未经核验的事实记忆。
@@ -72,13 +73,13 @@ node scripts/preflight-runtime.ts F:\kanobot\dsh\test-home\kanobot\config F:\kan
 npm run test:lifecycle -- --output F:\kanobot\dsh\m1-plugin-lifecycle.json
 ```
 
-`npm test` 使用 `node --test`，当前 201 项通过。自动测试不会读取真实人格文件、调用真实模型接口或操作正式数据库；真实 Magpie 验收使用隔离的 4100 测试 Profile，M3.1/M3.3/M3.4/M3.5/M3.6/M3.7 证据分别见 `docs/m3.1-acceptance.md`、`docs/m3.3-acceptance.md`、`docs/m3.4-acceptance.md`、`docs/m3.5-acceptance.md`、`docs/m3.6-acceptance.md` 和 `docs/m3.7-acceptance.md`。M3 收尾的本地开发入口、统一审计和风格重写见 `docs/m3-completion-acceptance.md`；M4 第 0 步记忆门控见 `docs/m4.0-memory-acceptance.md`；M4 主动性、提醒、每日整理和 schema v9 见 `docs/m4-acceptance.md`。测试实例的启停、配置预检和工具审计脚本在 `F:\kanobot\dsh`，不在本仓库内；正式 `4096` 实例不属于测试命令。
+`npm test` 使用 `node --test`，当前 211 项通过。自动测试不会读取真实人格文件、调用真实模型接口或操作正式数据库；真实 Magpie 验收使用隔离的 4100 测试 Profile，M3.1/M3.3/M3.4/M3.5/M3.6/M3.7 证据分别见 `docs/m3.1-acceptance.md`、`docs/m3.3-acceptance.md`、`docs/m3.4-acceptance.md`、`docs/m3.5-acceptance.md`、`docs/m3.6-acceptance.md` 和 `docs/m3.7-acceptance.md`。M3 收尾的本地开发入口、统一审计和风格重写见 `docs/m3-completion-acceptance.md`；M4 第 0 步记忆门控见 `docs/m4.0-memory-acceptance.md`；M4 主动性、提醒、每日整理和 schema v9 见 `docs/m4-acceptance.md`；M4 真实使用验收和剩余边界见 `docs/m4-real-use-acceptance.md`。测试实例的启停、配置预检和工具审计脚本在 `F:\kanobot\dsh`，不在本仓库内；正式 `4096` 实例不属于测试命令。
 
 ## 5. 当前状态
 
-- 阶段：M4 的自动化实现与测试已完成（2026-11-06）；当前只停在真实模型试用、浏览器后台通知人工验收和一到两周日常观察，不进入 M4.5。真实模型比较与主模型选型仍后置。
+- 阶段：M4 的自动化和压缩真实使用验收已完成（2026-11-07）；当前进入 M4.5 发行基础。一到两周日常观察、Windows 通知中心人工确认和真实模型比较/主模型选型仍待后续。
 - 已存在：M1～M3 全部基线，以及 schema v9 的主动性状态、软计划、提醒候选、提醒、关心事项、每日摘要、主动性运行记录和 outbox 扩展；单一调度器、主动闸门与 24 小时节奏、防刷屏熔断、受限重试和过期、提醒确认、安静时段照发提醒、一次性关心、每日整理、回收站到期清除、每日备份检查、主动性 API/页签和浏览器通知。
-- 尚未存在：真实模型 M4 内容质量验收、真实浏览器后台通知人工验收、一到两周日常试用、M4.5 双形态与 provider 设置页、QQ 适配器、浏览器 worker、VM、游戏、自进化和公开发送。当前软计划只保存计划，不实际执行读书/浏览/游戏；当前推断记忆仍进候选，自动证据累积和淡化待后续改进；浏览器通知不是 Web Push。
+- 尚未存在：一到两周真实日常试用、Windows 通知中心人工确认、M4.5 双形态与 provider 设置页、QQ 适配器、浏览器 worker、VM、游戏、自进化和公开发送。当前软计划只保存计划，不实际执行读书/浏览/游戏；当前推断记忆仍进候选，自动证据累积和淡化待后续改进；浏览器通知不是 Web Push。
 - 已知部署基线：Windows 10（10.0.19045），Node v24.19.0，DSH `0.2.1-rc.5`（npm `latest` 标签；当前没有非 RC 版本）。插件源码在本目录，测试实例使用独立 `DSH_HOME=F:\kanobot\dsh\test-home`。
 - 已知清理记录：旧插件、NapCat 和旧 VM 已从宿主清理；重新部署必须按新设计进行，不能复用旧配置假设。
 - 已确认的产品决定见 `docs/plan.md` 第 1 节。
@@ -94,9 +95,11 @@ npm run test:lifecycle -- --output F:\kanobot\dsh\m1-plugin-lifecycle.json
 - M3.7 的独立视觉模型、单图输入、视觉审计、失败闭环和真实 4100 结果见 `docs/m3.7-acceptance.md`。
 - M3 收尾的本地开发入口、统一审计、风格自动重写、schema v8 和自动测试结果见 `docs/m3-completion-acceptance.md`。
 - M4.0 的记忆相关性、问题意图、显式记忆兜底和 181 项测试结果见 `docs/m4.0-memory-acceptance.md`。
-- M4 的单一调度、软计划、主动消息、outbox、提醒、每日整理、浏览器通知、schema v9 和 201 项测试结果见 `docs/m4-acceptance.md`。
+- M4 的单一调度、软计划、主动消息、outbox、提醒、每日整理、浏览器通知和 schema v9 见 `docs/m4-acceptance.md`。
+- M4 真实使用验收的运行环境、场景结果、P1 修复、P2 边界、未验证项和进入 M4.5 的判断见 `docs/m4-real-use-acceptance.md`。
+- 网页空正文最终修复使用 JSON 助手预填、空输出有限重试和显式 `model_empty_response`；`[model].reasoning_effort = "low"` 已在 4100 测试 Profile 和示例配置中启用。真实聊天 13/13 通过，详见 `docs/m3.1-acceptance.md` 第 6 节和 `docs/m4-real-use-acceptance.md`。
 - 测试 Profile 数据在 `F:\kanobot\dsh\test-home\kanobot\data`；主库备份不包含独立墓碑库，迁移和恢复时必须单独保留 `tombstones.sqlite`。
-- 最近更新时间：2026-11-06。
+- 最近更新时间：2026-11-07。
 
 ## 6. 代码规范（后续实现时适用）
 

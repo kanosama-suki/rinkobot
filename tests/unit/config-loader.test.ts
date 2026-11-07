@@ -46,6 +46,7 @@ api_key_env = "MAGPIE_API_KEY"
 timeout_ms = 120000
 max_retries = 2
 max_output_tokens = 4096
+reasoning_effort = "low"
 
 [resources]
 max_concurrent_model_calls = 2
@@ -223,6 +224,7 @@ test('loads the checked-in example configuration', () => {
   assert.equal(config.system.vision.provider, null)
   assert.equal(config.system.vision.maxImageBytes, 5 * 1024 * 1024)
   assert.equal(config.system.vision.maxDescriptionChars, 2_000)
+  assert.equal(config.system.model.reasoningEffort, 'low')
 })
 
 test('maps snake_case TOML fields to typed runtime fields', () => {
@@ -237,6 +239,7 @@ test('maps snake_case TOML fields to typed runtime fields', () => {
       timeoutMs: 120000,
       maxRetries: 2,
       maxOutputTokens: 4096,
+      reasoningEffort: 'low',
     })
     assert.deepEqual(config.system.context, {
       maxPromptChars: 20_000,
@@ -638,6 +641,24 @@ test('rejects a Magpie model without max_output_tokens', () => {
     expectIssue(
       () => loadConfigFromDirectory(dir),
       'model.max_output_tokens',
+      'system.toml',
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rejects a reasoning effort that is not a lowercase label', () => {
+  const dir = writeConfigs({
+    system: validSystem.replace(
+      'reasoning_effort = "low"',
+      'reasoning_effort = "Very High"',
+    ),
+  })
+  try {
+    expectIssue(
+      () => loadConfigFromDirectory(dir),
+      'model.reasoning_effort',
       'system.toml',
     )
   } finally {

@@ -261,7 +261,7 @@ ui.toml
 
 `channels.toml` 是群列表、私聊白名单、@ 规则和投递策略的唯一配置来源。配置加载器统一做 schema 校验、默认值、跨文件引用检查和 fail-closed，不把参数散落到各模块。
 
-`system.toml` 的 `[context]` 保存单轮上下文的字符预算和分块上限；`[vision]` 保存独立视觉模型的开关、精确模型名和请求上限。`initiative.toml` 保存 tick、软计划、主动消息、提醒、outbox 和每日整理参数。M3 基线仍只连接本机回环 Magpie `/v1`；M4.5 通过 provider 适配层增加 DSH `ctx.llm` 和受控的第三方 OpenAI-compatible 端点。`memory.toml` 的 `[trash]` 保存回收站期限，`[recall]` 保存相关性和候选上限。`[storage]` 只写相对数据目录的路径；主库、墓碑库和备份目录的实际绝对路径由 `dataDir` 解析并在存储层再次检查目录逃逸。
+`system.toml` 的 `[context]` 保存单轮上下文的字符预算和分块上限；`[model]` 保存聊天模型和可选推理档位；`[vision]` 保存独立视觉模型的开关、精确模型名和请求上限。`initiative.toml` 保存 tick、软计划、主动消息、提醒、outbox 和每日整理参数。M3 基线仍只连接本机回环 Magpie `/v1`；M4.5 通过 provider 适配层增加 DSH `ctx.llm` 和受控的第三方 OpenAI-compatible 端点。`memory.toml` 的 `[trash]` 保存回收站期限，`[recall]` 保存相关性和候选上限。`[storage]` 只写相对数据目录的路径；主库、墓碑库和备份目录的实际绝对路径由 `dataDir` 解析并在存储层再次检查目录逃逸。
 
 模型来源、聊天/视觉模型、`separate`/`unified` 视觉模式、人格复核模式、主动渠道、QQ 聚合参数和记忆相关性门槛都属于可配置选项。示例配置只放脱敏默认值；M4.5 的 Web UI 修改 Git 忽略的运行时配置和 secret 引用，不回显密钥，不直接改仓库模板。
 

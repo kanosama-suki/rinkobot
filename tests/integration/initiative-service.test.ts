@@ -399,6 +399,59 @@ test('daily review stores a summary and deduplicates inferred memory candidates'
   }
 })
 
+test('daily review reconciles a summary left before the completion state', async () => {
+  const runtime = createRuntime(test, {
+    now: '2026-11-05T16:35:00.000Z',
+    configure: config => {
+      config.life.enabled = false
+      config.proactive.enabled = false
+      config.reminders.enabled = false
+    },
+  })
+  try {
+    const source = runtime.store.appendChatMessage({
+      conversationId: 'main',
+      role: 'user',
+      text: '这是每日整理重入测试的虚构来源。',
+      createdAt: '2026-11-05T10:00:00.000Z',
+    })
+    const existing = runtime.store.putDailySummary({
+      localDay: '2026-11-05',
+      summary: '已有摘要（模拟摘要写入后、状态更新前退出）。',
+      sourceMessageIds: [source.id],
+      createdAt: '2026-11-05T16:30:00.000Z',
+    })
+
+    const result = await runtime.service.tick(new AbortController().signal)
+
+    assert.equal(result.reviewCompleted, false)
+    assert.equal(runtime.brain.reviewCalls, 0)
+    assert.equal(
+      runtime.store.getInitiativeState().lastDailyReviewDay,
+      '2026-11-05',
+    )
+    assert.equal(
+      runtime.store.getDailySummary('2026-11-05')?.id,
+      existing.id,
+    )
+    assert.equal(
+      runtime.store.getBody(existing.bodyRef)?.content,
+      '已有摘要（模拟摘要写入后、状态更新前退出）。',
+    )
+    assert.ok(
+      runtime.store
+        .listInitiativeRuns(20)
+        .some(
+          run =>
+            run.kind === 'daily_review' &&
+            run.detailCode === 'daily_summary_already_exists',
+        ),
+    )
+  } finally {
+    runtime.close()
+  }
+})
+
 test('emergency stop blocks the whole initiative tick and leaves work queued', async () => {
   const runtime = createRuntime(test, {
     now: '2026-11-06T01:00:00.000Z',

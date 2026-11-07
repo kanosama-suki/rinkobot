@@ -41,6 +41,7 @@ test('Magpie streams fragmented UTF-8, ignores reasoning, and parses usage', asy
           {
             id: MODEL_ID,
             max_output_tokens: 393216,
+            reasoning_levels: ['none', 'low', 'high', 'max'],
             pricing: {
               prompt: '0.00000015',
               completion: '0.0000006',
@@ -85,6 +86,7 @@ test('Magpie streams fragmented UTF-8, ignores reasoning, and parses usage', asy
       maxOutputTokens: 4096,
       timeoutMs: 5_000,
       maxRetries: 0,
+      reasoningEffort: 'low',
       apiKey: 'test-secret',
       sessionId: 'kanobot-test',
     })
@@ -119,6 +121,7 @@ test('Magpie streams fragmented UTF-8, ignores reasoning, and parses usage', asy
     assert.equal(chatHeaders?.['x-magpie-session'], 'kanobot-test')
     assert.equal(chatBody?.model, MODEL_ID)
     assert.equal(chatBody?.max_tokens, 4096)
+    assert.equal(chatBody?.reasoning_effort, 'low')
     assert.equal(chatBody?.stream, true)
     assert.deepEqual(chatBody?.stream_options, { include_usage: true })
     assert.deepEqual(chatBody?.response_format, { type: 'json_object' })
@@ -128,6 +131,129 @@ test('Magpie streams fragmented UTF-8, ignores reasoning, and parses usage', asy
     await collect(model, new AbortController().signal, false)
     assert.ok(chatBody !== null)
     assert.equal(Object.hasOwn(chatBody, 'response_format'), false)
+  } finally {
+    await harness.close()
+  }
+})
+
+test('omits reasoning_effort when it is not configured', async () => {
+  let chatBody: Record<string, unknown> | null = null
+  const harness = await startServer(async (request, response) => {
+    if (request.url === '/v1/models') {
+      writeModels(response)
+      return
+    }
+    chatBody = JSON.parse(await readBody(request)) as Record<string, unknown>
+    writeSse(
+      response,
+      'data: {"choices":[{"delta":{"content":"{\\"schemaVersion\\":1}"}}]}\n\n' +
+        'data: [DONE]\n\n',
+    )
+  })
+  try {
+    const model = new MagpieChatModel({
+      baseUrl: harness.baseUrl,
+      model: MODEL_ID,
+      maxOutputTokens: 4096,
+      timeoutMs: 5_000,
+      maxRetries: 0,
+    })
+    await model.checkAvailable()
+    await collect(model)
+    assert.ok(chatBody !== null)
+    assert.equal(Object.hasOwn(chatBody, 'reasoning_effort'), false)
+  } finally {
+    await harness.close()
+  }
+})
+
+test('sends a response prefill as the final assistant message', async () => {
+  let chatBody: Record<string, unknown> | null = null
+  const prefill = '{"schemaVersion":1,"reply":"'
+  const harness = await startServer(async (request, response) => {
+    if (request.url === '/v1/models') {
+      writeModels(response)
+      return
+    }
+    chatBody = JSON.parse(await readBody(request)) as Record<string, unknown>
+    const payload = JSON.stringify({
+      choices: [{ delta: { content: `${prefill}收到喵。"}` } }],
+    })
+    writeSse(response, `data: ${payload}\n\ndata: [DONE]\n\n`)
+  })
+  try {
+    const model = await checkedModel(harness)
+    const events = await collectWithPrefill(model, prefill)
+    const text = events
+      .filter((event): event is Extract<ChatModelStreamEvent, { type: 'text' }> =>
+        event.type === 'text',
+      )
+      .map(event => event.text)
+      .join('')
+    assert.equal(text, `${prefill}收到喵。"}`)
+    assert.ok(chatBody !== null)
+    const messages = chatBody.messages as Array<{ role: string; content: string }>
+    assert.equal(messages.length, 3)
+    assert.deepEqual(messages.at(-1), { role: 'assistant', content: prefill })
+  } finally {
+    await harness.close()
+  }
+})
+
+test('does not treat a prefill-only stream as visible output', async () => {
+  const prefill = '{"schemaVersion":1,"reply":"'
+  const harness = await startServer(async (request, response) => {
+    if (request.url === '/v1/models') {
+      writeModels(response)
+      return
+    }
+    await readBody(request)
+    writeSse(
+      response,
+      `data: {"choices":[{"delta":{"content":${JSON.stringify(prefill)}}}]}\n\n` +
+        'data: [DONE]\n\n',
+    )
+  })
+  try {
+    const model = await checkedModel(harness)
+    await assert.rejects(
+      collectWithPrefill(model, prefill),
+      (error: unknown) =>
+        error instanceof ChatModelError &&
+        error.code === 'model_empty_response',
+    )
+  } finally {
+    await harness.close()
+  }
+})
+
+test('rejects a reasoning effort the upstream model does not declare', async () => {
+  const harness = await startServer((_request, response) => {
+    writeJson(response, 200, {
+      data: [
+        {
+          id: MODEL_ID,
+          max_output_tokens: 393216,
+          reasoning_levels: ['none', 'high'],
+        },
+      ],
+    })
+  })
+  try {
+    const model = new MagpieChatModel({
+      baseUrl: harness.baseUrl,
+      model: MODEL_ID,
+      maxOutputTokens: 4096,
+      timeoutMs: 2_000,
+      maxRetries: 0,
+      reasoningEffort: 'low',
+    })
+    await assert.rejects(
+      model.checkAvailable(),
+      (error: unknown) =>
+        error instanceof ChatModelError &&
+        error.code === 'model_reasoning_effort_unsupported',
+    )
   } finally {
     await harness.close()
   }
@@ -192,6 +318,95 @@ test('retries transient HTTP failures before the first text token', async () => 
       events.filter(event => event.type === 'text').map(event => event.text).join(''),
       '重试成功。',
     )
+  } finally {
+    await harness.close()
+  }
+})
+
+test('retries an empty visible stream and succeeds on the next attempt', async () => {
+  let chatRequests = 0
+  const systemPrompts: string[] = []
+  const harness = await startServer(async (request, response) => {
+    if (request.url === '/v1/models') {
+      writeModels(response)
+      return
+    }
+    const body = JSON.parse(await readBody(request)) as {
+      messages?: Array<{ role?: string; content?: string }>
+    }
+    systemPrompts.push(
+      body.messages?.find(message => message.role === 'system')?.content ?? '',
+    )
+    chatRequests += 1
+    if (chatRequests === 1) {
+      writeSse(
+        response,
+        'data: {"choices":[{"delta":{"reasoning_content":"ONLY-REASONING","content":"  "}}]}\n\n' +
+          'data: {"choices":[],"usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12}}\n\n' +
+          'data: [DONE]\n\n',
+      )
+      return
+    }
+    writeSse(
+      response,
+      'data: {"choices":[{"delta":{"content":"第二次有正文。"}}]}\n\n' +
+        'data: [DONE]\n\n',
+    )
+  })
+  try {
+    const model = await checkedModel(harness, {
+      maxRetries: 1,
+      retryBaseDelayMs: 0,
+    })
+    const events = await collect(model)
+    assert.equal(chatRequests, 2)
+    assert.equal(systemPrompts[0]?.includes('可见正文纠错'), false)
+    assert.equal(systemPrompts[1]?.includes('可见正文纠错'), true)
+    assert.equal(systemPrompts[1]?.includes('至少一个非空白字符'), true)
+    const result = events.find(event => event.type === 'result')
+    assert.ok(result?.type === 'result')
+    assert.equal(result.result.attempts, 2)
+    assert.equal(
+      events
+        .filter(event => event.type === 'text')
+        .map(event => event.text)
+        .join('')
+        .trim(),
+      '第二次有正文。',
+    )
+    assert.equal(JSON.stringify(events).includes('ONLY-REASONING'), false)
+  } finally {
+    await harness.close()
+  }
+})
+
+test('a stream with no visible text in every attempt fails explicitly', async () => {
+  let chatRequests = 0
+  const harness = await startServer((request, response) => {
+    if (request.url === '/v1/models') {
+      writeModels(response)
+      return
+    }
+    chatRequests += 1
+    writeSse(
+      response,
+      'data: {"choices":[{"delta":{"reasoning_content":"NO-VISIBLE-TEXT","content":""}}]}\n\n' +
+        'data: [DONE]\n\n',
+    )
+  })
+  try {
+    const model = await checkedModel(harness, {
+      maxRetries: 1,
+      retryBaseDelayMs: 0,
+    })
+    await assert.rejects(
+      collect(model),
+      (error: unknown) =>
+        error instanceof ChatModelError &&
+        error.code === 'model_empty_response' &&
+        error.attempts === 2,
+    )
+    assert.equal(chatRequests, 2)
   } finally {
     await harness.close()
   }
@@ -351,6 +566,7 @@ async function checkedModel(
     maxOutputTokens: 4096,
     timeoutMs: 5_000,
     maxRetries: 0,
+    reasoningEffort: 'low',
     ...overrides,
   })
   await model.checkAvailable()
@@ -375,6 +591,21 @@ async function collect(
   for await (const event of model.stream({
     ...requestFor(model, jsonMode),
     signal,
+  })) {
+    events.push(event)
+  }
+  return events
+}
+
+async function collectWithPrefill(
+  model: MagpieChatModel,
+  responsePrefill: string,
+): Promise<ChatModelStreamEvent[]> {
+  const events: ChatModelStreamEvent[] = []
+  for await (const event of model.stream({
+    ...requestFor(model),
+    responsePrefill,
+    signal: new AbortController().signal,
   })) {
     events.push(event)
   }
@@ -419,6 +650,7 @@ function writeModels(response: ServerResponse): void {
       {
         id: MODEL_ID,
         max_output_tokens: 393216,
+        reasoning_levels: ['none', 'low', 'high', 'max'],
         pricing: {
           prompt: '0.00000015',
           completion: '0.0000006',

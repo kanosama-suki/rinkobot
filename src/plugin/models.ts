@@ -44,6 +44,7 @@ export async function createChatModel(
     maxOutputTokens: model.maxOutputTokens,
     timeoutMs: model.timeoutMs,
     maxRetries: model.maxRetries,
+    reasoningEffort: model.reasoningEffort,
     apiKey: resolveApiKey(model.apiKeyEnv, 'model.api_key_env'),
   })
   await magpie.checkAvailable()

@@ -314,6 +314,10 @@ test('relevant memories are recalled into the system prompt, not fake messages',
     assert.match(model.lastRequest?.systemPrompt ?? '', /长期记忆/)
     assert.match(model.lastRequest?.systemPrompt ?? '', /咖啡/)
     assert.equal(model.lastRequest?.jsonMode, true)
+    assert.equal(
+      model.lastRequest?.responsePrefill,
+      '{"schemaVersion":1,"reply":"',
+    )
     assert.deepEqual(
       model.lastRequest?.messages.map(message => message.role),
       ['user'],

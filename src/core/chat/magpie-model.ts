@@ -22,6 +22,13 @@ const DEFAULT_RETRY_BASE_MS = 250
 const MAX_RETRY_DELAY_MS = 4_000
 const MODEL_CHECK_TIMEOUT_MS = 10_000
 const SESSION_HEADER = 'X-Magpie-Session'
+const MAX_RESPONSE_PREFILL_CHARS = 200
+const EMPTY_OUTPUT_REPAIR_PROMPT = `
+
+## 可见正文纠错（本轮重试）
+上一次生成没有产生任何可见正文，只有空白字符或推理内容。
+请直接输出符合上方要求的完整内容；reply 必须包含至少一个非空白字符。
+不要只输出空白、推理过程或对本次重试的解释。`
 
 export interface MagpieChatModelOptions {
   baseUrl: string
@@ -29,6 +36,7 @@ export interface MagpieChatModelOptions {
   maxOutputTokens: number
   timeoutMs: number
   maxRetries: number
+  reasoningEffort?: string | null
   apiKey?: string | null
   retryBaseDelayMs?: number
   sessionId?: string
@@ -37,6 +45,7 @@ export interface MagpieChatModelOptions {
 interface MagpieModelDescriptor {
   pricing: ChatModelPricing | null
   maxOutputTokens: number | null
+  reasoningLevels: ReadonlySet<string> | null
 }
 
 interface AttemptState {
@@ -55,6 +64,7 @@ export class MagpieChatModel implements ChatModel {
   private readonly maxOutputTokens: number
   private readonly timeoutMs: number
   private readonly maxRetries: number
+  private readonly reasoningEffort: string | null
   private readonly apiKey: string | null
   private readonly retryBaseDelayMs: number
   private readonly sessionId: string
@@ -77,6 +87,10 @@ export class MagpieChatModel implements ChatModel {
       throw new RangeError('maxRetries must be an integer between 0 and 5')
     }
     this.maxRetries = options.maxRetries
+    this.reasoningEffort =
+      options.reasoningEffort === undefined || options.reasoningEffort === null
+        ? null
+        : validateReasoningEffort(options.reasoningEffort)
     this.retryBaseDelayMs =
       options.retryBaseDelayMs === undefined
         ? DEFAULT_RETRY_BASE_MS
@@ -138,6 +152,19 @@ export class MagpieChatModel implements ChatModel {
           1,
         )
       }
+      if (
+        this.reasoningEffort !== null &&
+        (
+          descriptor.reasoningLevels === null ||
+          !descriptor.reasoningLevels.has(this.reasoningEffort)
+        )
+      ) {
+        throw new ChatModelError(
+          'model_reasoning_effort_unsupported',
+          `Magpie model "${this.id}" does not declare reasoning_effort "${this.reasoningEffort}"`,
+          1,
+        )
+      }
       this.pricing = descriptor.pricing
       this.checked = true
     } catch (error) {
@@ -166,18 +193,39 @@ export class MagpieChatModel implements ChatModel {
       )
     }
 
+    const responsePrefill =
+      request.responsePrefill === undefined
+        ? null
+        : validateResponsePrefill(request.responsePrefill)
     let lastError: ChatModelError | null = null
+    let outputRepairRequired = false
     for (let attempt = 1; attempt <= this.maxRetries + 1; attempt += 1) {
       if (request.signal.aborted) throw abortError()
       const attemptState: AttemptState = { emittedText: false }
+      const attemptRequest = outputRepairRequired
+        ? {
+            ...request,
+            systemPrompt: `${request.systemPrompt}${EMPTY_OUTPUT_REPAIR_PROMPT}`,
+          }
+        : request
       try {
-        const result = yield* this.streamAttempt(request, attempt, attemptState)
+        const result = yield* this.streamAttempt(
+          attemptRequest,
+          attempt,
+          attemptState,
+          responsePrefill,
+        )
         yield { type: 'result', result }
         return
       } catch (error) {
         if (request.signal.aborted) throw abortError()
         const normalized = normalizeStreamError(error, attempt)
         lastError = normalized
+        if (normalized.code === 'model_empty_response') {
+          // 空白正文通常不是瞬时网络故障。重试同一提示只会继续得到空白，
+          // 因此下一次尝试明确要求非空白可见正文；仍不读取 reasoning 正文。
+          outputRepairRequired = true
+        }
         if (
           attemptState.emittedText ||
           attempt >= this.maxRetries + 1 ||
@@ -199,6 +247,7 @@ export class MagpieChatModel implements ChatModel {
     request: ChatModelRequest,
     attempt: number,
     state: AttemptState,
+    responsePrefill: string | null,
   ): AsyncGenerator<ChatModelStreamEvent, ChatModelResult> {
     const controller = new AbortController()
     let timedOut = false
@@ -227,10 +276,16 @@ export class MagpieChatModel implements ChatModel {
               role: message.role,
               content: message.text,
             })),
+            ...(responsePrefill === null
+              ? []
+              : [{ role: 'assistant', content: responsePrefill }]),
           ],
           max_tokens: this.maxOutputTokens,
           stream: true,
           stream_options: { include_usage: true },
+          ...(this.reasoningEffort === null
+            ? {}
+            : { reasoning_effort: this.reasoningEffort }),
           ...(request.jsonMode === true
             ? { response_format: { type: 'json_object' } }
             : {}),
@@ -253,6 +308,7 @@ export class MagpieChatModel implements ChatModel {
       let responseId: string | null = null
       let usage: ChatUsage | null = null
 
+      let output = ''
       for await (const data of readSseData(reader)) {
         if (data === '[DONE]') break
         const chunk = parseOpenAiChunk(data, attempt)
@@ -296,9 +352,22 @@ export class MagpieChatModel implements ChatModel {
               attempt,
             )
           }
-          state.emittedText = true
+          output += content
+          // 预填前缀本身不是可展示正文；只有前缀之后的非空白内容才算
+          // 有效输出。这样可以防止模型只回显前缀时被误判为成功。
+          if (nonPrefillContent(output, responsePrefill).trim() !== '') {
+            state.emittedText = true
+          }
           yield { type: 'text', text: content }
         }
+      }
+
+      if (!state.emittedText) {
+        throw new ChatModelError(
+          'model_empty_response',
+          'Magpie completed the stream without any non-empty text content',
+          attempt,
+        )
       }
 
       return {
@@ -531,9 +600,31 @@ function modelList(payload: unknown): Map<string, MagpieModelDescriptor> {
     result.set(model.id, {
       pricing: parsePricing(model.pricing),
       maxOutputTokens: maxOutput,
+      reasoningLevels: parseReasoningLevels(model),
     })
   }
   return result
+}
+
+function parseReasoningLevels(
+  model: Record<string, unknown>,
+): ReadonlySet<string> | null {
+  const levels = new Set<string>()
+  if (Array.isArray(model.reasoning_levels)) {
+    for (const value of model.reasoning_levels) {
+      if (typeof value === 'string' && value !== '') levels.add(value)
+    }
+  }
+  if (Array.isArray(model.supported_reasoning_levels)) {
+    for (const value of model.supported_reasoning_levels) {
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        continue
+      }
+      const effort = (value as Record<string, unknown>).effort
+      if (typeof effort === 'string' && effort !== '') levels.add(effort)
+    }
+  }
+  return levels.size === 0 ? null : levels
 }
 
 function parsePricing(value: unknown): ChatModelPricing | null {
@@ -676,7 +767,8 @@ function isRetryable(code: string): boolean {
     code === 'model_unavailable' ||
     code === 'model_timeout' ||
     code === 'model_rate_limited' ||
-    code === 'model_upstream_error'
+    code === 'model_upstream_error' ||
+    code === 'model_empty_response'
   )
 }
 
@@ -755,6 +847,53 @@ function validateSecret(value: unknown): string {
     throw new RangeError('apiKey must be a non-empty single-line secret')
   }
   return value
+}
+
+function validateReasoningEffort(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    !/^[a-z][a-z0-9_-]{0,31}$/.test(value)
+  ) {
+    throw new RangeError(
+      'reasoningEffort must be a lowercase label such as "low" or "high"',
+    )
+  }
+  return value
+}
+
+function validateResponsePrefill(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    Array.from(value).length > MAX_RESPONSE_PREFILL_CHARS ||
+    /[\r\n\0]/.test(value)
+  ) {
+    throw new RangeError(
+      `responsePrefill must be 1..${MAX_RESPONSE_PREFILL_CHARS} single-line characters`,
+    )
+  }
+  return value
+}
+
+/**
+ * 去掉模型回显的 JSON 前缀，只判断前缀之后是否已有可见正文。
+ * 流式分片可能只到达前缀的一部分，此时不能把它当成正文。
+ */
+function nonPrefillContent(
+  output: string,
+  responsePrefill: string | null,
+): string {
+  if (responsePrefill === null) return output
+  const trimmed = output.trimStart()
+  if (
+    trimmed.length < responsePrefill.length &&
+    responsePrefill.startsWith(trimmed)
+  ) {
+    return ''
+  }
+  return trimmed.startsWith(responsePrefill)
+    ? trimmed.slice(responsePrefill.length)
+    : trimmed
 }
 
 function validatePositiveInteger(value: unknown, field: string): number {

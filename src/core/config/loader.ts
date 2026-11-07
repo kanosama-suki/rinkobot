@@ -307,6 +307,7 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
       'timeout_ms',
       'max_retries',
       'max_output_tokens',
+      'reasoning_effort',
     ],
     'model',
   )
@@ -339,6 +340,22 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
     1,
     65_536,
   )
+  const reasoningEffort = optionalString(
+    model,
+    'reasoning_effort',
+    'model.reasoning_effort',
+    1,
+    32,
+  )
+  if (
+    reasoningEffort !== null &&
+    !/^[a-z][a-z0-9_-]{0,31}$/.test(reasoningEffort)
+  ) {
+    fail(
+      'model.reasoning_effort',
+      'expected a lowercase reasoning level such as "low" or "high"',
+    )
+  }
   if (provider === 'magpie') {
     if (baseUrl === null) {
       fail('model.base_url', 'required when provider is "magpie"')
@@ -471,6 +488,7 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
       timeoutMs,
       maxRetries,
       maxOutputTokens,
+      reasoningEffort,
     },
     vision,
     resources: {

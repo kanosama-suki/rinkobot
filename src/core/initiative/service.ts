@@ -769,6 +769,22 @@ export class KanobotInitiativeService {
     const targetDay = addLocalDays(today, -1)
     let state = this.storage.getInitiativeState()
     if (state.lastDailyReviewDay === targetDay) return false
+    // 摘要在独立事务中先落库，整理状态最后才写。若进程在两者之间退出，
+    // 重入时不能再次写同一 local_day，也不能把它当成普通失败反复重试。
+    if (this.storage.getDailySummary(targetDay) !== null) {
+      this.storage.updateInitiativeState({
+        lastDailyReviewDay: targetDay,
+        lastReviewAttemptDay: targetDay,
+        dailyReviewAttempts: 0,
+        updatedAt: now.toISOString(),
+      })
+      this.recordRun(
+        'daily_review',
+        'skipped',
+        'daily_summary_already_exists',
+      )
+      return false
+    }
     if (state.lastReviewAttemptDay !== targetDay) {
       state = this.storage.updateInitiativeState({
         lastReviewAttemptDay: targetDay,

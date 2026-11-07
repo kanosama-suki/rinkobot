@@ -49,6 +49,7 @@ export interface SystemConfig {
     timeoutMs: number
     maxRetries: number
     maxOutputTokens: number | null
+    reasoningEffort: string | null
   }
   /**
    * 视觉模型完全独立于聊天模型。`enabled=false` 时只允许纯文字聊天；

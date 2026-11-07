@@ -30,6 +30,12 @@ export interface ChatModelRequest {
   // 本地 mock 可以忽略；Magpie 驱动会把 true 转成 OpenAI-compatible
   // response_format=json_object，但最终结构仍由服务端严格校验。
   jsonMode?: boolean
+  /**
+   * 可选的 JSON 助手预填。支持的适配器会把它作为最后一条 assistant
+   * 消息发送，迫使模型从完整的 JSON 开头继续；正文仍由上层严格解析。
+   * 适配器必须保证返回文本包含该前缀，不能静默伪造后续内容。
+   */
+  responsePrefill?: string
   signal: AbortSignal
 }
 
