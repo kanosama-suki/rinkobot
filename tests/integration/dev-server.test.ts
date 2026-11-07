@@ -54,7 +54,31 @@ test('the local dev entry authenticates the whole surface with a one-time token'
       headers: { cookie },
     })
     assert.equal(page.status, 200)
-    assert.match(await page.text(), /M4\.6\.1 聊天、记忆与模型设置/)
+    assert.match(await page.text(), /M5\.1 聊天、记忆与渠道设置/)
+
+    const channelView = await fetch(
+      `${server.baseUrl}/kanobot/api/settings/channels`,
+      { headers: { cookie } },
+    )
+    assert.equal(channelView.status, 200)
+    const channelViewBody = await channelView.json() as {
+      readOnly: boolean
+      qq: { wsUrl: string; credential: { mode: string } }
+    }
+    assert.equal(channelViewBody.readOnly, true)
+    assert.equal(channelViewBody.qq.wsUrl, 'ws://127.0.0.1:3001')
+    assert.equal(channelViewBody.qq.credential.mode, 'environment')
+
+    const channelStatus = await fetch(
+      `${server.baseUrl}/kanobot/api/settings/channels/status`,
+      { headers: { cookie } },
+    )
+    assert.equal(channelStatus.status, 200)
+    const channelStatusBody = await channelStatus.json() as {
+      qq: { state: string; label: string }
+    }
+    assert.equal(channelStatusBody.qq.state, 'disabled')
+    assert.equal(channelStatusBody.qq.label, 'QQ 未启用')
 
     const badOrigin = await fetch(`${server.baseUrl}/kanobot/api/chat`, {
       method: 'POST',

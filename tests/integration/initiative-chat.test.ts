@@ -2,7 +2,7 @@
  * M4 聊天链路与主动性候选门控测试。
  *
  * 只使用本地 JSON 信封和临时数据库，验证模型只能提交候选项：
- * 提醒必须等待所有者确认，关心项只能由明确的用户消息产生一次。
+ * 明确提醒直接生效，模糊提醒仍等待确认，关心项只产生一次。
  */
 
 import assert from 'node:assert/strict'
@@ -20,7 +20,7 @@ import { createWorkspace } from '../helpers/storage-fixture.ts'
 
 const NOW = '2026-11-05T23:00:00.000Z'
 
-test('chat stages reminder and care candidates without sending them', async () => {
+test('chat activates an explicit reminder and stages care candidates', async () => {
   const ws = createWorkspace(test, { now: NOW })
   const store = ws.open()
   try {
@@ -54,18 +54,17 @@ test('chat stages reminder and care candidates without sending them', async () =
     const chat = createChat(store, model)
     const done = await collectDone(chat, '明天早上提醒我带伞，我今天不太舒服。')
 
-    assert.equal(done.envelope.reminderCandidatesCreated, 1)
+    assert.equal(done.envelope.remindersActivated, 1)
+    assert.equal(done.envelope.reminderCandidatesCreated, 0)
     assert.equal(done.envelope.reminderCandidatesSkipped, 1)
     assert.equal(done.envelope.careItemsCreated, 1)
     assert.equal(done.envelope.careItemsSkipped, 1)
-    assert.equal(store.listReminders('all', 20).length, 0)
+    const reminders = store.listReminders('all', 20)
+    assert.equal(reminders.length, 1)
+    assert.equal(reminders[0]?.status, 'confirmed')
 
     const candidates = store.listReminderCandidates('pending', 20)
-    assert.equal(candidates.length, 1)
-    assert.equal(
-      store.getBody(candidates[0]?.bodyRef ?? '')?.content,
-      '明早提醒 kano 带伞。',
-    )
+    assert.equal(candidates.length, 0)
 
     const careItems = store.listCareItems('pending', 20)
     const source = store.latestUserChatMessage('main')
@@ -130,7 +129,7 @@ test('out-of-window initiative candidates are rejected before storage', async ()
         }],
       },
     )))
-    const done = await collectDone(chat, '这是一条时间边界测试消息。')
+    const done = await collectDone(chat, '提醒我明早带伞。')
 
     assert.equal(done.envelope.reminderCandidatesCreated, 0)
     assert.equal(done.envelope.reminderCandidatesSkipped, 1)

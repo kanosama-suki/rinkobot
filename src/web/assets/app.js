@@ -1,5 +1,5 @@
 /**
- * M4.6 聊天、记忆、主动性、状态、视觉、审计、设置与紧急停止面板。
+ * M5.1 聊天、记忆、主动性、状态、视觉、审计、设置弹窗与紧急停止面板。
  *
  * 所有来自服务器和模型的文本都通过 textContent 渲染；SSE 只接受本页面
  * 固定的聊天流格式。记忆操作必须经过 DSH 登录态，页面不保存任何凭据。
@@ -39,8 +39,8 @@ const elements = {
   tabInitiative: document.querySelector('#tab-initiative'),
   tabMemory: document.querySelector('#tab-memory'),
   tabAudit: document.querySelector('#tab-audit'),
-  tabSettings: document.querySelector('#tab-settings'),
   tabButtons: Array.from(document.querySelectorAll('.tab-button')),
+  qqBadge: document.querySelector('#qq-badge'),
   initiativeBadge: document.querySelector('#initiative-badge'),
   initiativeEnabled: document.querySelector('#initiative-enabled'),
   initiativeQuiet: document.querySelector('#initiative-quiet'),
@@ -97,6 +97,14 @@ const elements = {
   auditEmpty: document.querySelector('#audit-empty'),
   auditError: document.querySelector('#audit-error'),
   auditMore: document.querySelector('#audit-more'),
+  settingsOpen: document.querySelector('#settings-open'),
+  settingsDialog: document.querySelector('#settings-dialog'),
+  settingsDialogClose: document.querySelector('#settings-dialog-close'),
+  settingsNavButtons: Array.from(
+    document.querySelectorAll('[data-settings-page]'),
+  ),
+  settingsPageModel: document.querySelector('#settings-page-model'),
+  settingsPageQq: document.querySelector('#settings-page-qq'),
   settingsForm: document.querySelector('#settings-form'),
   settingsDiscover: document.querySelector('#settings-discover'),
   settingsRefresh: document.querySelector('#settings-refresh'),
@@ -163,6 +171,44 @@ const elements = {
   settingsVisionEnv: document.querySelector('#settings-vision-env'),
   settingsVisionSecretField: document.querySelector('#settings-vision-secret-field'),
   settingsVisionSecret: document.querySelector('#settings-vision-secret'),
+  channelForm: document.querySelector('#channel-settings-form'),
+  channelRefresh: document.querySelector('#channel-settings-refresh'),
+  channelReadOnly: document.querySelector('#channel-readonly'),
+  channelError: document.querySelector('#channel-settings-error'),
+  channelStatus: document.querySelector('#channel-settings-status'),
+  channelConnectionState: document.querySelector('#channel-connection-state'),
+  channelEnabled: document.querySelector('#channel-enabled'),
+  channelWsUrl: document.querySelector('#channel-ws-url'),
+  channelAllowRemote: document.querySelector('#channel-allow-remote'),
+  channelCredentialMode: document.querySelector('#channel-credential-mode'),
+  channelCredentialStatus: document.querySelector('#channel-credential-status'),
+  channelCredentialEnvField: document.querySelector('#channel-credential-env-field'),
+  channelCredentialEnv: document.querySelector('#channel-credential-env'),
+  channelCredentialSecretField: document.querySelector('#channel-credential-secret-field'),
+  channelCredentialSecret: document.querySelector('#channel-credential-secret'),
+  channelPrivateAllow: document.querySelector('#channel-private-allow'),
+  channelGroupAllow: document.querySelector('#channel-group-allow'),
+  channelGroupRequireMention: document.querySelector('#channel-group-require-mention'),
+  channelAutonomousTarget: document.querySelector('#channel-autonomous-target'),
+  channelConnectTimeout: document.querySelector('#channel-connect-timeout'),
+  channelActionTimeout: document.querySelector('#channel-action-timeout'),
+  channelTurnTimeout: document.querySelector('#channel-turn-timeout'),
+  channelReconnectMin: document.querySelector('#channel-reconnect-min'),
+  channelReconnectMax: document.querySelector('#channel-reconnect-max'),
+  channelPingInterval: document.querySelector('#channel-ping-interval'),
+  channelDedupeRetention: document.querySelector('#channel-dedupe-retention'),
+  channelCoalesceQuiet: document.querySelector('#channel-coalesce-quiet'),
+  channelCoalesceMaxWait: document.querySelector('#channel-coalesce-max-wait'),
+  channelCoalesceMaxImages: document.querySelector('#channel-coalesce-max-images'),
+  channelCoalesceMaxTotalImageBytes: document.querySelector('#channel-coalesce-max-total-image-bytes'),
+  channelImagesDownloadTimeout: document.querySelector('#channel-images-download-timeout'),
+  channelOutboundSplitChars: document.querySelector('#channel-outbound-split-chars'),
+  channelOutboundMaxParts: document.querySelector('#channel-outbound-max-parts'),
+  channelOutboundMinInterval: document.querySelector('#channel-outbound-min-interval'),
+  channelLimitsMaxInbound: document.querySelector('#channel-limits-max-inbound'),
+  channelLimitsMaxOutbound: document.querySelector('#channel-limits-max-outbound'),
+  channelTest: document.querySelector('#channel-test'),
+  channelSave: document.querySelector('#channel-save'),
 }
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -187,12 +233,17 @@ const state = {
   auditEntries: [],
   auditVisible: 50,
   initiative: null,
+  channelStatus: null,
+  channelSettings: null,
+  channelBusy: false,
+  channelPollTimer: null,
   modelSettings: null,
   discovery: null,
   chatModelsExpanded: false,
   visionSupportedExpanded: false,
   visionUnknownExpanded: false,
   settingsBusy: false,
+  settingsPage: 'model',
 }
 
 void initialize()
@@ -221,16 +272,22 @@ async function initialize() {
     showInitiativeError(errorMessage(error))
   }
   try {
-    await loadModelSettings()
+    await loadChannelStatus()
   } catch (error) {
-    showSettingsError(errorMessage(error))
+    elements.qqBadge.textContent = 'QQ 状态不可用'
   }
   updateNotificationControls()
-  window.setInterval(() => {
+  state.channelPollTimer = window.setInterval(() => {
     void pollUpdates()
   }, POLL_INTERVAL_MS)
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') void pollUpdates()
+  })
+  window.addEventListener('pagehide', () => {
+    if (state.channelPollTimer !== null) {
+      window.clearInterval(state.channelPollTimer)
+      state.channelPollTimer = null
+    }
   })
 }
 
@@ -244,6 +301,11 @@ async function pollUpdates() {
       initiativeView = await loadInitiative()
     } catch {
       // 主动性接口可能被宿主关闭；已有错误会在打开页签时显示。
+    }
+    try {
+      await loadChannelStatus()
+    } catch {
+      // 顶部 badge 是常驻状态增强；打开设置页时会显示具体错误。
     }
     if (!state.sending) {
       try {
@@ -675,6 +737,12 @@ function appendEnvelopeOutcome(article, envelope) {
     messages.push(`新增 ${envelope.commitmentsCreated} 条承诺`)
   }
   if (
+    typeof envelope.remindersActivated === 'number' &&
+    envelope.remindersActivated > 0
+  ) {
+    messages.push(`已自动设置 ${envelope.remindersActivated} 条提醒`)
+  }
+  if (
     typeof envelope.reminderCandidatesCreated === 'number' &&
     envelope.reminderCandidatesCreated > 0
   ) {
@@ -714,6 +782,20 @@ function envelopeIssueLabel(code) {
     case 'reminder_candidates_disabled':
     case 'reminder_candidates_rejected':
       return '部分提醒候选未创建'
+    case 'reminder_intent_not_explicit':
+      return '模型推断的提醒未创建'
+    case 'reminder_candidate_duplicate':
+      return '重复提醒已跳过'
+    case 'reminder_activation_stopped':
+      return '紧急停止阻止提醒自动生效'
+    case 'reminder_confirmation_ambiguous':
+      return '有多条待确认提醒，未自动选择'
+    case 'reminder_confirmation_turn_ignored':
+      return '确认轮里的重复提醒候选已忽略'
+    case 'reminder_confirmation_failed':
+      return '聊天确认提醒失败'
+    case 'reminder_rejection_failed':
+      return '聊天拒绝提醒失败'
     case 'care_candidates_not_array':
     case 'care_candidates_skipped':
     case 'care_candidates_disabled':
@@ -942,8 +1024,13 @@ function applyInitiative(view) {
   renderSummaries(summaries)
 
   const pendingCare = careItems.filter(item => item.status === 'pending').length
+  const activeReminders = reminders.filter(reminder =>
+    reminder.status === 'confirmed' || reminder.status === 'queued',
+  ).length
   elements.initiativeBadge.textContent = String(
-    candidates.length + pendingCare,
+    candidates.filter(candidate => candidate.status === 'pending').length +
+      activeReminders +
+      pendingCare,
   )
 }
 
@@ -1003,10 +1090,12 @@ function renderReminderCandidates(candidates) {
       text: String(candidate.text ?? ''),
       chips: [`提醒时间 ${formatDateTime(candidate.dueAt)}`],
       pending: candidate.status === 'pending',
-      actions: [
-        actionButton('确认', 'confirm-reminder', candidate.id, false),
-        actionButton('拒绝', 'reject-reminder', candidate.id, true),
-      ],
+      actions: candidate.status === 'pending'
+        ? [
+            actionButton('确认', 'confirm-reminder', candidate.id, false),
+            actionButton('拒绝', 'reject-reminder', candidate.id, true),
+          ]
+        : [],
     }))
   }
 }
@@ -2549,6 +2638,506 @@ async function responseMessage(response, fallback) {
   }
 }
 
+/* ------------------------------ 设置弹窗与 QQ 渠道 ------------------------------ */
+
+function openSettingsDialog() {
+  if (!elements.settingsDialog.open) {
+    elements.settingsDialog.showModal()
+  }
+  switchSettingsPage(state.settingsPage)
+  void loadModelSettings().catch(error =>
+    showSettingsError(errorMessage(error)),
+  )
+  void loadChannelSettings().catch(error =>
+    showChannelSettingsError(errorMessage(error)),
+  )
+}
+
+function closeSettingsDialog() {
+  if (elements.settingsDialog.open) elements.settingsDialog.close()
+}
+
+function switchSettingsPage(page) {
+  if (page !== 'model' && page !== 'qq') return
+  state.settingsPage = page
+  for (const button of elements.settingsNavButtons) {
+    const active = button.dataset.settingsPage === page
+    button.classList.toggle('active', active)
+    if (active) {
+      button.setAttribute('aria-current', 'page')
+    } else {
+      button.removeAttribute('aria-current')
+    }
+  }
+  elements.settingsPageModel.hidden = page !== 'model'
+  elements.settingsPageQq.hidden = page !== 'qq'
+  if (page === 'qq') {
+    void loadChannelStatus().catch(() => {
+      elements.channelConnectionState.textContent = 'QQ 状态读取失败'
+    })
+  }
+}
+
+async function loadChannelStatus() {
+  const response = await fetch('/kanobot/api/settings/channels/status', {
+    credentials: 'same-origin',
+    headers: { accept: 'application/json' },
+  })
+  if (response.status === 404) {
+    applyChannelStatus({
+      state: 'disabled',
+      label: 'QQ 未配置',
+      configured: false,
+      enabled: false,
+      selfId: null,
+    })
+    return null
+  }
+  if (!response.ok) {
+    throw new Error(await responseMessage(response, '读取 QQ 状态失败'))
+  }
+  const payload = await response.json()
+  const status = payload?.qq
+  if (!status || typeof status !== 'object') {
+    throw new Error('QQ 状态响应格式不正确')
+  }
+  applyChannelStatus(status)
+  return status
+}
+
+function applyChannelStatus(status) {
+  state.channelStatus = status
+  const label = typeof status.label === 'string'
+    ? status.label
+    : 'QQ 状态未知'
+  elements.qqBadge.textContent = label
+  elements.qqBadge.dataset.state =
+    typeof status.state === 'string' ? status.state : 'disabled'
+  elements.channelConnectionState.textContent = label
+  elements.channelConnectionState.dataset.state =
+    typeof status.state === 'string' ? status.state : 'disabled'
+}
+
+async function loadChannelSettings() {
+  const response = await fetch('/kanobot/api/settings/channels', {
+    credentials: 'same-origin',
+    headers: { accept: 'application/json' },
+  })
+  if (response.status === 404) {
+    state.channelSettings = null
+    updateChannelButtons()
+    showChannelSettingsError('当前宿主没有启用 QQ 设置接口。')
+    return null
+  }
+  if (!response.ok) {
+    throw new Error(await responseMessage(response, '读取 QQ 设置失败'))
+  }
+  const view = await response.json()
+  applyChannelSettings(view)
+  hideChannelSettingsError()
+  return view
+}
+
+function applyChannelSettings(view) {
+  if (!view || typeof view !== 'object' || !view.qq) {
+    throw new Error('QQ 设置响应格式不正确')
+  }
+  state.channelSettings = view
+  const qq = view.qq
+  elements.channelEnabled.checked = qq.enabled === true
+  elements.channelWsUrl.value = String(qq.wsUrl ?? '')
+  elements.channelAllowRemote.checked = qq.allowRemote === true
+  elements.channelCredentialMode.value = 'keep'
+  elements.channelCredentialEnv.value =
+    typeof qq.credential?.environmentName === 'string'
+      ? qq.credential.environmentName
+      : ''
+  elements.channelCredentialSecret.value = ''
+  elements.channelCredentialStatus.textContent =
+    channelCredentialStatusText(qq.credential)
+  elements.channelPrivateAllow.value = Array.isArray(qq.privateAllow)
+    ? qq.privateAllow.join('\n')
+    : ''
+  elements.channelGroupAllow.value = Array.isArray(qq.groupAllow)
+    ? qq.groupAllow.join('\n')
+    : ''
+  elements.channelGroupRequireMention.checked =
+    qq.groupRequireMention === true
+  renderAutonomousTargetOptions(qq.autonomousTarget ?? '')
+  elements.channelConnectTimeout.value = String(qq.connectTimeoutMs ?? '')
+  elements.channelActionTimeout.value = String(qq.actionTimeoutMs ?? '')
+  elements.channelTurnTimeout.value = String(qq.turnTimeoutMs ?? '')
+  elements.channelReconnectMin.value = String(qq.reconnectMinMs ?? '')
+  elements.channelReconnectMax.value = String(qq.reconnectMaxMs ?? '')
+  elements.channelPingInterval.value = String(qq.pingIntervalMs ?? '')
+  elements.channelDedupeRetention.value = String(
+    qq.dedupeRetentionHours ?? '',
+  )
+  elements.channelCoalesceQuiet.value = String(qq.coalesce?.quietMs ?? '')
+  elements.channelCoalesceMaxWait.value = String(qq.coalesce?.maxWaitMs ?? '')
+  elements.channelCoalesceMaxImages.value = String(
+    qq.coalesce?.maxImages ?? '',
+  )
+  elements.channelCoalesceMaxTotalImageBytes.value = String(
+    qq.coalesce?.maxTotalImageBytes ?? '',
+  )
+  elements.channelImagesDownloadTimeout.value = String(
+    qq.images?.downloadTimeoutMs ?? '',
+  )
+  elements.channelOutboundSplitChars.value = String(
+    qq.outbound?.splitChars ?? '',
+  )
+  elements.channelOutboundMaxParts.value = String(
+    qq.outbound?.maxParts ?? '',
+  )
+  elements.channelOutboundMinInterval.value = String(
+    qq.outbound?.minIntervalMs ?? '',
+  )
+  elements.channelLimitsMaxInbound.value = String(
+    qq.limits?.maxInboundTurnsPerMinute ?? '',
+  )
+  elements.channelLimitsMaxOutbound.value = String(
+    qq.limits?.maxOutboundPartsPerMinute ?? '',
+  )
+  elements.channelReadOnly.hidden = view.readOnly !== true
+  elements.channelStatus.hidden = true
+  syncChannelCredentialFields()
+  updateChannelButtons()
+}
+
+function channelCredentialStatusText(credential) {
+  if (!credential || typeof credential !== 'object') {
+    return '凭据状态未知'
+  }
+  if (credential.mode === 'environment') {
+    const name = credential.environmentName
+    return typeof name === 'string' && name !== ''
+      ? `环境变量 ${name}`
+      : '环境变量（未命名）'
+  }
+  if (credential.mode === 'local-secret') {
+    return credential.configured === true
+      ? '本地密钥已保存'
+      : '本地密钥不可用'
+  }
+  return '未配置'
+}
+
+function syncChannelCredentialFields() {
+  const mode = elements.channelCredentialMode.value
+  elements.channelCredentialEnvField.hidden = mode !== 'environment'
+  elements.channelCredentialSecretField.hidden = mode !== 'new'
+  updateChannelButtons()
+}
+
+function updateChannelButtons() {
+  const unavailable = state.channelSettings === null
+  const readOnly =
+    unavailable || state.channelSettings?.readOnly === true
+  const controls = elements.channelForm.querySelectorAll(
+    'input, select, textarea',
+  )
+  for (const control of controls) {
+    control.disabled = readOnly
+  }
+  if (!readOnly) {
+    const mode = elements.channelCredentialMode.value
+    elements.channelCredentialEnv.disabled = mode !== 'environment'
+    elements.channelCredentialEnv.required = mode === 'environment'
+    elements.channelCredentialSecret.disabled = mode !== 'new'
+    elements.channelCredentialSecret.required = mode === 'new'
+  }
+  elements.channelRefresh.disabled = state.channelBusy
+  elements.channelTest.disabled = state.channelBusy || unavailable
+  elements.channelSave.disabled =
+    state.channelBusy || unavailable || readOnly
+}
+
+function renderAutonomousTargetOptions(preferred = null) {
+  const previous = preferred ??
+    elements.channelAutonomousTarget.value
+  const privateIds = looseQqIds(elements.channelPrivateAllow.value)
+  const groupIds = looseQqIds(elements.channelGroupAllow.value)
+  const options = []
+  for (const id of privateIds) {
+    options.push({
+      value: `private:${id}`,
+      label: `私聊 · ${id}`,
+    })
+  }
+  for (const id of groupIds) {
+    options.push({
+      value: `group:${id}`,
+      label: `群聊 · ${id}`,
+    })
+  }
+  elements.channelAutonomousTarget.replaceChildren()
+  const empty = document.createElement('option')
+  empty.value = ''
+  empty.textContent = '不投递到 QQ'
+  elements.channelAutonomousTarget.append(empty)
+  for (const option of options) {
+    const element = document.createElement('option')
+    element.value = option.value
+    element.textContent = option.label
+    elements.channelAutonomousTarget.append(element)
+  }
+  if (options.some(option => option.value === previous)) {
+    elements.channelAutonomousTarget.value = previous
+  }
+}
+
+function looseQqIds(value) {
+  return [...new Set(
+    String(value)
+      .split(/[\s,，;；]+/)
+      .map(item => item.trim())
+      .filter(item => /^[1-9]\d{4,19}$/.test(item)),
+  )]
+}
+
+async function testChannelSettings() {
+  if (state.channelBusy || state.channelSettings === null) return
+  hideChannelSettingsError()
+  elements.channelStatus.hidden = true
+  let draft
+  try {
+    draft = buildChannelSettingsDraft()
+  } catch (error) {
+    showChannelSettingsError(errorMessage(error))
+    return
+  }
+  state.channelBusy = true
+  elements.channelTest.textContent = '测试中…'
+  updateChannelButtons()
+  try {
+    const result = await channelSettingsRequest(
+      'POST',
+      '/kanobot/api/settings/channels/test',
+      draft,
+    )
+    showChannelSettingsStatus(
+      `连接测试通过：selfId ${result.selfId}，耗时 ${result.durationMs} ms。` +
+        '配置尚未保存。',
+    )
+  } catch (error) {
+    showChannelSettingsError(errorMessage(error))
+  } finally {
+    state.channelBusy = false
+    elements.channelTest.textContent = '测试连接'
+    updateChannelButtons()
+  }
+}
+
+async function saveChannelSettings() {
+  if (state.channelBusy || state.channelSettings === null) return
+  if (state.channelSettings.readOnly === true) {
+    showChannelSettingsError('示例配置是只读的，不能保存 QQ 设置。')
+    return
+  }
+  let draft
+  try {
+    if (!elements.channelForm.reportValidity()) return
+    draft = buildChannelSettingsDraft()
+  } catch (error) {
+    showChannelSettingsError(errorMessage(error))
+    return
+  }
+  state.channelBusy = true
+  elements.channelSave.textContent = '保存中…'
+  updateChannelButtons()
+  try {
+    const view = await channelSettingsRequest(
+      'PUT',
+      '/kanobot/api/settings/channels',
+      draft,
+    )
+    applyChannelSettings(view)
+    elements.channelCredentialSecret.value = ''
+    showChannelSettingsStatus(
+      '配置已保存；重启 DSH 后 QQ 渠道生效。',
+    )
+    await loadChannelStatus().catch(() => {
+      elements.channelConnectionState.textContent =
+        '配置已保存；QQ 状态暂时无法读取。'
+    })
+  } catch (error) {
+    showChannelSettingsError(errorMessage(error))
+  } finally {
+    state.channelBusy = false
+    elements.channelSave.textContent = '保存配置'
+    updateChannelButtons()
+  }
+}
+
+function buildChannelSettingsDraft() {
+  const credentialMode = elements.channelCredentialMode.value
+  let credential
+  if (credentialMode === 'environment') {
+    credential = {
+      mode: credentialMode,
+      environmentName: requiredSettingText(
+        elements.channelCredentialEnv,
+        'QQ 环境变量名',
+      ),
+    }
+  } else if (credentialMode === 'new') {
+    const value = elements.channelCredentialSecret.value
+    if (value.trim() === '') {
+      throw new Error('新 QQ access token 不能为空')
+    }
+    credential = { mode: credentialMode, value }
+  } else {
+    credential = { mode: credentialMode }
+  }
+
+  return {
+    qq: {
+      enabled: elements.channelEnabled.checked,
+      wsUrl: requiredSettingText(elements.channelWsUrl, 'QQ WebSocket URL'),
+      allowRemote: elements.channelAllowRemote.checked,
+      credential,
+      privateAllow: parseQqIdList(
+        elements.channelPrivateAllow.value,
+        '私聊白名单',
+      ),
+      groupAllow: parseQqIdList(
+        elements.channelGroupAllow.value,
+        '群白名单',
+      ),
+      groupRequireMention:
+        elements.channelGroupRequireMention.checked,
+      autonomousTarget:
+        elements.channelAutonomousTarget.value === ''
+          ? null
+          : elements.channelAutonomousTarget.value,
+      connectTimeoutMs: settingInteger(
+        elements.channelConnectTimeout,
+        'QQ 连接超时',
+      ),
+      actionTimeoutMs: settingInteger(
+        elements.channelActionTimeout,
+        'QQ 动作超时',
+      ),
+      turnTimeoutMs: settingInteger(
+        elements.channelTurnTimeout,
+        'QQ 回合超时',
+      ),
+      reconnectMinMs: settingInteger(
+        elements.channelReconnectMin,
+        'QQ 最短重连间隔',
+      ),
+      reconnectMaxMs: settingInteger(
+        elements.channelReconnectMax,
+        'QQ 最长重连间隔',
+      ),
+      pingIntervalMs: settingInteger(
+        elements.channelPingInterval,
+        'QQ Ping 间隔',
+      ),
+      dedupeRetentionHours: settingInteger(
+        elements.channelDedupeRetention,
+        'QQ 入站去重保留小时数',
+      ),
+      coalesce: {
+        quietMs: settingInteger(
+          elements.channelCoalesceQuiet,
+          'QQ 连发静默窗口',
+        ),
+        maxWaitMs: settingInteger(
+          elements.channelCoalesceMaxWait,
+          'QQ 连发最大等待',
+        ),
+        maxImages: settingInteger(
+          elements.channelCoalesceMaxImages,
+          'QQ 单回合最多图片',
+        ),
+        maxTotalImageBytes: settingInteger(
+          elements.channelCoalesceMaxTotalImageBytes,
+          'QQ 单回合图片总字节',
+        ),
+      },
+      images: {
+        downloadTimeoutMs: settingInteger(
+          elements.channelImagesDownloadTimeout,
+          'QQ 图片下载超时',
+        ),
+      },
+      outbound: {
+        splitChars: settingInteger(
+          elements.channelOutboundSplitChars,
+          'QQ 单条最大字符',
+        ),
+        maxParts: settingInteger(
+          elements.channelOutboundMaxParts,
+          'QQ 最多发送分片',
+        ),
+        minIntervalMs: settingInteger(
+          elements.channelOutboundMinInterval,
+          'QQ 分片最短间隔',
+        ),
+      },
+      limits: {
+        maxInboundTurnsPerMinute: settingInteger(
+          elements.channelLimitsMaxInbound,
+          'QQ 每分钟最多入站回合',
+        ),
+        maxOutboundPartsPerMinute: settingInteger(
+          elements.channelLimitsMaxOutbound,
+          'QQ 每分钟最多出站分片',
+        ),
+      },
+    },
+  }
+}
+
+function parseQqIdList(value, label) {
+  const items = String(value)
+    .split(/[\s,，;；]+/)
+    .map(item => item.trim())
+    .filter(item => item !== '')
+  for (const item of items) {
+    if (!/^[1-9]\d{4,19}$/.test(item)) {
+      throw new Error(`${label}必须是 5–20 位数字，且不能以 0 开头`)
+    }
+  }
+  return [...new Set(items)]
+}
+
+async function channelSettingsRequest(method, path, body) {
+  const headers = { accept: 'application/json' }
+  const init = {
+    method,
+    credentials: 'same-origin',
+    headers,
+  }
+  if (body !== undefined) {
+    headers['content-type'] = 'application/json'
+    init.body = JSON.stringify(body)
+  }
+  const response = await fetch(path, init)
+  if (!response.ok) {
+    throw new Error(await responseMessage(response, 'QQ 设置操作失败'))
+  }
+  return response.json()
+}
+
+function showChannelSettingsError(message) {
+  elements.channelError.textContent = message
+  elements.channelError.hidden = false
+  elements.channelStatus.hidden = true
+}
+
+function hideChannelSettingsError() {
+  elements.channelError.hidden = true
+}
+
+function showChannelSettingsStatus(message) {
+  elements.channelStatus.textContent = message
+  elements.channelStatus.hidden = false
+  elements.channelError.hidden = true
+}
+
 /* ------------------------------ 所有者面板 ------------------------------ */
 
 for (const button of elements.tabButtons) {
@@ -2560,8 +3149,7 @@ function switchTab(tab) {
     tab !== 'status' &&
     tab !== 'initiative' &&
     tab !== 'memory' &&
-    tab !== 'audit' &&
-    tab !== 'settings'
+    tab !== 'audit'
   ) {
     return
   }
@@ -2575,7 +3163,6 @@ function switchTab(tab) {
   elements.tabInitiative.hidden = tab !== 'initiative'
   elements.tabMemory.hidden = tab !== 'memory'
   elements.tabAudit.hidden = tab !== 'audit'
-  elements.tabSettings.hidden = tab !== 'settings'
   if (tab === 'initiative') {
     void loadInitiative().catch(error =>
       showInitiativeError(errorMessage(error)),
@@ -2584,10 +3171,6 @@ function switchTab(tab) {
     void loadMemories().catch(error => showMemoryError(errorMessage(error)))
   } else if (tab === 'audit') {
     void loadAudit().catch(error => showAuditError(errorMessage(error)))
-  } else if (tab === 'settings') {
-    void loadModelSettings().catch(error =>
-      showSettingsError(errorMessage(error)),
-    )
   }
 }
 
@@ -2622,6 +3205,48 @@ elements.circuitReset.addEventListener('click', () => {
     showInitiativeError(errorMessage(error)),
   )
 })
+
+elements.settingsOpen.addEventListener('click', openSettingsDialog)
+elements.settingsDialogClose.addEventListener('click', closeSettingsDialog)
+elements.settingsDialog.addEventListener('click', event => {
+  if (event.target === elements.settingsDialog) closeSettingsDialog()
+})
+elements.settingsDialog.addEventListener('close', () => {
+  elements.settingsOpen.focus({ preventScroll: true })
+})
+for (const button of elements.settingsNavButtons) {
+  button.addEventListener('click', () => {
+    switchSettingsPage(button.dataset.settingsPage)
+  })
+}
+
+elements.channelRefresh.addEventListener('click', () => {
+  void loadChannelSettings().catch(error =>
+    showChannelSettingsError(errorMessage(error)),
+  )
+})
+
+elements.channelForm.addEventListener('submit', event => {
+  event.preventDefault()
+  void saveChannelSettings()
+})
+
+elements.channelTest.addEventListener('click', () => {
+  void testChannelSettings()
+})
+
+elements.channelCredentialMode.addEventListener('change', () => {
+  syncChannelCredentialFields()
+})
+
+for (const element of [
+  elements.channelPrivateAllow,
+  elements.channelGroupAllow,
+]) {
+  element.addEventListener('input', () => {
+    renderAutonomousTargetOptions()
+  })
+}
 
 elements.settingsRefresh.addEventListener('click', () => {
   void loadModelSettings().catch(error =>

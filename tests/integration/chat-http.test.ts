@@ -58,7 +58,7 @@ test('authenticated page, SSE chat, and conversation restore work together', asy
     })
     assert.equal(page.status, 200)
     assert.match(page.headers.get('content-security-policy') ?? '', /script-src 'self'/)
-    assert.match(await page.text(), /M4\.6\.1 聊天、记忆与模型设置/)
+    assert.match(await page.text(), /M5\.1 聊天、记忆与渠道设置/)
 
     const script = await fetch(`${harness.baseUrl}/kanobot/app.js`, {
       headers: authHeaders(),

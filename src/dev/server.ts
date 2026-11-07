@@ -45,10 +45,14 @@ import {
   type ChatSurfaceOptions,
 } from '../web/index.ts'
 import {
+  LocalSecretStore,
   createModelRuntime,
   type ModelProviderMode,
 } from '../model-providers/index.ts'
-import { ModelSettingsService } from '../settings/index.ts'
+import {
+  ChannelSettingsService,
+  ModelSettingsService,
+} from '../settings/index.ts'
 
 const DEV_COOKIE = 'kanobot_dev_session'
 const DEFAULT_PORT = 4101
@@ -132,12 +136,20 @@ export async function createDevServer(
   })
   const model = runtime.chat
   const visionModel = runtime.vision
+  const readOnly =
+    configDir ===
+    fileURLToPath(new URL('../../config/examples', import.meta.url))
   const models = new ModelSettingsService({
     configDir,
     loaded,
-    readOnly:
-      configDir ===
-      fileURLToPath(new URL('../../config/examples', import.meta.url)),
+    readOnly,
+  })
+  const channels = new ChannelSettingsService({
+    configDir,
+    loaded,
+    secretStore: new LocalSecretStore(configDir),
+    readOnly,
+    runtimeStatus: () => ({ enabled: false, connection: null }),
   })
 
   let storage: KanobotStorage | undefined
@@ -250,6 +262,7 @@ export async function createDevServer(
       emergency,
       initiative,
       models,
+      channels,
       logger,
       auth: {
         unauthenticatedMessage:

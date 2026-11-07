@@ -8,6 +8,7 @@
 
 export const CONFIG_SCHEMA_VERSION = 1
 export const RUNTIME_MODEL_SETTINGS_FILENAME = 'model-settings.json'
+export const RUNTIME_CHANNEL_SETTINGS_FILENAME = 'channel-settings.json'
 
 export type Environment = 'development' | 'production'
 export type ChatProvider = 'mock' | 'magpie' | 'dsh' | 'openai-compatible'
@@ -207,6 +208,11 @@ export interface QqChannelConfig {
   wsUrl: string
   allowRemote: boolean
   accessTokenEnv: string | null
+  /**
+   * 本地 AES-GCM secret store 的引用，只由设置页写入运行时覆盖文件。
+   * 这个值不是 token 本身，但仍然不能回显到页面或普通日志。
+   */
+  accessTokenSecret: string | null
   connectTimeoutMs: number
   actionTimeoutMs: number
   turnTimeoutMs: number

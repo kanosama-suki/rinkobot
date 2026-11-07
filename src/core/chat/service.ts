@@ -6,7 +6,7 @@
  * 消息保留，助手消息不落库。
  */
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 import {
   STATE_EVENT_SCHEMA_VERSION,
@@ -19,6 +19,7 @@ import {
   type FinishModelCallInput,
   type MemorySearchResult,
   type ModelCallRecord,
+  type ReminderCandidateRecord,
 } from '../storage/index.ts'
 import { StorageError } from '../storage/index.ts'
 import {
@@ -71,6 +72,13 @@ import {
   type StyleCheckResult,
 } from './style.ts'
 import {
+  classifyReminderIntent,
+  normalizeReminderText,
+  reminderReplyIntent,
+  reminderTextsEquivalent,
+  reminderTimesClose,
+} from '../initiative/reminder-intent.ts'
+import {
   DEFAULT_VISION_MAX_IMAGE_BYTES,
   MAX_VISION_IMAGES,
   VisionModelError,
@@ -116,7 +124,7 @@ reply 必须紧跟在 schemaVersion 后面，因为系统会边生成边显示�
 - importance 只能是 normal、important、permanent；只有明确要求记住、第一次发生、关系大事或强情绪事件才可重要。
 - appraisal 必须存在，描述这一轮互动对虚拟情绪的影响：valence 在 -1..1，arousal 在 0..1，confidence 在 0..1；不确定时降低 confidence，不要用极端值。
 - commitments 最多 3 条；只写你明确答应 kano 要做、且未来应提醒或完成的事。dueAt 是规范 UTC ISO 时间或 null。
-- reminderCandidates 最多 3 条；只有 kano 明确委托你提醒某件具体的事时才填写。dueAt 必须是未来时间。正文里必须自然复述一遍时间和事项，请 kano 确认；系统确认前不能说“已经设好提醒”。没有就输出空数组。
+- reminderCandidates 最多 3 条；只有 kano 在本轮明确委托你提醒某件具体的事时才填写，dueAt 必须是未来时间。明确委托会在系统校验后直接生效：正文要自然说“好，我 21:30 提醒你”，不要再要求确认，也不要说一句含糊的“稍后提醒”。如果时间或事项不清楚，正文先用一句话追问，不要编造 dueAt，也不要输出 candidate。kano 没有明确说提醒/叫我/通知我/别忘了时，禁止把“明早有个会”这类内容推断成提醒候选。没有就输出空数组。
 - careCandidates 最多 3 条；只记录需要未来一次性关心的明确事项，例如生病、考试、出行。text 写成第三人称、可单独理解的事实；dueFrom/dueUntil 是规范 UTC ISO 时间，区间不得超过配置的跟进窗口。普通偏好、寒暄和一次性小事不要填写。
 - 系统会在“当前情境”中提供当前时间、星期和 kano 距上次发言的时间。解析“明早”“今晚”“明天”“一小时后”等相对时间必须以该时间信息为基准；所有时间字段输出带毫秒的规范 UTC ISO（例如 2026-11-06T23:00:00.000Z），不要输出本地时区偏移或自然语言时间。
 - 没有对应候选时，所有数组字段都必须输出空数组；不能省略 appraisal、reminderCandidates 或 careCandidates。
@@ -180,6 +188,10 @@ export interface ChatInitiativeOptions {
   followUpsEnabled: boolean
   followUpWindowHours: number
   followUpMaxDaysAhead: number
+  /**
+   * 明确委托的自动生效仍要经过紧急停止。省略时用于纯单元测试，默认允许。
+   */
+  isAutonomousAllowed?: () => boolean
 }
 
 export class KanobotChatService {
@@ -802,6 +814,7 @@ export class KanobotChatService {
       const initiativeOutcome = this.applyInitiativeCandidates(
         envelope,
         userMessage.id,
+        turn.text,
         assistantMessage.createdAt,
         issueCodes,
       )
@@ -824,6 +837,7 @@ export class KanobotChatService {
           commitmentsCreated: commitmentOutcome.created,
           commitmentsSkipped:
             (envelope?.skippedCommitments ?? 0) + commitmentOutcome.skipped,
+          remindersActivated: initiativeOutcome.remindersActivated,
           reminderCandidatesCreated: initiativeOutcome.remindersCreated,
           reminderCandidatesSkipped:
             (envelope?.skippedReminderCandidates ?? 0) +
@@ -1322,9 +1336,11 @@ export class KanobotChatService {
   private applyInitiativeCandidates(
     envelope: ParsedChatEnvelope | null,
     userMessageId: string,
+    userText: string,
     occurredAt: string,
     issues: string[],
   ): {
+    remindersActivated: number
     remindersCreated: number
     remindersSkipped: number
     careCreated: number
@@ -1332,6 +1348,7 @@ export class KanobotChatService {
   } {
     if (envelope === null || this.initiative === undefined) {
       return {
+        remindersActivated: 0,
         remindersCreated: 0,
         remindersSkipped: 0,
         careCreated: 0,
@@ -1339,38 +1356,115 @@ export class KanobotChatService {
       }
     }
     const now = Date.parse(occurredAt)
+    const remindersAllowed =
+      this.initiative.isAutonomousAllowed?.() ?? true
+    let remindersActivated = 0
     let remindersCreated = 0
     let remindersSkipped = 0
     if (!this.initiative.remindersEnabled) {
       remindersSkipped = envelope.reminderCandidates.length
       if (remindersSkipped > 0) issues.push('reminder_candidates_disabled')
     } else {
-      const seen = new Set<string>()
-      for (const candidate of envelope.reminderCandidates) {
-        const due = Date.parse(candidate.dueAt)
-        const key = `${candidate.text}\u0000${candidate.dueAt}`
-        if (
-          due <= now ||
-          due > now + this.initiative.maxReminderDaysAhead * 86_400_000 ||
-          seen.has(key)
-        ) {
-          remindersSkipped += 1
-          continue
+      const replyIntent = reminderReplyIntent(userText)
+      if (replyIntent !== null) {
+        const recent = this.recentPendingRemindersForConversation(now)
+        if (recent.length > 1) {
+          issues.push('reminder_confirmation_ambiguous')
+        } else if (recent.length === 1) {
+          const candidate = recent[0]
+          if (replyIntent === 'reject') {
+            try {
+              this.storage.rejectReminderCandidate(candidate.id)
+            } catch {
+              issues.push('reminder_rejection_failed')
+            }
+          } else if (!remindersAllowed) {
+            issues.push('reminder_activation_stopped')
+          } else {
+            try {
+              this.storage.confirmReminderCandidate(candidate.id, occurredAt)
+            } catch {
+              issues.push('reminder_confirmation_failed')
+            }
+          }
         }
-        seen.add(key)
-        try {
-          this.storage.putReminderCandidate({
-            text: candidate.text,
-            dueAt: candidate.dueAt,
-            sourceMessageId: userMessageId,
-            createdAt: occurredAt,
-          })
-          remindersCreated += 1
-        } catch {
-          remindersSkipped += 1
+        // 确认/拒绝轮即使模型错误地再次给出候选，也不能制造重复提醒。
+        remindersSkipped += envelope.reminderCandidates.length
+        if (envelope.reminderCandidates.length > 0) {
+          issues.push('reminder_confirmation_turn_ignored')
+        }
+      } else {
+        const intent = classifyReminderIntent(userText)
+        if (intent === 'none') {
+          remindersSkipped += envelope.reminderCandidates.length
+          if (envelope.reminderCandidates.length > 0) {
+            issues.push('reminder_intent_not_explicit')
+          }
+        } else {
+          const seen = new Set<string>()
+          let rejected = 0
+          for (const candidate of envelope.reminderCandidates) {
+            const due = Date.parse(candidate.dueAt)
+            const key = `${candidate.text}\u0000${candidate.dueAt}`
+            const preferredId = this.directReminderId(
+              candidate.text,
+              candidate.dueAt,
+            )
+            const existingPreferred = this.storage.getReminder(preferredId)
+            const duplicate =
+              seen.has(key) ||
+              this.isDuplicateReminder(candidate.text, candidate.dueAt, now) ||
+              (existingPreferred !== null &&
+                (existingPreferred.status === 'confirmed' ||
+                  existingPreferred.status === 'queued'))
+            if (
+              due <= now ||
+              due > now + this.initiative.maxReminderDaysAhead * 86_400_000
+            ) {
+              remindersSkipped += 1
+              rejected += 1
+              continue
+            }
+            if (duplicate) {
+              remindersSkipped += 1
+              issues.push('reminder_candidate_duplicate')
+              continue
+            }
+            seen.add(key)
+            try {
+              if (intent === 'explicit' && remindersAllowed) {
+                this.storage.putReminder({
+                  id: existingPreferred === null
+                    ? preferredId
+                    : `${preferredId}-${randomUUID().slice(0, 8)}`,
+                  text: candidate.text,
+                  dueAt: candidate.dueAt,
+                  createdAt: occurredAt,
+                  confirmedAt: occurredAt,
+                })
+                remindersActivated += 1
+              } else {
+                this.storage.putReminderCandidate({
+                  text: candidate.text,
+                  dueAt: candidate.dueAt,
+                  sourceMessageId: userMessageId,
+                  createdAt: occurredAt,
+                })
+                remindersCreated += 1
+                if (intent === 'explicit') {
+                  issues.push('reminder_activation_stopped')
+                }
+              }
+            } catch {
+              remindersSkipped += 1
+              rejected += 1
+            }
+          }
+          if (rejected > 0) {
+            issues.push('reminder_candidates_rejected')
+          }
         }
       }
-      if (remindersSkipped > 0) issues.push('reminder_candidates_rejected')
     }
 
     let careCreated = 0
@@ -1411,11 +1505,122 @@ export class KanobotChatService {
       if (careSkipped > 0) issues.push('care_candidates_rejected')
     }
     return {
+      remindersActivated,
       remindersCreated,
       remindersSkipped,
       careCreated,
       careSkipped,
     }
+  }
+
+  private recentPendingRemindersForConversation(
+    now: number,
+  ): ReminderCandidateRecord[] {
+    const cutoff = now - 30 * 60_000
+    return this.storage
+      .listReminderCandidates('pending', 200)
+      .filter(candidate => {
+        const source = this.storage.getChatMessage(
+          candidate.sourceMessageId,
+        )
+        const createdAt = Date.parse(candidate.createdAt)
+        const dueAt = Date.parse(candidate.dueAt)
+        return (
+          source?.conversationId === this.conversationId &&
+          Number.isFinite(createdAt) &&
+          createdAt >= cutoff &&
+          createdAt <= now &&
+          Number.isFinite(dueAt) &&
+          dueAt > now
+        )
+      })
+      .sort(
+        (left, right) =>
+          Date.parse(right.createdAt) - Date.parse(left.createdAt),
+      )
+  }
+
+  /**
+   * 去重同时查看同会话 pending 和尚未送达的 active 提醒。只比较动作核心
+   * 与相近时间，不能把同一时间的“洗澡”和“喝水”误合并。
+   *
+   * reminders 表没有 conversation_id；直接提醒的 ID 含会话摘要，候选
+   * 确认的提醒则通过确认映射反查来源会话，避免不同 QQ 会话互相吞并。
+   */
+  private isDuplicateReminder(
+    text: string,
+    dueAt: string,
+    now: number,
+  ): boolean {
+    for (const candidate of this.storage.listReminderCandidates(
+      'pending',
+      200,
+    )) {
+      const source = this.storage.getChatMessage(candidate.sourceMessageId)
+      if (source?.conversationId !== this.conversationId) continue
+      if (!reminderTimesClose(candidate.dueAt, dueAt)) continue
+      const body = this.storage.getBody(candidate.bodyRef)
+      if (
+        body !== null &&
+        reminderTextsEquivalent(body.content, text)
+      ) {
+        return true
+      }
+    }
+
+    const directPrefix = `reminder-${this.reminderConversationHash()}-`
+    const linkedReminderIds = new Set(
+      this.storage
+        .listReminderCandidates('confirmed', 200)
+        .filter(candidate => {
+          const source = this.storage.getChatMessage(
+            candidate.sourceMessageId,
+          )
+          return (
+            source?.conversationId === this.conversationId &&
+            candidate.confirmedReminderId !== null
+          )
+        })
+        .map(candidate => candidate.confirmedReminderId as string),
+    )
+    for (const status of ['confirmed', 'queued'] as const) {
+      for (const reminder of this.storage.listReminders(status, 200)) {
+        if (Date.parse(reminder.dueAt) <= now) continue
+        if (!reminderTimesClose(reminder.dueAt, dueAt)) continue
+        if (
+          !reminder.id.startsWith(directPrefix) &&
+          !linkedReminderIds.has(reminder.id)
+        ) {
+          continue
+        }
+        const body = this.storage.getBody(reminder.bodyRef)
+        if (
+          body !== null &&
+          reminderTextsEquivalent(body.content, text)
+        ) {
+          return true
+        }
+      }
+    }
+    return false
+  }
+
+  private directReminderId(text: string, dueAt: string): string {
+    const bucket = Math.floor(Date.parse(dueAt) / (2 * 60_000))
+    const content = createHash('sha256')
+      .update(normalizeReminderText(text))
+      .update('\u0000')
+      .update(String(bucket))
+      .digest('hex')
+      .slice(0, 24)
+    return `reminder-${this.reminderConversationHash()}-${content}-${bucket}`
+  }
+
+  private reminderConversationHash(): string {
+    return createHash('sha256')
+      .update(this.conversationId)
+      .digest('hex')
+      .slice(0, 12)
   }
 
   private reserveModelCalls(requiredCalls: number): void {

@@ -24,6 +24,7 @@ import {
 } from '../../src/channels/index.ts'
 import {
   KanobotChatService,
+  type ChatInitiativeOptions,
   type ChatModel,
   type ChatModelRequest,
   type ChatModelStreamEvent,
@@ -383,8 +384,105 @@ test('an unknown QQ send result is never retried as a new message', async () => 
   }
 })
 
+test('a reconnected QQ channel deduplicates, confirms, and delivers a reminder', async () => {
+  const dueAt = '2026-11-07T02:05:00.000Z'
+  const model = new QueueEnvelopeChatModel([
+    chatEnvelopeText('你想几点洗澡？', {
+      reminderCandidates: [{
+        text: '提醒 kano 洗澡。',
+        dueAt,
+      }],
+    }),
+    chatEnvelopeText('好，到时间我提醒你。'),
+  ])
+  const harness = createHarness(test, {
+    chatModel: model,
+    withInitiative: true,
+    autonomousTarget: { kind: 'private', id: OWNER_ID },
+  })
+  try {
+    const original = privateEvent({
+      messageId: 200,
+      text: '晚点提醒我洗澡喵。',
+    })
+    harness.gateway.emit(original)
+    harness.ws.clock.advanceByMs(30)
+    await waitUntil(
+      () =>
+        model.requests.length === 1 &&
+        harness.gateway.sent.length === 1,
+    )
+    assert.equal(harness.store.listReminderCandidates('pending').length, 1)
+    assert.equal(harness.store.listReminders('all').length, 0)
+
+    const first = harness.channels[0]
+    assert.ok(first)
+    await first.close()
+    const secondGateway = new FakeQqGateway()
+    const second = harness.newChannel(secondGateway)
+    second.start()
+
+    secondGateway.emit(original)
+    await delay(120)
+    assert.equal(model.requests.length, 1)
+    assert.equal(secondGateway.sent.length, 0)
+    assert.ok(
+      harness.store
+        .listChannelAudit(100)
+        .some(item => item.kind === 'message.duplicate'),
+    )
+
+    secondGateway.emit(privateEvent({
+      messageId: 201,
+      text: '可以喵',
+    }))
+    harness.ws.clock.advanceByMs(30)
+    await waitUntil(
+      () =>
+        model.requests.length === 2 &&
+        secondGateway.sent.length === 1,
+    )
+    assert.equal(harness.store.listReminderCandidates('pending').length, 0)
+    assert.equal(harness.store.listReminders('all').length, 1)
+
+    const config = structuredClone(harness.ws.loaded.initiative)
+    config.life.enabled = false
+    config.proactive.enabled = false
+    config.reminders.enabled = true
+    config.review.enabled = false
+    const initiative = new KanobotInitiativeService(
+      harness.store,
+      new MockInitiativeBrain(),
+      {
+        config,
+        timezone: harness.ws.loaded.system.time.timezone,
+        quietHoursStart: harness.ws.loaded.system.time.quietHoursStart,
+        quietHoursEnd: harness.ws.loaded.system.time.quietHoursEnd,
+        emergency: harness.emergency,
+        outboxTarget: second.outboxTarget ?? '',
+        externalOutbox: second,
+        clock: harness.ws.clock,
+        startupAt: harness.ws.clock.now().toISOString(),
+      },
+    )
+    harness.ws.clock.advanceByMs(5 * 60_000 + 1_000)
+    const tick = await initiative.tick(new AbortController().signal)
+    assert.equal(tick.deliveredOutbox, 1)
+    assert.equal(secondGateway.sent.length, 2)
+    assert.equal(secondGateway.sent[1]?.text, '提醒 kano 洗澡。')
+    assert.deepEqual(secondGateway.sent[1]?.target, {
+      kind: 'private',
+      id: OWNER_ID,
+    })
+    assert.equal(harness.store.listReminders('all')[0]?.status, 'delivered')
+  } finally {
+    await harness.close()
+  }
+})
+
 interface HarnessOptions {
   withVision?: boolean
+  withInitiative?: boolean
   chatModel?: ChatModel
   autonomousTarget?: { kind: 'private' | 'group'; id: string }
 }
@@ -433,6 +531,9 @@ function createHarness(
   const createChat = (conversationId: string): KanobotChatService =>
     new KanobotChatService(store, chatModel, {
       conversationId,
+      initiative: options.withInitiative === true
+        ? chatInitiativeOptions(emergency, ws.loaded)
+        : undefined,
       vision: options.withVision === true
         ? {
             model: visionModel,
@@ -482,6 +583,22 @@ function createHarness(
       }
       store.close()
     },
+  }
+}
+
+function chatInitiativeOptions(
+  emergency: KanobotEmergencyService,
+  loaded: Workspace['loaded'],
+): ChatInitiativeOptions {
+  return {
+    remindersEnabled: loaded.initiative.reminders.enabled,
+    maxReminderDaysAhead: loaded.initiative.reminders.maxDaysAhead,
+    followUpsEnabled: loaded.initiative.proactive.followUpsEnabled,
+    followUpWindowHours:
+      loaded.initiative.proactive.followUpWindowHours,
+    followUpMaxDaysAhead:
+      loaded.initiative.proactive.followUpMaxDaysAhead,
+    isAutonomousAllowed: () => !emergency.status().stopped,
   }
 }
 
@@ -603,6 +720,30 @@ class CapturingChatModel implements ChatModel {
       type: 'text',
       text: chatEnvelopeText('这是 QQ 渠道的虚构测试回复。'),
     }
+    yield resultEvent()
+  }
+}
+
+class QueueEnvelopeChatModel implements ChatModel {
+  readonly id = 'test/queued-envelope-model'
+  readonly mode = 'test'
+  readonly provider = 'test'
+  readonly requests: ChatModelRequest[] = []
+  private readonly envelopes: string[]
+
+  constructor(envelopes: string[]) {
+    this.envelopes = [...envelopes]
+  }
+
+  async *stream(
+    request: ChatModelRequest,
+  ): AsyncIterable<ChatModelStreamEvent> {
+    this.requests.push(request)
+    const envelope = this.envelopes.shift()
+    if (envelope === undefined) {
+      throw new Error('unexpected QQ chat turn in test model')
+    }
+    yield { type: 'text', text: envelope }
     yield resultEvent()
   }
 }

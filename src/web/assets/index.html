@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>Kanobot · M4.6.1 聊天、记忆与模型设置</title>
+    <title>Kanobot · M5.1 聊天、记忆与渠道设置</title>
     <link rel="stylesheet" href="/kanobot/app.css">
   </head>
   <body>
@@ -13,13 +13,21 @@
         <div class="brand-block">
           <span class="brand-mark" aria-hidden="true">K</span>
           <div>
-            <p class="eyebrow">Kanobot / M4.6.1</p>
-            <h1>聊天、记忆、主动性与模型设置</h1>
+            <p class="eyebrow">Kanobot / M5.1</p>
+            <h1>聊天、记忆、主动性与渠道设置</h1>
           </div>
         </div>
         <div class="topbar-actions">
           <span id="model-badge" class="badge">读取状态中</span>
+          <span
+            id="qq-badge"
+            class="badge qq-badge"
+            aria-live="polite"
+          >QQ 状态读取中</span>
           <span id="control-badge" class="badge control-badge">状态读取中</span>
+          <button id="settings-open" class="small-button" type="button">
+            设置
+          </button>
           <a class="quiet-link" href="/">宿主首页</a>
         </div>
       </header>
@@ -92,7 +100,7 @@
               aria-selected="false"
               aria-controls="tab-initiative"
               data-tab="initiative"
-            >主动性 <span id="initiative-badge" class="tab-count">0</span></button>
+            >主动性 / 提醒 <span id="initiative-badge" class="tab-count">0</span></button>
             <button
               id="tab-button-memory"
               class="tab-button"
@@ -110,16 +118,7 @@
               aria-selected="false"
               aria-controls="tab-audit"
               data-tab="audit"
-            >审计 <span id="audit-badge" class="tab-count">0</span></button>
-            <button
-              id="tab-button-settings"
-              class="tab-button"
-              type="button"
-              role="tab"
-              aria-selected="false"
-              aria-controls="tab-settings"
-              data-tab="settings"
-            >设置</button>
+            >审计 / 事件 <span id="audit-badge" class="tab-count">0</span></button>
           </div>
 
           <section id="tab-status" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-status">
@@ -184,7 +183,7 @@
 
             <section class="panel-card subtle-card">
               <p class="eyebrow">当前边界</p>
-              <h2>M4 陪伴与自主活动</h2>
+              <h2>M5.1 陪伴与自主活动</h2>
               <ul class="boundary-list">
                 <li>复用 DSH 浏览器登录态</li>
                 <li>单次模型调用返回一个 JSON 信封</li>
@@ -193,7 +192,8 @@
                 <li>心情与承诺写入版本化状态事件</li>
                 <li>图片由独立、可配置的视觉模型转述</li>
                 <li>唯一调度循环处理计划、提醒和主动消息</li>
-                <li>提醒只有你确认后才会进入发送队列</li>
+                <li>明确委托的提醒会自动进入发送队列</li>
+                <li>模糊提醒才需要在聊天或面板里确认</li>
                 <li>安静时段不发主动消息，但提醒照常送达</li>
                 <li>私人摘要只在登录后的所有者面板显示</li>
               </ul>
@@ -281,10 +281,10 @@
             </section>
 
             <section class="panel-card">
-              <p class="eyebrow">确认后生效</p>
+              <p class="eyebrow">低摩擦提醒</p>
               <h2>待确认的提醒</h2>
               <p class="initiative-note">
-                模型只提交候选；你确认后才会在到点时发送。
+                明确委托会自动设置；只有时间或内容不清楚时才需要在这里确认。
               </p>
               <div id="reminder-candidate-list" class="initiative-list"></div>
               <p id="reminder-candidate-empty" class="memory-empty">
@@ -404,13 +404,52 @@
             </section>
           </section>
 
-          <section
-            id="tab-settings"
-            class="tab-panel settings-panel"
-            role="tabpanel"
-            aria-labelledby="tab-button-settings"
-            hidden
-          >
+        </aside>
+      </main>
+    </div>
+
+    <dialog
+      id="settings-dialog"
+      class="settings-dialog"
+      aria-labelledby="settings-dialog-title"
+    >
+      <div class="settings-dialog-shell">
+        <header class="settings-dialog-header">
+          <div>
+            <p class="eyebrow">所有者设置</p>
+            <h2 id="settings-dialog-title">设置</h2>
+          </div>
+          <button
+            id="settings-dialog-close"
+            class="icon-button"
+            type="button"
+            aria-label="关闭设置"
+          >×</button>
+        </header>
+
+        <div class="settings-dialog-layout">
+          <nav class="settings-nav" aria-label="设置页面">
+            <button
+              id="settings-nav-model"
+              class="settings-nav-button active"
+              type="button"
+              aria-current="page"
+              data-settings-page="model"
+            >模型接入</button>
+            <button
+              id="settings-nav-qq"
+              class="settings-nav-button"
+              type="button"
+              data-settings-page="qq"
+            >QQ 渠道</button>
+          </nav>
+
+          <div class="settings-dialog-content">
+            <section
+              id="settings-page-model"
+              class="settings-page"
+              aria-labelledby="settings-nav-model"
+            >
             <section class="panel-card">
               <div class="panel-heading">
                 <div>
@@ -769,10 +808,271 @@
                 </button>
               </div>
             </form>
-          </section>
-        </aside>
-      </main>
-    </div>
+            </section>
+
+            <section
+              id="settings-page-qq"
+              class="settings-page"
+              aria-labelledby="settings-nav-qq"
+              hidden
+            >
+              <form id="channel-settings-form" class="channel-settings-form">
+                <section class="panel-card">
+                  <div class="panel-heading">
+                    <div>
+                      <p class="eyebrow">OneBot 11</p>
+                      <h2>QQ / NapCat</h2>
+                    </div>
+                    <button
+                      id="channel-settings-refresh"
+                      class="small-button"
+                      type="button"
+                    >重新读取</button>
+                  </div>
+                  <p class="settings-note">
+                    Kanobot 只作为 OneBot 11 正向 WebSocket 客户端连接外部
+                    NapCat，不负责 QQ 登录、NapCat 安装或它的网络配置。
+                  </p>
+
+                  <div class="channel-state-line">
+                    <span>当前连接状态</span>
+                    <strong id="channel-connection-state">读取中…</strong>
+                  </div>
+
+                  <p id="channel-readonly" class="settings-warning" hidden>
+                    当前是仓库示例配置，只能查看和测试，不能保存。
+                  </p>
+                  <p
+                    id="channel-settings-error"
+                    class="inline-error"
+                    role="alert"
+                    hidden
+                  ></p>
+                  <p
+                    id="channel-settings-status"
+                    class="settings-status"
+                    role="status"
+                    hidden
+                  ></p>
+
+                  <div class="channel-basic-grid">
+                    <label class="check-field channel-check">
+                      <input id="channel-enabled" type="checkbox">
+                      <span>启用 QQ 渠道</span>
+                    </label>
+                    <label class="check-field channel-check">
+                      <input id="channel-allow-remote" type="checkbox">
+                      <span>允许远程 WebSocket</span>
+                    </label>
+                  </div>
+
+                  <label class="field settings-wide-field">
+                    <span>NapCat WebSocket URL</span>
+                    <input
+                      id="channel-ws-url"
+                      type="text"
+                      maxlength="512"
+                      placeholder="ws://127.0.0.1:3001"
+                      required
+                    >
+                  </label>
+                  <p class="settings-note">
+                    本机回环地址可用 <code>ws://</code>；远程地址必须开启
+                    allow_remote 并使用 <code>wss://</code>。URL 中不能内嵌凭据。
+                  </p>
+
+                  <div class="settings-credential">
+                    <label class="field">
+                      <span>Access token 来源</span>
+                      <select id="channel-credential-mode">
+                        <option value="keep">保留当前来源</option>
+                        <option value="none">不配置</option>
+                        <option value="environment">环境变量</option>
+                        <option value="new">写入本地加密密钥</option>
+                      </select>
+                    </label>
+                    <p
+                      id="channel-credential-status"
+                      class="credential-status"
+                    >读取凭据状态中…</p>
+                    <label
+                      id="channel-credential-env-field"
+                      class="field"
+                      hidden
+                    >
+                      <span>环境变量名</span>
+                      <input
+                        id="channel-credential-env"
+                        type="text"
+                        maxlength="128"
+                        placeholder="NAPCAT_ACCESS_TOKEN"
+                      >
+                    </label>
+                    <label
+                      id="channel-credential-secret-field"
+                      class="field"
+                      hidden
+                    >
+                      <span>新 access token（只写入，不回显）</span>
+                      <input
+                        id="channel-credential-secret"
+                        type="password"
+                        maxlength="8192"
+                        autocomplete="new-password"
+                        placeholder="输入后保存"
+                      >
+                    </label>
+                    <p class="settings-note">
+                      token 不会写入 channels.toml、channel-settings.json、
+                      SQLite、审计或页面响应。环境变量和本地密钥只能二选一。
+                    </p>
+                  </div>
+                </section>
+
+                <section class="panel-card">
+                  <p class="eyebrow">访问边界</p>
+                  <h2>白名单与群聊</h2>
+                  <div class="field-row field-row-two">
+                    <label class="field">
+                      <span>私聊白名单（逗号或换行分隔）</span>
+                      <textarea
+                        id="channel-private-allow"
+                        rows="4"
+                        maxlength="4000"
+                        placeholder="10001, 10002"
+                      ></textarea>
+                    </label>
+                    <label class="field">
+                      <span>群白名单（逗号或换行分隔）</span>
+                      <textarea
+                        id="channel-group-allow"
+                        rows="4"
+                        maxlength="4000"
+                        placeholder="20002"
+                      ></textarea>
+                    </label>
+                  </div>
+                  <p class="settings-note">
+                    空白名单表示谁都不处理，不是“谁都可以”。号码必须是
+                    5–20 位数字，提交前会规范化并去重。
+                  </p>
+                  <div class="field-row field-row-two">
+                    <label class="check-field channel-check">
+                      <input id="channel-group-require-mention" type="checkbox">
+                      <span>群聊必须 @ 机器人才回复</span>
+                    </label>
+                    <label class="field">
+                      <span>主动消息 / 提醒的 QQ 目标</span>
+                      <select id="channel-autonomous-target">
+                        <option value="">不投递到 QQ</option>
+                      </select>
+                    </label>
+                  </div>
+                  <p class="settings-note">
+                    目标必须属于对应白名单。留空时主动消息和提醒只投递到网页。
+                  </p>
+                </section>
+
+                <details class="panel-card channel-advanced">
+                  <summary>高级连接、聚合与限流参数</summary>
+                  <p class="settings-note">
+                    默认值与 <code>config/examples/channels.toml</code> 一致。
+                    保存前仍会执行完整 schema 和跨字段校验。
+                  </p>
+                  <div class="field-row">
+                    <label class="field">
+                      <span>连接超时（毫秒）</span>
+                      <input id="channel-connect-timeout" type="number" min="1000" max="60000" step="1000" required>
+                    </label>
+                    <label class="field">
+                      <span>动作超时（毫秒）</span>
+                      <input id="channel-action-timeout" type="number" min="1000" max="120000" step="1000" required>
+                    </label>
+                    <label class="field">
+                      <span>回合超时（毫秒）</span>
+                      <input id="channel-turn-timeout" type="number" min="10000" max="600000" step="1000" required>
+                    </label>
+                    <label class="field">
+                      <span>最短重连间隔（毫秒）</span>
+                      <input id="channel-reconnect-min" type="number" min="500" max="60000" step="500" required>
+                    </label>
+                    <label class="field">
+                      <span>最长重连间隔（毫秒）</span>
+                      <input id="channel-reconnect-max" type="number" min="1000" max="300000" step="1000" required>
+                    </label>
+                    <label class="field">
+                      <span>Ping 间隔（毫秒，0 关闭）</span>
+                      <input id="channel-ping-interval" type="number" min="0" max="300000" step="1000" required>
+                    </label>
+                    <label class="field">
+                      <span>入站去重保留（小时）</span>
+                      <input id="channel-dedupe-retention" type="number" min="1" max="168" step="1" required>
+                    </label>
+                    <label class="field">
+                      <span>连发静默窗口（毫秒）</span>
+                      <input id="channel-coalesce-quiet" type="number" min="200" max="10000" step="100" required>
+                    </label>
+                    <label class="field">
+                      <span>连发最大等待（毫秒）</span>
+                      <input id="channel-coalesce-max-wait" type="number" min="1000" max="30000" step="500" required>
+                    </label>
+                    <label class="field">
+                      <span>单回合最多图片</span>
+                      <input id="channel-coalesce-max-images" type="number" min="1" max="4" step="1" required>
+                    </label>
+                    <label class="field">
+                      <span>单回合图片总字节</span>
+                      <input id="channel-coalesce-max-total-image-bytes" type="number" min="1" max="20971520" step="1" required>
+                    </label>
+                    <label class="field">
+                      <span>图片下载超时（毫秒）</span>
+                      <input id="channel-images-download-timeout" type="number" min="1000" max="60000" step="1000" required>
+                    </label>
+                    <label class="field">
+                      <span>单条最大字符</span>
+                      <input id="channel-outbound-split-chars" type="number" min="200" max="2000" step="1" required>
+                    </label>
+                    <label class="field">
+                      <span>最多发送分片</span>
+                      <input id="channel-outbound-max-parts" type="number" min="1" max="8" step="1" required>
+                    </label>
+                    <label class="field">
+                      <span>分片最短间隔（毫秒）</span>
+                      <input id="channel-outbound-min-interval" type="number" min="0" max="10000" step="50" required>
+                    </label>
+                    <label class="field">
+                      <span>每分钟最多入站回合</span>
+                      <input id="channel-limits-max-inbound" type="number" min="1" max="120" step="1" required>
+                    </label>
+                    <label class="field">
+                      <span>每分钟最多出站分片</span>
+                      <input id="channel-limits-max-outbound" type="number" min="1" max="300" step="1" required>
+                    </label>
+                  </div>
+                </details>
+
+                <div class="channel-actions">
+                  <button
+                    id="channel-test"
+                    class="secondary-button"
+                    type="button"
+                  >测试连接</button>
+                  <button
+                    id="channel-save"
+                    class="primary-button"
+                    type="submit"
+                  >保存配置</button>
+                </div>
+                <p class="channel-restart-note">
+                  保存只写入运行时覆盖文件；连接测试使用当前草稿且不会保存。
+                  保存成功后需要重启 DSH 才会应用新的 QQ 连接。
+                </p>
+              </form>
+            </section>
+          </div>
+        </div>
+      </div>
+    </dialog>
 
     <dialog id="memory-dialog" class="memory-dialog">
       <form id="memory-form">

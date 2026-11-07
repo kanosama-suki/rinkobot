@@ -21,6 +21,11 @@ export type {
 export { QqChannel } from './qq/channel.ts'
 export type { QqChannelOptions } from './qq/channel.ts'
 export {
+  QqCredentialError,
+  resolveQqAccessToken,
+} from './qq/credentials.ts'
+export type { LocalSecretReader } from './qq/credentials.ts'
+export {
   parseQqMessageEvent,
   shouldAcceptGroupMessage,
 } from './qq/events.ts'
@@ -55,5 +60,13 @@ export {
   QqMediaError,
 } from './qq/media.ts'
 export type { ResolvedQqImage } from './qq/media.ts'
-export { OneBotClient } from './qq/onebot.ts'
-export type { OneBotClientOptions } from './qq/onebot.ts'
+export {
+  OneBotClient,
+  QqConnectionTestError,
+  testOneBotConnection,
+} from './qq/onebot.ts'
+export type {
+  OneBotClientOptions,
+  OneBotConnectionTestOptions,
+  OneBotConnectionTestResult,
+} from './qq/onebot.ts'

@@ -2135,6 +2135,54 @@ export class KanobotStorage {
     return created
   }
 
+  /**
+   * 直接创建一个已确认提醒，供“用户明确委托”且时间可解析的聊天回合使用。
+   * 候选路径仍保留给模糊委托；两条路径最终都落到同一张 reminders 表，
+   * 调度和发送逻辑不需要区分来源。
+   */
+  putReminder(input: PutReminderInput): ReminderRecord {
+    this.assertOpen()
+    const text = normalizeChatText(input.text, 'reminder.text')
+    const dueAt = validateInstant(input.dueAt, 'reminder.dueAt')
+    const createdAt = validateInstant(
+      input.createdAt ?? this.nowIso(),
+      'reminder.createdAt',
+    )
+    const confirmedAt = validateInstant(
+      input.confirmedAt ?? createdAt,
+      'reminder.confirmedAt',
+    )
+    const id = validateIdentifier(
+      input.id ?? `reminder-${randomUUID()}`,
+      'reminder.id',
+    )
+    const bodyRef = `body-reminder-${randomUUID()}`
+
+    this.inTransaction(() => {
+      try {
+        this.db.prepare(
+          'INSERT INTO bodies (id, kind, content, created_at) VALUES (?, ?, ?, ?)',
+        ).run(bodyRef, 'reminder', text, createdAt)
+        this.db.prepare(
+          `INSERT INTO reminders
+            (id, body_ref, due_at, status, created_at, confirmed_at,
+             delivered_at, outbox_id)
+           VALUES (?, ?, ?, 'confirmed', ?, ?, NULL, NULL)`,
+        ).run(id, bodyRef, dueAt, createdAt, confirmedAt)
+      } catch (error) {
+        throw mapInsertError(error, 'reminder', id)
+      }
+    })
+    const created = this.getReminder(id)
+    if (created === null) {
+      throw new StorageIntegrityError(
+        `reminder "${id}" disappeared during creation`,
+        ':reminders:',
+      )
+    }
+    return created
+  }
+
   getReminderCandidate(id: string): ReminderCandidateRecord | null {
     this.assertOpen()
     const candidateId = validateIdentifier(id, 'reminderCandidate.id')

@@ -30,6 +30,28 @@ export interface OneBotClientOptions {
   logger: ChannelLogger
 }
 
+export interface OneBotConnectionTestOptions {
+  url: string
+  token: string | null
+  connectTimeoutMs: number
+  actionTimeoutMs: number
+}
+
+export interface OneBotConnectionTestResult {
+  selfId: string
+  durationMs: number
+}
+
+export class QqConnectionTestError extends Error {
+  readonly code: string
+
+  constructor(code: string, message: string) {
+    super(message)
+    this.name = 'QqConnectionTestError'
+    this.code = code
+  }
+}
+
 interface PendingAction {
   action: string
   resolve(response: OneBotActionResponse): void
@@ -40,6 +62,162 @@ interface PendingAction {
 
 const MAX_FRAME_BYTES = 1024 * 1024
 const MAX_PENDING_ACTIONS = 128
+
+/**
+ * 设置页的一次性连接测试。只完成 WebSocket 握手和 get_login_info，
+ * 不启动重连、不注册事件处理器、不发送任何 QQ 消息。
+ */
+export async function testOneBotConnection(
+  options: OneBotConnectionTestOptions,
+): Promise<OneBotConnectionTestResult> {
+  const startedAt = Date.now()
+  return new Promise<OneBotConnectionTestResult>((resolve, reject) => {
+    let settled = false
+    let socket: WebSocket | null = null
+    const finish = (
+      outcome:
+        | { ok: true; selfId: string }
+        | { ok: false; code: string; message: string },
+    ): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (socket !== null) {
+        try {
+          socket.terminate()
+        } catch {
+          // 测试结果已经确定；关闭失败不覆盖稳定错误码。
+        }
+      }
+      if (outcome.ok) {
+        resolve({
+          selfId: outcome.selfId,
+          durationMs: Math.max(0, Date.now() - startedAt),
+        })
+      } else {
+        reject(new QqConnectionTestError(outcome.code, outcome.message))
+      }
+    }
+    const timer = setTimeout(() => {
+      finish({
+        ok: false,
+        code: 'qq_test_timeout',
+        message: 'QQ 连接测试超时',
+      })
+    }, options.connectTimeoutMs + options.actionTimeoutMs)
+    unrefTimer(timer)
+
+    try {
+      socket = new WebSocket(options.url, {
+        maxPayload: MAX_FRAME_BYTES,
+        ...(options.token === null
+          ? {}
+          : {
+              headers: {
+                Authorization: `Bearer ${options.token}`,
+              },
+            }),
+      })
+    } catch {
+      finish({
+        ok: false,
+        code: 'qq_test_invalid_url',
+        message: 'QQ WebSocket 地址不合法',
+      })
+      return
+    }
+
+    socket.on('unexpected-response', (_request, response) => {
+      response.resume()
+      finish({
+        ok: false,
+        code:
+          response.statusCode === 401 || response.statusCode === 403
+            ? 'qq_test_auth_failed'
+            : 'qq_test_connect_failed',
+        message:
+          response.statusCode === 401 || response.statusCode === 403
+            ? 'NapCat 拒绝了当前 access token'
+            : 'NapCat 拒绝了 WebSocket 握手',
+      })
+    })
+    socket.on('open', () => {
+      if (settled) return
+      const echo = `kanobot-test-${randomUUID()}`
+      socket.send(
+        JSON.stringify({
+          action: 'get_login_info',
+          params: {},
+          echo,
+        }),
+        error => {
+          if (error !== undefined && error !== null) {
+            finish({
+              ok: false,
+              code: 'qq_test_connect_failed',
+              message: '无法向 NapCat 发送登录信息请求',
+            })
+          }
+        },
+      )
+    })
+    socket.on('message', data => {
+      if (settled) return
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(data.toString())
+      } catch {
+        finish({
+          ok: false,
+          code: 'qq_test_invalid_response',
+          message: 'NapCat 返回了非 JSON 响应',
+        })
+        return
+      }
+      if (!isRecord(parsed) || typeof parsed.echo !== 'string') return
+      if (!parsed.echo.startsWith('kanobot-test-')) return
+      const dataValue = isRecord(parsed.data) ? parsed.data : {}
+      const selfId = validMessageId(dataValue.user_id)
+      if (
+        (parsed.status === 'ok' || Number(parsed.retcode) === 0) &&
+        selfId !== null
+      ) {
+        finish({ ok: true, selfId })
+        return
+      }
+      if (
+        Number(parsed.retcode) === 401 ||
+        Number(parsed.retcode) === 403
+      ) {
+        finish({
+          ok: false,
+          code: 'qq_test_auth_failed',
+          message: 'NapCat 拒绝了当前 access token',
+        })
+        return
+      }
+      finish({
+        ok: false,
+        code: 'qq_test_login_info_invalid',
+        message: 'NapCat 没有返回有效的 QQ 登录信息',
+      })
+    })
+    socket.on('error', () => {
+      finish({
+        ok: false,
+        code: 'qq_test_connect_failed',
+        message: '无法连接 NapCat WebSocket',
+      })
+    })
+    socket.on('close', () => {
+      finish({
+        ok: false,
+        code: 'qq_test_connect_failed',
+        message: 'NapCat WebSocket 在测试完成前关闭',
+      })
+    })
+  })
+}
 
 export class OneBotClient implements QqGateway {
   private readonly options: OneBotClientOptions

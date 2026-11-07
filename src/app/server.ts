@@ -27,7 +27,11 @@ import {
   KanobotChatService,
   type ChatServiceOptions,
 } from '../core/chat/index.ts'
-import { OneBotClient, QqChannel } from '../channels/index.ts'
+import {
+  OneBotClient,
+  QqChannel,
+  resolveQqAccessToken,
+} from '../channels/index.ts'
 import { loadConfigFromDirectory } from '../core/config/index.ts'
 import {
   InitiativeScheduler,
@@ -51,8 +55,14 @@ import {
   registerChatSurface,
   type ChatLogger,
 } from '../web/index.ts'
-import { createModelRuntime } from '../model-providers/index.ts'
-import { ModelSettingsService } from '../settings/index.ts'
+import {
+  LocalSecretStore,
+  createModelRuntime,
+} from '../model-providers/index.ts'
+import {
+  ChannelSettingsService,
+  ModelSettingsService,
+} from '../settings/index.ts'
 
 const APP_COOKIE = 'kanobot_app_session'
 const DEFAULT_PORT = 4200
@@ -133,6 +143,7 @@ export async function createAppServer(
 
   const loaded = loadConfigFromDirectory(configDir)
   const runtime = await createModelRuntime(loaded, { configDir })
+  const secretStore = new LocalSecretStore(configDir)
   const model = runtime.chat
   const visionModel = runtime.vision
   const models = new ModelSettingsService({
@@ -188,6 +199,7 @@ export async function createAppServer(
           loaded.initiative.proactive.followUpWindowHours,
         followUpMaxDaysAhead:
           loaded.initiative.proactive.followUpMaxDaysAhead,
+        isAutonomousAllowed: () => !emergency.status().stopped,
       },
       timezone: loaded.system.time.timezone,
       clock,
@@ -201,7 +213,7 @@ export async function createAppServer(
         emergency,
         gateway: new OneBotClient({
           url: qqConfig.wsUrl,
-          token: resolveQqAccessToken(qqConfig),
+          token: resolveQqAccessToken(qqConfig, secretStore),
           connectTimeoutMs: qqConfig.connectTimeoutMs,
           actionTimeoutMs: qqConfig.actionTimeoutMs,
           reconnectMinMs: qqConfig.reconnectMinMs,
@@ -253,6 +265,16 @@ export async function createAppServer(
         clock,
       },
     )
+    const channels = new ChannelSettingsService({
+      configDir,
+      loaded,
+      secretStore,
+      readOnly: configDir === bundledExamplesDir(),
+      runtimeStatus: () => ({
+        enabled: qqChannel !== undefined,
+        connection: qqChannel?.connection() ?? null,
+      }),
+    })
 
     const rawBootstrapToken = randomBytes(32).toString('base64url')
     const auth: AppAuthState = {
@@ -295,6 +317,7 @@ export async function createAppServer(
       emergency,
       initiative,
       models,
+      channels,
       logger,
       auth: {
         unauthenticatedMessage:
@@ -582,22 +605,6 @@ function bundledExamplesDir(): string {
   return resolve(
     fileURLToPath(new URL('../../config/examples', import.meta.url)),
   )
-}
-
-function resolveQqAccessToken(config: {
-  accessTokenEnv: string | null
-}): string | null {
-  if (config.accessTokenEnv === null) return null
-  const token = process.env[config.accessTokenEnv]?.trim()
-  if (token === undefined || token === '') {
-    throw new Error(
-      `QQ access token environment variable "${config.accessTokenEnv}" is not set`,
-    )
-  }
-  if (token.length > 2_048 || /[\u0000-\u001f\u007f]/.test(token)) {
-    throw new Error('QQ access token contains invalid characters')
-  }
-  return token
 }
 
 function formatError(error: unknown): string {

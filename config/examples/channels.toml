@@ -1,6 +1,11 @@
 # 个人 QQ 渠道，使用外部 NapCat / OneBot 11 WebSocket 服务。
 # 本文件只保存环境变量名和白名单；真实 token 放在进程环境变量里。
 # 默认关闭。启用前请确认 NapCat 只监听本机，并为 WebSocket 配置 token。
+#
+# 设置页保存时不会改写本文件，而是在同目录写入 channel-settings.json，
+# 用完整的 qq 段覆盖这里的手写值。选择“写入本地密钥”时，覆盖文件只保存
+# access_token_secret = "secret_..." 引用；真实 token 由本地 AES-GCM
+# secret store 保管。两种文件最终都经过同一套 channels schema 校验。
 schema_version = 1
 
 [qq]
@@ -10,6 +15,8 @@ ws_url = "ws://127.0.0.1:3001"
 allow_remote = false
 # 与 NapCat 的 access token 同名；留空表示对端未启用鉴权（不推荐）。
 access_token_env = "NAPCAT_ACCESS_TOKEN"
+# access_token_env 与 access_token_secret 只能设置一个；后者只由设置页写入。
+# access_token_secret = "secret_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 connect_timeout_ms = 10000
 action_timeout_ms = 15000
 turn_timeout_ms = 180000

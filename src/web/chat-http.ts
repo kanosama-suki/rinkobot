@@ -37,7 +37,9 @@ import {
   type OwnerAuditAction,
 } from '../core/storage/index.ts'
 import {
+  ChannelSettingsError,
   ModelSettingsError,
+  type ChannelSettingsService,
   type ModelSettingsService,
 } from '../settings/index.ts'
 
@@ -46,6 +48,8 @@ export const CHAT_BASE_PATH = '/kanobot'
 const MAX_JSON_BODY_BYTES = 64 * 1024
 // 单张图片上限 5 MiB；base64 和 JSON 包装会额外膨胀，留出 8 MiB 边界。
 const MAX_CHAT_BODY_BYTES = 8 * 1024 * 1024
+// QQ 设置包含多个嵌套区间，但仍是纯 JSON；不需要聊天图片级别的大请求体。
+const MAX_CHANNEL_SETTINGS_BODY_BYTES = 256 * 1024
 const MAX_LIMIT = 100
 
 const SECURITY_HEADERS = {
@@ -100,6 +104,7 @@ export interface ChatSurfaceOptions {
   emergency?: KanobotEmergencyService
   initiative?: KanobotInitiativeService
   models?: ModelSettingsService
+  channels?: ChannelSettingsService
   logger: ChatLogger
   auth?: ChatAuthMessages
 }
@@ -282,6 +287,15 @@ async function handleRequest(
     return
   }
 
+  if (
+    pathname === `${CHAT_BASE_PATH}/api/settings/channels` ||
+    pathname === `${CHAT_BASE_PATH}/api/settings/channels/test` ||
+    pathname === `${CHAT_BASE_PATH}/api/settings/channels/status`
+  ) {
+    await handleChannelSettingsRequest(req, res, pathname, options)
+    return
+  }
+
   writeError(res, 404, 'not_found', '接口不存在', api)
 }
 
@@ -363,6 +377,76 @@ function handleModelSettingsError(
   // 设置请求不记录 body；这里只记录脱敏错误类型，避免密钥误入日志。
   logger.error?.('[kanobot] model settings request failed')
   writeError(res, 500, 'internal_error', '模型设置操作失败', true)
+}
+
+async function handleChannelSettingsRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+  options: ChatSurfaceOptions,
+): Promise<void> {
+  const service = options.channels
+  if (service === undefined) {
+    writeError(res, 404, 'not_found', 'QQ 设置接口未启用', true)
+    return
+  }
+  try {
+    if (pathname.endsWith('/status')) {
+      if (req.method !== 'GET') {
+        writeMethodNotAllowed(res, ['GET'], true)
+        return
+      }
+      writeJson(res, 200, { qq: service.status() })
+      return
+    }
+    if (pathname.endsWith('/test')) {
+      if (req.method !== 'POST') {
+        writeMethodNotAllowed(res, ['POST'], true)
+        return
+      }
+      const body = await readJsonBody(req, MAX_CHANNEL_SETTINGS_BODY_BYTES)
+      writeJson(res, 200, {
+        ok: true,
+        ...(await service.test(body)),
+      })
+      return
+    }
+    if (req.method === 'GET') {
+      writeJson(res, 200, service.view())
+      return
+    }
+    if (req.method === 'PUT') {
+      const body = await readJsonBody(req, MAX_CHANNEL_SETTINGS_BODY_BYTES)
+      writeJson(res, 200, await service.save(body))
+      return
+    }
+    writeMethodNotAllowed(res, ['GET', 'PUT'], true)
+  } catch (error) {
+    handleChannelSettingsError(res, options.logger, error)
+  }
+}
+
+function handleChannelSettingsError(
+  res: ServerResponse,
+  logger: ChatLogger,
+  error: unknown,
+): void {
+  if (error instanceof ChannelSettingsError) {
+    const status =
+      error.code === 'settings_read_only'
+        ? 409
+        : error.code.startsWith('qq_test_')
+          ? 422
+          : 400
+    writeError(res, status, error.code, error.message, true)
+    return
+  }
+  if (error instanceof RequestError) {
+    writeError(res, error.status, error.code, error.message, true)
+    return
+  }
+  logger.error?.('[kanobot] QQ settings request failed')
+  writeError(res, 500, 'internal_error', 'QQ 设置操作失败', true)
 }
 
 const INITIATIVE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/

@@ -17,7 +17,11 @@ import {
   KanobotChatService,
   type ChatServiceOptions,
 } from '../core/chat/index.ts'
-import { OneBotClient, QqChannel } from '../channels/index.ts'
+import {
+  OneBotClient,
+  QqChannel,
+  resolveQqAccessToken,
+} from '../channels/index.ts'
 import {
   KanobotMemoryService,
 } from '../core/memory/index.ts'
@@ -45,11 +49,15 @@ import {
   type ChatWebServer,
 } from '../web/index.ts'
 import {
+  LocalSecretStore,
   createModelRuntime,
   type DshLlmBridge,
   type ModelProviderMode,
 } from '../model-providers/index.ts'
-import { ModelSettingsService } from '../settings/index.ts'
+import {
+  ChannelSettingsService,
+  ModelSettingsService,
+} from '../settings/index.ts'
 import { PLUGIN_NAME, PLUGIN_VERSION } from './version.ts'
 
 // `llm` 只在 provider = "dsh" 时需要；mock、Magpie 和第三方 HTTP provider
@@ -125,6 +133,7 @@ export async function apply(
       // 保存的真实 provider；只有测试需要的强制 mock 继续保留。
       ...(modelMode === 'mock' ? { mode: 'mock' as const } : {}),
     })
+    const secretStore = new LocalSecretStore(configDir)
     const model = runtime.chat
     // 视觉模型独立配置；未启用时保持为 null，带图请求会在落库前明确失败。
     const visionModel = runtime.vision
@@ -175,6 +184,7 @@ export async function apply(
           loaded.initiative.proactive.followUpWindowHours,
         followUpMaxDaysAhead:
           loaded.initiative.proactive.followUpMaxDaysAhead,
+        isAutonomousAllowed: () => !emergency.status().stopped,
       },
       timezone: loaded.system.time.timezone,
       clock,
@@ -188,7 +198,7 @@ export async function apply(
         emergency,
         gateway: new OneBotClient({
           url: qqConfig.wsUrl,
-          token: resolveQqAccessToken(qqConfig),
+          token: resolveQqAccessToken(qqConfig, secretStore),
           connectTimeoutMs: qqConfig.connectTimeoutMs,
           actionTimeoutMs: qqConfig.actionTimeoutMs,
           reconnectMinMs: qqConfig.reconnectMinMs,
@@ -240,6 +250,16 @@ export async function apply(
         clock,
       },
     )
+    const channels = new ChannelSettingsService({
+      configDir,
+      loaded,
+      secretStore,
+      readOnly: configDir === bundledExamplesDir(),
+      runtimeStatus: () => ({
+        enabled: qqChannel !== undefined,
+        connection: qqChannel?.connection() ?? null,
+      }),
+    })
     // 启动时把 STOP 文件同步进数据库；删除文件不会自动恢复。
     const emergencyStatus = emergency.status()
     disposeChatSurface = registerChatSurface({
@@ -252,6 +272,7 @@ export async function apply(
       emergency,
       initiative,
       models,
+      channels,
       logger: ctx.logger,
     })
     scheduler = new InitiativeScheduler({
@@ -429,22 +450,6 @@ function bundledExamplesDir(): string {
   return resolve(
     fileURLToPath(new URL('../../config/examples', import.meta.url)),
   )
-}
-
-function resolveQqAccessToken(config: {
-  accessTokenEnv: string | null
-}): string | null {
-  if (config.accessTokenEnv === null) return null
-  const token = process.env[config.accessTokenEnv]?.trim()
-  if (token === undefined || token === '') {
-    throw new Error(
-      `QQ access token environment variable "${config.accessTokenEnv}" is not set`,
-    )
-  }
-  if (token.length > 2_048 || /[\u0000-\u001f\u007f]/.test(token)) {
-    throw new Error('QQ access token contains invalid characters')
-  }
-  return token
 }
 
 export { PLUGIN_NAME, PLUGIN_VERSION }

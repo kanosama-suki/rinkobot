@@ -8,6 +8,7 @@ export { ConfigError, ConfigFieldError, formatConfigIssues } from './errors.ts'
 export type { ConfigIssue } from './errors.ts'
 export {
   loadConfigFromDirectory,
+  validateChannels,
   validateModelBaseUrl,
 } from './loader.ts'
 export type {
@@ -29,5 +30,6 @@ export type {
 } from './types.ts'
 export {
   CONFIG_SCHEMA_VERSION,
+  RUNTIME_CHANNEL_SETTINGS_FILENAME,
   RUNTIME_MODEL_SETTINGS_FILENAME,
 } from './types.ts'

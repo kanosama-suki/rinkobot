@@ -73,9 +73,12 @@ test('the standalone app authenticates, persists, and releases its port', async 
     })
     assert.equal(page.status, 200)
     const pageText = await page.text()
-    assert.match(pageText, /id="tab-button-settings"/)
+    assert.match(pageText, /id="settings-open"/)
+    assert.match(pageText, /id="settings-dialog"/)
+    assert.equal(pageText.includes('id="tab-button-settings"'), false)
     assert.match(pageText, /id="settings-test"[^>]*disabled/)
     assert.match(pageText, /id="settings-save"[^>]*disabled/)
+    assert.match(pageText, /id="channel-settings-form"/)
 
     const settings = await fetch(
       `${first.baseUrl}/kanobot/api/settings/models`,
@@ -88,6 +91,17 @@ test('the standalone app authenticates, persists, and releases its port', async 
       view.hostCapabilities.dshChat.reason ?? '',
       /ctx\.llm/,
     )
+
+    const channels = await fetch(
+      `${first.baseUrl}/kanobot/api/settings/channels`,
+      { headers: { cookie } },
+    )
+    assert.equal(channels.status, 200)
+    const channelView = await channels.json() as {
+      qq: { credential: { configured: boolean } }
+    }
+    assert.equal(channelView.qq.credential.configured, true)
+    assert.equal(JSON.stringify(channelView).includes('accessToken'), false)
 
     const badOrigin = await fetch(`${first.baseUrl}/kanobot/api/chat`, {
       method: 'POST',

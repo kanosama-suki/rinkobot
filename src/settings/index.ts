@@ -19,3 +19,21 @@ export type {
   VisionModelSettingsView,
   VisionProviderTestResult,
 } from './model-settings.ts'
+export {
+  ChannelSettingsError,
+  ChannelSettingsService,
+} from './channel-settings.ts'
+export type {
+  ChannelCredentialDraft,
+  ChannelCredentialMode,
+  ChannelCredentialView,
+  ChannelSettingsDraft,
+  ChannelSettingsServiceOptions,
+  ChannelSettingsView,
+  QqChannelSettingsDraft,
+  QqChannelSettingsView,
+  QqChannelStatusView,
+  QqConnectionTestResult,
+  QqRuntimeSnapshot,
+  QqRuntimeState,
+} from './channel-settings.ts'

@@ -8,6 +8,7 @@ config/*
 secrets/
 *.secret
 model-settings.json
+channel-settings.json
 model-secrets.key
 model-secrets.json
 

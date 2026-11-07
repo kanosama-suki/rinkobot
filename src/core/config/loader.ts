@@ -50,6 +50,7 @@ import {
 } from './validation.ts'
 import {
   CONFIG_SCHEMA_VERSION,
+  RUNTIME_CHANNEL_SETTINGS_FILENAME,
   RUNTIME_MODEL_SETTINGS_FILENAME,
 } from './types.ts'
 
@@ -172,6 +173,11 @@ export function loadConfigFromDirectory(configDir: string): LoadedConfig {
     configDir,
     issues,
   )
+  const channelOverlay = applyRuntimeChannelOverlay(
+    parsed,
+    configDir,
+    issues,
+  )
 
   let system: SystemConfig | undefined
   if (parsed.system) {
@@ -252,10 +258,15 @@ export function loadConfigFromDirectory(configDir: string): LoadedConfig {
     try {
       channels = validateChannels(
         parsed.channels,
-        join(configDir, CONFIG_FILES.channels),
+        channelOverlay?.file ?? join(configDir, CONFIG_FILES.channels),
       )
     } catch (error) {
-      issues.push(toIssue(error, join(configDir, CONFIG_FILES.channels)))
+      issues.push(
+        toIssue(
+          error,
+          channelOverlay?.file ?? join(configDir, CONFIG_FILES.channels),
+        ),
+      )
     }
   } else {
     channels = defaultChannelsConfig()
@@ -986,6 +997,42 @@ function applyRuntimeModelOverlay(
 }
 
 /**
+ * QQ 设置页写出完整 qq 段的 JSON 覆盖文件，而不是改写用户手写的
+ * channels.toml。覆盖文件存在时整体替换 qq 段，避免 TOML 与 JSON 各取
+ * 一部分后产生两套有效配置；任何覆盖文件错误都必须 fail-closed。
+ */
+function applyRuntimeChannelOverlay(
+  parsed: ParsedFiles,
+  configDir: string,
+  issues: ConfigIssue[],
+): RuntimeOverlaySource | undefined {
+  const file = join(configDir, RUNTIME_CHANNEL_SETTINGS_FILENAME)
+  if (!existsSync(file)) return
+
+  let overlay: TomlTable
+  try {
+    const value: unknown = JSON.parse(readFileSync(file, 'utf8'))
+    overlay = asTable(value, '$')
+  } catch (error) {
+    issues.push(toIssue(error, file))
+    return
+  }
+
+  try {
+    knownKeys(overlay, ['schema_version', 'qq'], '$')
+    requireSchemaVersion(overlay, CONFIG_SCHEMA_VERSION)
+    if (!isTable(overlay.qq)) {
+      fail('qq', 'required table is missing')
+    }
+    parsed.channels = overlay
+    return { file, fields: new Set(['qq']) }
+  } catch (error) {
+    issues.push(toIssue(error, file))
+    return
+  }
+}
+
+/**
  * JSON 的 null 表示“删除 TOML 基线的同名字段”，而不是把 null 交给类型校验。
  * 这让 provider 切换能显式清掉旧的 base_url、凭据引用和 reasoning_effort。
  */
@@ -1519,6 +1566,7 @@ function defaultChannelsConfig(): ChannelsConfig {
       wsUrl: 'ws://127.0.0.1:3001',
       allowRemote: false,
       accessTokenEnv: null,
+      accessTokenSecret: null,
       connectTimeoutMs: 10_000,
       actionTimeoutMs: 15_000,
       turnTimeoutMs: 180_000,
@@ -1552,7 +1600,7 @@ function defaultChannelsConfig(): ChannelsConfig {
   }
 }
 
-function validateChannels(
+export function validateChannels(
   table: TomlTable,
   file: string,
 ): ChannelsConfig {
@@ -1566,6 +1614,7 @@ function validateChannels(
       'ws_url',
       'allow_remote',
       'access_token_env',
+      'access_token_secret',
       'connect_timeout_ms',
       'action_timeout_ms',
       'turn_timeout_ms',
@@ -1606,10 +1655,36 @@ function validateChannels(
   ) {
     fail('qq.access_token_env', 'expected an environment variable name')
   }
-  if (!isLoopbackWebSocketUrl(wsUrl) && accessTokenEnv === null) {
+  const accessTokenSecret = optionalString(
+    qq,
+    'access_token_secret',
+    'qq.access_token_secret',
+    1,
+    128,
+  )
+  if (
+    accessTokenSecret !== null &&
+    !/^secret_[A-Za-z0-9]{16,80}$/.test(accessTokenSecret)
+  ) {
+    fail(
+      'qq.access_token_secret',
+      'expected a local secret store reference',
+    )
+  }
+  if (accessTokenEnv !== null && accessTokenSecret !== null) {
+    fail(
+      'qq.access_token_secret',
+      'access_token_env and access_token_secret are mutually exclusive',
+    )
+  }
+  if (
+    !isLoopbackWebSocketUrl(wsUrl) &&
+    accessTokenEnv === null &&
+    accessTokenSecret === null
+  ) {
     fail(
       'qq.access_token_env',
-      'remote WebSocket endpoints must reference an access token environment variable',
+      'remote WebSocket endpoints must reference an environment variable or local secret',
     )
   }
 
@@ -1832,6 +1907,7 @@ function validateChannels(
       wsUrl,
       allowRemote,
       accessTokenEnv,
+      accessTokenSecret,
       connectTimeoutMs,
       actionTimeoutMs,
       turnTimeoutMs,

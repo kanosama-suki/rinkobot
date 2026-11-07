@@ -146,6 +146,19 @@ export class LocalSecretStore {
     }
   }
 
+  /**
+   * 删除一个本地引用。调用方在替换密钥成功后清理旧引用；引用不存在时
+   * 返回 false，便于幂等清理，而不把“已经删过”伪装成存储损坏。
+   */
+  delete(ref: string): boolean {
+    const id = validateReference(ref)
+    const file = this.readStore()
+    if (file.entries[id] === undefined) return false
+    delete file.entries[id]
+    this.writeStore(file)
+    return true
+  }
+
   private readStore(): SecretFile {
     if (!existsSync(this.storePath)) {
       return { schemaVersion: STORE_VERSION, entries: {} }

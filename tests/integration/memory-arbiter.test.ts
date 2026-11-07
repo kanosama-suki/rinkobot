@@ -113,7 +113,10 @@ test('a mixed reminder persists only its allergy fact and keeps the reminder', a
     const candidates = memory.listViews('candidate')
     assert.equal(candidates.length, 1)
     assert.equal(candidates[0]?.text, 'kano 对花生过敏')
-    assert.equal(store.listReminderCandidates('pending').length, 1)
+    const reminders = store.listReminders('all')
+    assert.equal(reminders.length, 1)
+    assert.equal(reminders[0]?.status, 'confirmed')
+    assert.equal(store.listReminderCandidates('all').length, 0)
     assert.ok(
       store.listMemoryDecisions().some(decision =>
         decision.action === 'extracted' &&
@@ -155,7 +158,10 @@ test('explicit stable fact persists while explicit reminder fallback is rejected
 
     await collect(chat, '记住，明早提醒我吃药')
     assert.equal(memory.listViews('all').length, 0)
-    assert.equal(store.listReminderCandidates('pending').length, 1)
+    const reminders = store.listReminders('all')
+    assert.equal(reminders.length, 1)
+    assert.equal(reminders[0]?.status, 'confirmed')
+    assert.equal(store.listReminderCandidates('all').length, 0)
     assert.ok(
       store.listMemoryDecisions().some(decision =>
         decision.action === 'suppressed' &&
