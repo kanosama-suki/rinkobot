@@ -213,6 +213,48 @@ export interface RecordOwnerAuditInput {
   id?: string
 }
 
+export type ChannelKind = 'qq'
+export type ChannelDirection = 'inbound' | 'outbound'
+export type ChannelAuditOutcome =
+  | 'succeeded'
+  | 'failed'
+  | 'unknown'
+  | 'info'
+
+export interface ChannelAuditRecord {
+  id: string
+  occurredAt: string
+  channel: ChannelKind
+  direction: ChannelDirection
+  kind: string
+  outcome: ChannelAuditOutcome
+  targetId: string | null
+  detailCode: string | null
+}
+
+export interface RecordChannelAuditInput {
+  id?: string
+  occurredAt?: string
+  channel: ChannelKind
+  direction: ChannelDirection
+  kind: string
+  outcome?: ChannelAuditOutcome
+  targetId?: string | null
+  detailCode?: string | null
+}
+
+/**
+ * 入站消息 ID 去重只保存平台键和有效期，不保存正文、图片或昵称。
+ * messageKey 由渠道把“会话键 + 平台 message_id”组合后再传入。
+ */
+export interface ChannelInboundClaimInput {
+  channel: ChannelKind
+  messageKey: string
+  conversationKey: string
+  receivedAt: string
+  expiresAt: string
+}
+
 export interface EmergencyStateRecord {
   stopped: boolean
   updatedAt: string

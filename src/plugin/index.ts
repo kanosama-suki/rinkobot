@@ -13,8 +13,11 @@ import { fileURLToPath } from 'node:url'
 
 import { loadConfigFromDirectory } from '../core/config/index.ts'
 import {
+  ChatModelBudget,
   KanobotChatService,
+  type ChatServiceOptions,
 } from '../core/chat/index.ts'
+import { OneBotClient, QqChannel } from '../channels/index.ts'
 import {
   KanobotMemoryService,
 } from '../core/memory/index.ts'
@@ -95,6 +98,7 @@ export async function apply(
   const dataDir = resolveDataDir(config)
   let storage: KanobotStorage | undefined
   let scheduler: InitiativeScheduler | undefined
+  let qqChannel: QqChannel | undefined
   let disposeChatSurface: (() => void) | undefined
   const modelMode = config.modelMode
   if (
@@ -145,35 +149,15 @@ export async function apply(
       storage.dataDir,
       loaded.policy.emergency.stopFile,
     )
-    const initiative = new KanobotInitiativeService(
-      storage,
-      model.mode === 'mock'
-        ? new MockInitiativeBrain()
-        : new ModelInitiativeBrain({
-            model,
-            storage,
-            clock,
-            dailyModelCallLimit:
-              loaded.system.resources.dailyModelCallLimit,
-            maxConcurrentModelCalls:
-              loaded.system.resources.maxConcurrentModelCalls,
-          }),
-      {
-        config: loaded.initiative,
-        timezone: loaded.system.time.timezone,
-        quietHoursStart: loaded.system.time.quietHoursStart,
-        quietHoursEnd: loaded.system.time.quietHoursEnd,
-        emergency,
-        memory,
-        clock,
-      },
-    )
-    // 启动时把 STOP 文件同步进数据库；删除文件不会自动恢复。
-    const emergencyStatus = emergency.status()
-    const chat = new KanobotChatService(storage, model, {
+    // 插件宿主里的网页和 QQ 会话也必须共用一个预算对象；不能因为
+    // QqChannel 懒创建 chat 服务就各自拿走一份每日额度。
+    const chatModelBudget = new ChatModelBudget({
       maxConcurrentModelCalls:
         loaded.system.resources.maxConcurrentModelCalls,
       dailyModelCallLimit: loaded.system.resources.dailyModelCallLimit,
+    })
+    const baseChatOptions: ChatServiceOptions = {
+      modelBudget: chatModelBudget,
       memory,
       context: loaded.system.context,
       vision: visionModel === null
@@ -194,7 +178,70 @@ export async function apply(
       },
       timezone: loaded.system.time.timezone,
       clock,
-    })
+    }
+    const chat = new KanobotChatService(storage, model, baseChatOptions)
+    if (loaded.channels.qq.enabled) {
+      const qqConfig = loaded.channels.qq
+      qqChannel = new QqChannel({
+        config: qqConfig,
+        storage,
+        emergency,
+        gateway: new OneBotClient({
+          url: qqConfig.wsUrl,
+          token: resolveQqAccessToken(qqConfig),
+          connectTimeoutMs: qqConfig.connectTimeoutMs,
+          actionTimeoutMs: qqConfig.actionTimeoutMs,
+          reconnectMinMs: qqConfig.reconnectMinMs,
+          reconnectMaxMs: qqConfig.reconnectMaxMs,
+          pingIntervalMs: qqConfig.pingIntervalMs,
+          logger: ctx.logger,
+        }),
+        createChat: conversationId =>
+          new KanobotChatService(storage as KanobotStorage, model, {
+            ...baseChatOptions,
+            conversationId,
+            vision: visionModel === null
+              ? undefined
+              : {
+                  model: visionModel,
+                  maxImageBytes: loaded.system.vision.maxImageBytes,
+                  maxDescriptionChars:
+                    loaded.system.vision.maxDescriptionChars,
+                  maxImages: qqConfig.coalesce.maxImages,
+                },
+          }),
+        maxImageBytes: loaded.system.vision.maxImageBytes,
+        logger: ctx.logger,
+        clock,
+      })
+    }
+    const initiative = new KanobotInitiativeService(
+      storage,
+      model.mode === 'mock'
+        ? new MockInitiativeBrain()
+        : new ModelInitiativeBrain({
+            model,
+            storage,
+            clock,
+            dailyModelCallLimit:
+              loaded.system.resources.dailyModelCallLimit,
+            maxConcurrentModelCalls:
+              loaded.system.resources.maxConcurrentModelCalls,
+          }),
+      {
+        config: loaded.initiative,
+        timezone: loaded.system.time.timezone,
+        quietHoursStart: loaded.system.time.quietHoursStart,
+        quietHoursEnd: loaded.system.time.quietHoursEnd,
+        emergency,
+        memory,
+        outboxTarget: qqChannel?.outboxTarget ?? 'web:owner',
+        externalOutbox: qqChannel,
+        clock,
+      },
+    )
+    // 启动时把 STOP 文件同步进数据库；删除文件不会自动恢复。
+    const emergencyStatus = emergency.status()
     disposeChatSurface = registerChatSurface({
       webServer: ctx.webServer,
       connection: ctx.connection,
@@ -215,6 +262,7 @@ export async function apply(
       logger: ctx.logger,
     })
     scheduler.start()
+    qqChannel?.start()
 
     if (config.startupReportPath !== undefined) {
       // 外部启动脚本用这份报告区分“插件真的激活了”和“宿主进程还在运行”。
@@ -250,6 +298,8 @@ export async function apply(
         initiativeEnabled: loaded.initiative.proactive.enabled,
         initiativeTickSeconds: loaded.initiative.schedule.tickSeconds,
         identity: loaded.identity.mode,
+        qqEnabled: loaded.channels.qq.enabled,
+        qqAutonomousTarget: qqChannel?.outboxTarget ?? null,
       })
     }
 
@@ -260,6 +310,7 @@ export async function apply(
         `provider=${chat.identity().provider}; ` +
         `model=${chat.identity().id}; identity=${loaded.identity.mode}; ` +
         `vision=${visionModel === null ? 'disabled' : `${visionModel.provider}:${visionModel.id}`}; ` +
+        `qq=${loaded.channels.qq.enabled ? 'enabled' : 'disabled'}; ` +
         `emergencyStopped=${emergencyStatus.stopped}`,
     )
 
@@ -268,18 +319,32 @@ export async function apply(
       disposeChatSurface?.()
       const activeStorage = storage
       const activeScheduler = scheduler
+      const activeQq = qqChannel
       scheduler = undefined
-      if (activeScheduler === undefined) {
+      qqChannel = undefined
+      const closeStorage = (): void => {
+        storage = undefined
         activeStorage?.close()
+      }
+      if (activeQq !== undefined) {
+        void (async () => {
+          await activeScheduler?.dispose()
+          await activeQq.close()
+          closeStorage()
+        })().catch(error => {
+          ctx.logger.error?.(
+            `[kanobot] unload cleanup failed: ${formatError(error)}`,
+          )
+        })
+      } else if (activeScheduler === undefined) {
+        closeStorage()
       } else {
         const idle = activeScheduler.disposeSync()
         if (idle) {
-          storage = undefined
-          activeStorage?.close()
+          closeStorage()
         } else {
           void activeScheduler.dispose().finally(() => {
-            storage = undefined
-            activeStorage?.close()
+            closeStorage()
           })
         }
       }
@@ -289,6 +354,8 @@ export async function apply(
     // 初始化过程中任何一步失败都不能留下定时器或打开的数据库。
     disposeChatSurface?.()
     await scheduler?.dispose()
+    await qqChannel?.close().catch(() => {})
+    qqChannel = undefined
     try {
       storage?.close()
     } catch (closeError) {
@@ -362,6 +429,22 @@ function bundledExamplesDir(): string {
   return resolve(
     fileURLToPath(new URL('../../config/examples', import.meta.url)),
   )
+}
+
+function resolveQqAccessToken(config: {
+  accessTokenEnv: string | null
+}): string | null {
+  if (config.accessTokenEnv === null) return null
+  const token = process.env[config.accessTokenEnv]?.trim()
+  if (token === undefined || token === '') {
+    throw new Error(
+      `QQ access token environment variable "${config.accessTokenEnv}" is not set`,
+    )
+  }
+  if (token.length > 2_048 || /[\u0000-\u001f\u007f]/.test(token)) {
+    throw new Error('QQ access token contains invalid characters')
+  }
+  return token
 }
 
 export { PLUGIN_NAME, PLUGIN_VERSION }

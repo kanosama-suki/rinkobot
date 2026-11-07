@@ -6,7 +6,12 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -18,6 +23,10 @@ import {
 } from '../../src/core/config/index.ts'
 
 const examplesDir = fileURLToPath(new URL('../../config/examples', import.meta.url))
+
+function exampleChannels(): string {
+  return readFileSync(join(examplesDir, 'channels.toml'), 'utf8')
+}
 
 // 三个最小合法配置是错误用例的基线，每个失败测试只替换其中一条规则。
 const validSystem = `schema_version = 1
@@ -163,6 +172,7 @@ interface ConfigOverrides {
   lifeState?: string
   memory?: string
   initiative?: string
+  channels?: string
   policy?: string
 }
 
@@ -182,6 +192,13 @@ function writeConfigs(overrides: ConfigOverrides = {}): string {
     overrides.initiative ?? validInitiative,
     'utf8',
   )
+  if (overrides.channels !== undefined) {
+    writeFileSync(
+      join(dir, 'channels.toml'),
+      overrides.channels,
+      'utf8',
+    )
+  }
   writeFileSync(join(dir, 'policy.toml'), overrides.policy ?? validPolicy, 'utf8')
   return dir
 }
@@ -225,6 +242,77 @@ test('loads the checked-in example configuration', () => {
   assert.equal(config.system.vision.maxImageBytes, 5 * 1024 * 1024)
   assert.equal(config.system.vision.maxDescriptionChars, 2_000)
   assert.equal(config.system.model.reasoningEffort, 'low')
+  assert.equal(config.channels.qq.enabled, false)
+})
+
+test('missing channels file keeps external channels disabled', () => {
+  const dir = writeConfigs()
+  try {
+    const config = loadConfigFromDirectory(dir)
+    assert.equal(config.channels.qq.enabled, false)
+    assert.deepEqual(config.channels.qq.privateAllow, [])
+    assert.deepEqual(config.channels.qq.groupAllow, [])
+    assert.equal(config.channels.qq.autonomousTarget, null)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('remote QQ WebSocket endpoints require wss and a whitelisted target', () => {
+  const plain = writeConfigs({
+    channels: exampleChannels()
+      .replace('enabled = false', 'enabled = true')
+      .replace(
+        'ws_url = "ws://127.0.0.1:3001"',
+        'ws_url = "ws://napcat.example.com:3001"',
+      )
+      .replace('allow_remote = false', 'allow_remote = true'),
+  })
+  try {
+    expectIssue(
+      () => loadConfigFromDirectory(plain),
+      'qq.ws_url',
+      'channels.toml',
+    )
+  } finally {
+    rmSync(plain, { recursive: true, force: true })
+  }
+
+  const secure = writeConfigs({
+    channels: exampleChannels()
+      .replace('enabled = false', 'enabled = true')
+      .replace(
+        'ws_url = "ws://127.0.0.1:3001"',
+        'ws_url = "wss://napcat.example.com:443"',
+      )
+      .replace('allow_remote = false', 'allow_remote = true'),
+  })
+  try {
+    const config = loadConfigFromDirectory(secure)
+    assert.equal(config.channels.qq.enabled, true)
+    assert.equal(config.channels.qq.wsUrl, 'wss://napcat.example.com:443')
+  } finally {
+    rmSync(secure, { recursive: true, force: true })
+  }
+
+  const target = writeConfigs({
+    channels: exampleChannels()
+      .replace('enabled = false', 'enabled = true')
+      .replace('private_allow = []', 'private_allow = ["10001"]')
+      .replace(
+        '# autonomous_target = "private:123456789"',
+        'autonomous_target = "private:88888"',
+      ),
+  })
+  try {
+    expectIssue(
+      () => loadConfigFromDirectory(target),
+      'qq.autonomous_target',
+      'channels.toml',
+    )
+  } finally {
+    rmSync(target, { recursive: true, force: true })
+  }
 })
 
 test('maps snake_case TOML fields to typed runtime fields', () => {

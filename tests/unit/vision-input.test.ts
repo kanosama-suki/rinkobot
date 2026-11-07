@@ -11,6 +11,7 @@ import test from 'node:test'
 import {
   ChatInputError,
   EMPTY_IMAGE_MESSAGE_TEXT,
+  EMPTY_MULTI_IMAGE_MESSAGE_TEXT,
   parseChatTurnInput,
 } from '../../src/core/chat/index.ts'
 import {
@@ -143,6 +144,16 @@ test('chat input keeps string compatibility and uses an explicit image-only plac
   assert.equal(imageOnly.text, EMPTY_IMAGE_MESSAGE_TEXT)
   assert.equal(imageOnly.imageOnly, true)
   assert.equal(imageOnly.images.length, 1)
+
+  const multiImageOnly = parseChatTurnInput(
+    {
+      images: [imagePayload('image/png'), imagePayload('image/webp')],
+    },
+    { maxImages: 2 },
+  )
+  assert.equal(multiImageOnly.text, EMPTY_MULTI_IMAGE_MESSAGE_TEXT)
+  assert.equal(multiImageOnly.imageOnly, true)
+  assert.equal(multiImageOnly.images.length, 2)
 
   const captioned = parseChatTurnInput({
     text: '看看这张虚构卡片',

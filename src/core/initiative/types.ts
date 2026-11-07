@@ -209,6 +209,28 @@ export interface InitiativeServiceLike {
   tick(signal: AbortSignal): Promise<InitiativeTickResult>
 }
 
+/**
+ * 外部渠道只需声明自己支持哪些 outbox 目标，并把已经通过核心闸门的
+ * 文本送出去。核心不感知 QQ、OneBot 或平台重连细节。
+ */
+export interface ExternalOutboxDelivery {
+  supports(target: string): boolean
+  deliver(input: {
+    target: string
+    text: string
+    signal: AbortSignal
+  }): Promise<ExternalOutboxDeliveryResult>
+}
+
+export type ExternalOutboxDeliveryResult =
+  | { status: 'delivered' }
+  | {
+      status: 'not_delivered'
+      errorCode: string
+      retryable: boolean
+    }
+  | { status: 'unknown'; errorCode: string }
+
 export class InitiativeError extends Error {
   readonly code: string
 

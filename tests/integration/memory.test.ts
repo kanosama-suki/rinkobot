@@ -16,6 +16,7 @@ import {
 } from '../../src/core/memory/index.ts'
 import {
   createWorkspace,
+  dropCurrentChannelTables,
   dropCurrentInitiativeTables,
   downgradeMemoriesToV9,
 } from '../helpers/storage-fixture.ts'
@@ -250,6 +251,7 @@ test('active memory search survives restart and a v3 to v6 migration', () => {
     db.exec('DROP TABLE owner_audit')
     db.exec('DROP TABLE emergency_state')
     db.exec('DROP TABLE memory_search')
+    dropCurrentChannelTables(db)
     dropCurrentInitiativeTables(db)
     downgradeMemoriesToV9(db)
     db.exec('DROP INDEX model_calls_purpose_index')
@@ -277,7 +279,7 @@ test('active memory search survives restart and a v3 to v6 migration', () => {
       ).all() as Array<Record<string, unknown>>
       assert.deepEqual(
         versions.map(row => Number(row.version)),
-        [3, 4, 5, 6, 7, 8, 9, 10],
+        [3, 4, 5, 6, 7, 8, 9, 10, 11],
       )
     } finally {
       check.close()

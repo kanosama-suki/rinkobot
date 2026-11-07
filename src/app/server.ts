@@ -22,7 +22,12 @@ import type { AddressInfo } from 'node:net'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { KanobotChatService } from '../core/chat/index.ts'
+import {
+  ChatModelBudget,
+  KanobotChatService,
+  type ChatServiceOptions,
+} from '../core/chat/index.ts'
+import { OneBotClient, QqChannel } from '../channels/index.ts'
 import { loadConfigFromDirectory } from '../core/config/index.ts'
 import {
   InitiativeScheduler,
@@ -140,6 +145,7 @@ export async function createAppServer(
   let server: Server | undefined
   let disposeSurface: (() => void) | undefined
   let scheduler: InitiativeScheduler | undefined
+  let qqChannel: QqChannel | undefined
   let closed = false
 
   try {
@@ -156,33 +162,15 @@ export async function createAppServer(
       storage.dataDir,
       loaded.policy.emergency.stopFile,
     )
-    const initiative = new KanobotInitiativeService(
-      storage,
-      model.mode === 'mock'
-        ? new MockInitiativeBrain()
-        : new ModelInitiativeBrain({
-            model,
-            storage,
-            clock,
-            dailyModelCallLimit:
-              loaded.system.resources.dailyModelCallLimit,
-            maxConcurrentModelCalls:
-              loaded.system.resources.maxConcurrentModelCalls,
-          }),
-      {
-        config: loaded.initiative,
-        timezone: loaded.system.time.timezone,
-        quietHoursStart: loaded.system.time.quietHoursStart,
-        quietHoursEnd: loaded.system.time.quietHoursEnd,
-        emergency,
-        memory,
-        clock,
-      },
-    )
-    const chat = new KanobotChatService(storage, model, {
+    // 网页和所有 QQ 会话共享同一份并发与每日预留，避免渠道分叉后
+    // 各自维护计数器而绕过 system.toml 的资源上限。
+    const chatModelBudget = new ChatModelBudget({
       maxConcurrentModelCalls:
         loaded.system.resources.maxConcurrentModelCalls,
       dailyModelCallLimit: loaded.system.resources.dailyModelCallLimit,
+    })
+    const baseChatOptions: ChatServiceOptions = {
+      modelBudget: chatModelBudget,
       memory,
       context: loaded.system.context,
       vision: visionModel === null
@@ -203,7 +191,68 @@ export async function createAppServer(
       },
       timezone: loaded.system.time.timezone,
       clock,
-    })
+    }
+    const chat = new KanobotChatService(storage, model, baseChatOptions)
+    if (loaded.channels.qq.enabled) {
+      const qqConfig = loaded.channels.qq
+      qqChannel = new QqChannel({
+        config: qqConfig,
+        storage,
+        emergency,
+        gateway: new OneBotClient({
+          url: qqConfig.wsUrl,
+          token: resolveQqAccessToken(qqConfig),
+          connectTimeoutMs: qqConfig.connectTimeoutMs,
+          actionTimeoutMs: qqConfig.actionTimeoutMs,
+          reconnectMinMs: qqConfig.reconnectMinMs,
+          reconnectMaxMs: qqConfig.reconnectMaxMs,
+          pingIntervalMs: qqConfig.pingIntervalMs,
+          logger,
+        }),
+        createChat: conversationId =>
+          new KanobotChatService(storage as KanobotStorage, model, {
+            ...baseChatOptions,
+            conversationId,
+            vision: visionModel === null
+              ? undefined
+              : {
+                  model: visionModel,
+                  maxImageBytes: loaded.system.vision.maxImageBytes,
+                  maxDescriptionChars:
+                    loaded.system.vision.maxDescriptionChars,
+                  maxImages: qqConfig.coalesce.maxImages,
+                },
+          }),
+        maxImageBytes: loaded.system.vision.maxImageBytes,
+        logger,
+        clock,
+      })
+    }
+    const initiative = new KanobotInitiativeService(
+      storage,
+      model.mode === 'mock'
+        ? new MockInitiativeBrain()
+        : new ModelInitiativeBrain({
+            model,
+            storage,
+            clock,
+            dailyModelCallLimit:
+              loaded.system.resources.dailyModelCallLimit,
+            maxConcurrentModelCalls:
+              loaded.system.resources.maxConcurrentModelCalls,
+          }),
+      {
+        config: loaded.initiative,
+        timezone: loaded.system.time.timezone,
+        quietHoursStart: loaded.system.time.quietHoursStart,
+        quietHoursEnd: loaded.system.time.quietHoursEnd,
+        emergency,
+        memory,
+        outboxTarget: qqChannel?.outboxTarget ?? 'web:owner',
+        externalOutbox: qqChannel,
+        clock,
+      },
+    )
 
     const rawBootstrapToken = randomBytes(32).toString('base64url')
     const auth: AppAuthState = {
@@ -293,11 +342,13 @@ export async function createAppServer(
       logger,
     })
     scheduler.start()
+    qqChannel?.start()
 
     logger.info(
       `[kanobot-app] listening on ${baseUrl}${CHAT_BASE_PATH}/; ` +
         `config=${configDir}; data=${storage.dataDir}; ` +
-        `provider=${model.provider}; model=${model.id}`,
+        `provider=${model.provider}; model=${model.id}; ` +
+        `qq=${loaded.channels.qq.enabled ? 'enabled' : 'disabled'}`,
     )
     logger.info(
       `[kanobot-app] one-time login: ${baseUrl}${CHAT_BASE_PATH}/` +
@@ -317,6 +368,8 @@ export async function createAppServer(
         disposeSurface = undefined
         await scheduler?.dispose()
         scheduler = undefined
+        await qqChannel?.close()
+        qqChannel = undefined
         const activeServer = server
         server = undefined
         if (activeServer !== undefined) {
@@ -330,6 +383,8 @@ export async function createAppServer(
   } catch (error) {
     disposeSurface?.()
     await scheduler?.dispose().catch(() => {})
+    await qqChannel?.close().catch(() => {})
+    qqChannel = undefined
     if (server !== undefined) {
       await closeHttpServer(server).catch(() => {})
     }
@@ -527,6 +582,22 @@ function bundledExamplesDir(): string {
   return resolve(
     fileURLToPath(new URL('../../config/examples', import.meta.url)),
   )
+}
+
+function resolveQqAccessToken(config: {
+  accessTokenEnv: string | null
+}): string | null {
+  if (config.accessTokenEnv === null) return null
+  const token = process.env[config.accessTokenEnv]?.trim()
+  if (token === undefined || token === '') {
+    throw new Error(
+      `QQ access token environment variable "${config.accessTokenEnv}" is not set`,
+    )
+  }
+  if (token.length > 2_048 || /[\u0000-\u001f\u007f]/.test(token)) {
+    throw new Error('QQ access token contains invalid characters')
+  }
+  return token
 }
 
 function formatError(error: unknown): string {

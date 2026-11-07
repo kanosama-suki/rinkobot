@@ -12,6 +12,7 @@ import test from 'node:test'
 
 import {
   createWorkspace,
+  dropCurrentChannelTables,
   dropCurrentInitiativeTables,
   downgradeMemoriesToV9,
 } from '../helpers/storage-fixture.ts'
@@ -133,7 +134,7 @@ test('a v8 database migrates to v9 without losing chat, model calls or legacy ou
       ).all() as Array<Record<string, unknown>>
       assert.deepEqual(
         versions.map(row => Number(row.version)),
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       )
       const tables = db.prepare(
         `SELECT name FROM sqlite_master
@@ -181,7 +182,7 @@ function downgradeToV8(databasePath: string): void {
     `)
     assert.deepEqual(
       migrationVersions(db),
-      [10],
+      [11],
     )
     db.exec(`
       CREATE TABLE model_calls_v8 (
@@ -242,9 +243,10 @@ function downgradeToV8(databasePath: string): void {
     `)
     assert.deepEqual(
       migrationVersions(db),
-      [10],
+      [11],
     )
     dropCurrentInitiativeTables(db)
+    dropCurrentChannelTables(db)
     downgradeMemoriesToV9(db)
     db.exec('DELETE FROM schema_migrations')
     const migration = db.prepare(

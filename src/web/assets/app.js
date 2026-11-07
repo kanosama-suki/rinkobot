@@ -1459,6 +1459,11 @@ function auditEntryTitle(entry) {
   if (entry.source === 'model') return '模型调用'
   if (entry.source === 'style') return '回复风格检查'
   if (entry.source === 'chat') return '聊天回合'
+  if (entry.source === 'channel') {
+    return entry.channel?.direction === 'outbound'
+      ? '渠道发送'
+      : '渠道接收'
+  }
   return String(entry.kind ?? '审计事件')
 }
 
@@ -1474,6 +1479,8 @@ function auditSourceLabel(value) {
       return '风格'
     case 'chat':
       return '聊天'
+    case 'channel':
+      return '渠道'
     default:
       return '未知来源'
   }
@@ -1533,6 +1540,12 @@ function auditEntryDetail(entry) {
     return `会话 ${turn.conversationId} · 助手消息 ${entry.targetId}` +
       ` · ${turn.succeededModelCallCount}/${turn.modelCallCount} 次调用成功` +
       ` · ${style}${retry}`
+  }
+  if (entry.source === 'channel') {
+    const kind = entry.channel?.kind ?? entry.kind
+    return `渠道事件 ${kind}` +
+      (entry.targetId ? ` · 对象 ${entry.targetId}` : '') +
+      (entry.detailCode ? ` · ${entry.detailCode}` : '')
   }
   return entry.targetId === null
     ? String(entry.kind ?? '')
@@ -1604,6 +1617,8 @@ function auditOutcomeLabel(value) {
       return '失败'
     case 'aborted':
       return '已中止'
+    case 'unknown':
+      return '结果未知'
     case 'running':
       return '进行中'
     case 'info':
@@ -2776,7 +2791,7 @@ elements.auditMore.addEventListener('click', () => {
 })
 elements.auditSource.addEventListener('change', () => {
   const source = elements.auditSource.value
-  if (!['all', 'owner', 'memory', 'model', 'style', 'chat'].includes(source)) {
+  if (!['all', 'owner', 'memory', 'model', 'style', 'chat', 'channel'].includes(source)) {
     return
   }
   state.auditSource = source

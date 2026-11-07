@@ -187,6 +187,8 @@ export type ChatStreamEvent =
       type: 'vision'
       phase: 'started'
       model: VisionModelIdentity
+      index?: number
+      total?: number
     }
   | {
       type: 'delta'

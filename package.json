@@ -1,6 +1,6 @@
 {
   "name": "@kanobot/dsh-plugin",
-  "version": "0.15.1",
+  "version": "0.16.0",
   "private": true,
   "description": "Kanobot companion runtime for DSH and standalone hosting",
   "type": "module",
@@ -31,7 +31,8 @@
     "test:lifecycle": "node scripts/m1-lifecycle.ts"
   },
   "dependencies": {
-    "smol-toml": "1.9.1"
+    "smol-toml": "1.9.1",
+    "ws": "8.22.1"
   },
   "dsh": {
     "bundle": {

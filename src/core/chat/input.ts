@@ -1,9 +1,9 @@
 /**
  * 聊天输入的边界解析。
  *
- * 纯字符串输入保持向后兼容；对象形式允许附加一张图片。图片只在本轮内存
- * 中存在，持久化的用户正文仍然只有文字；没有配文时使用明确占位符，
- * 避免数据库出现空正文或把视觉转述当作用户原话。
+ * 纯字符串输入保持向后兼容；对象形式允许附加图片，数量由渠道上限控制。
+ * 图片只在本轮内存中存在，持久化的用户正文仍然只有文字；没有配文时
+ * 使用明确占位符，避免数据库出现空正文或把视觉转述当作用户原话。
  */
 
 import {
@@ -19,6 +19,7 @@ import {
 import { ChatInputError } from './types.ts'
 
 export const EMPTY_IMAGE_MESSAGE_TEXT = '（发送了一张图片）'
+export const EMPTY_MULTI_IMAGE_MESSAGE_TEXT = '（发送了多张图片）'
 
 export interface ChatTurn {
   text: string
@@ -28,6 +29,7 @@ export interface ChatTurn {
 
 export interface ChatTurnLimits {
   maxImageBytes?: number
+  maxImages?: number
 }
 
 export function parseChatTurnInput(
@@ -55,6 +57,7 @@ export function parseChatTurnInput(
   try {
     images = validateVisionImages(rawImages, {
       maxImageBytes: limits.maxImageBytes ?? DEFAULT_VISION_MAX_IMAGE_BYTES,
+      maxImages: limits.maxImages,
     })
   } catch (error) {
     if (error instanceof VisionInputError) {
@@ -70,7 +73,11 @@ export function parseChatTurnInput(
     images.length > 0 && (rawText === undefined || rawText.trim() === '')
   try {
     const text = imageOnly
-      ? normalizeChatText(EMPTY_IMAGE_MESSAGE_TEXT)
+      ? normalizeChatText(
+          images.length === 1
+            ? EMPTY_IMAGE_MESSAGE_TEXT
+            : EMPTY_MULTI_IMAGE_MESSAGE_TEXT,
+        )
       : normalizeChatText(rawText)
     return { text, images, imageOnly }
   } catch (error) {

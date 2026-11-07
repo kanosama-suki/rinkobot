@@ -1,0 +1,47 @@
+# 个人 QQ 渠道，使用外部 NapCat / OneBot 11 WebSocket 服务。
+# 本文件只保存环境变量名和白名单；真实 token 放在进程环境变量里。
+# 默认关闭。启用前请确认 NapCat 只监听本机，并为 WebSocket 配置 token。
+schema_version = 1
+
+[qq]
+enabled = false
+# forward WebSocket：kanobot 作为客户端连接 NapCat 的 OneBot WS 服务。
+ws_url = "ws://127.0.0.1:3001"
+allow_remote = false
+# 与 NapCat 的 access token 同名；留空表示对端未启用鉴权（不推荐）。
+access_token_env = "NAPCAT_ACCESS_TOKEN"
+connect_timeout_ms = 10000
+action_timeout_ms = 15000
+turn_timeout_ms = 180000
+reconnect_min_ms = 1000
+reconnect_max_ms = 60000
+ping_interval_ms = 30000
+dedupe_retention_hours = 24
+
+# 只处理这些私聊好友和群。空数组表示谁都不处理。
+private_allow = []
+group_allow = []
+group_require_mention = true
+# 主动消息和提醒的明确目标，例如 "private:123456789"。
+# 留空时继续只投递到网页。目标必须出现在上面的对应白名单里。
+# autonomous_target = "private:123456789"
+
+[qq.coalesce]
+# 连发静默窗口和绝对上限；同一会话只形成一次核心聊天调用。
+quiet_ms = 2500
+max_wait_ms = 10000
+max_images = 4
+max_total_image_bytes = 12582912
+
+[qq.images]
+download_timeout_ms = 20000
+
+[qq.outbound]
+# 一个连贯回复由适配器拆条；不能反过来按输入碎片逐条调用模型。
+split_chars = 1200
+max_parts = 4
+min_interval_ms = 350
+
+[qq.limits]
+max_inbound_turns_per_minute = 20
+max_outbound_parts_per_minute = 40

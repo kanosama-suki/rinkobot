@@ -28,7 +28,7 @@ import {
   StorageIntegrityError,
 } from './errors.ts'
 
-export const STORAGE_SCHEMA_VERSION = 10
+export const STORAGE_SCHEMA_VERSION = 11
 export const TOMBSTONE_STORE_SCHEMA_VERSION = 1
 
 type DatabaseKind = 'main' | 'tombstones'
@@ -264,6 +264,27 @@ const MAIN_REQUIRED_COLUMNS_V10: Record<string, readonly string[]> = {
     'reason_code',
     'source',
     'target_id',
+  ],
+}
+
+const MAIN_REQUIRED_COLUMNS_V11: Record<string, readonly string[]> = {
+  ...MAIN_REQUIRED_COLUMNS_V10,
+  channel_inbound: [
+    'channel',
+    'message_key',
+    'conversation_key',
+    'received_at',
+    'expires_at',
+  ],
+  channel_audit: [
+    'id',
+    'occurred_at',
+    'channel',
+    'direction',
+    'kind',
+    'outcome',
+    'target_id',
+    'detail_code',
   ],
 }
 
@@ -784,6 +805,39 @@ CREATE INDEX memory_decisions_target_index
   ON memory_decisions(target_id);
 `
 
+/**
+ * M5 外部渠道去重与审计。两张表都不保存消息正文或图片字节：
+ * channel_inbound 只用于跨重连/重启识别重复平台消息，channel_audit
+ * 只供所有者查看连接、接收、拒绝和投递结果。
+ */
+const CHANNEL_SCHEMA_V11 = `
+CREATE TABLE channel_inbound (
+  channel TEXT NOT NULL CHECK (channel IN ('qq')),
+  message_key TEXT NOT NULL,
+  conversation_key TEXT NOT NULL,
+  received_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  PRIMARY KEY (channel, message_key)
+) STRICT;
+CREATE INDEX channel_inbound_expiry_index
+  ON channel_inbound(expires_at);
+
+CREATE TABLE channel_audit (
+  id TEXT PRIMARY KEY,
+  occurred_at TEXT NOT NULL,
+  channel TEXT NOT NULL CHECK (channel IN ('qq')),
+  direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
+  kind TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN (
+    'succeeded', 'failed', 'unknown', 'info'
+  )),
+  target_id TEXT,
+  detail_code TEXT
+) STRICT;
+CREATE INDEX channel_audit_occurred_index ON channel_audit(occurred_at);
+CREATE INDEX channel_audit_outcome_index ON channel_audit(outcome, occurred_at);
+`
+
 const TOMBSTONE_SCHEMA = `
 CREATE TABLE schema_migrations (
   version INTEGER PRIMARY KEY,
@@ -906,7 +960,7 @@ function initializeDatabase(
     kind === 'main' ? STORAGE_SCHEMA_VERSION : TOMBSTONE_STORE_SCHEMA_VERSION
   const schema =
     kind === 'main'
-      ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}\n${MODEL_CALLS_SCHEMA_V3}\n${MEMORY_SEARCH_SCHEMA_V4}\n${MODEL_CALL_PURPOSE_SCHEMA_V5}\n${CONTROL_SCHEMA_V6}\n${MODEL_CALL_PURPOSE_SCHEMA_V7}\n${STYLE_RETRY_SCHEMA_V8}\n${INITIATIVE_SCHEMA_V9}\n${MEMORY_BOUNDARY_SCHEMA_V10_BASE}\n${MEMORY_BOUNDARY_INDEXES_V10}`
+      ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}\n${MODEL_CALLS_SCHEMA_V3}\n${MEMORY_SEARCH_SCHEMA_V4}\n${MODEL_CALL_PURPOSE_SCHEMA_V5}\n${CONTROL_SCHEMA_V6}\n${MODEL_CALL_PURPOSE_SCHEMA_V7}\n${STYLE_RETRY_SCHEMA_V8}\n${INITIATIVE_SCHEMA_V9}\n${MEMORY_BOUNDARY_SCHEMA_V10_BASE}\n${MEMORY_BOUNDARY_INDEXES_V10}\n${CHANNEL_SCHEMA_V11}`
       : TOMBSTONE_SCHEMA
   db.exec('BEGIN IMMEDIATE')
   try {
@@ -1027,7 +1081,7 @@ function assertSchemaCompatible(
   const latest = versions.at(-1)
   const supported =
     kind === 'main'
-      ? [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+      ? [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
       : [TOMBSTONE_STORE_SCHEMA_VERSION]
   if (
     latest === undefined ||
@@ -1059,7 +1113,9 @@ function assertSchemaCompatible(
                     ? MAIN_REQUIRED_COLUMNS_V8
                     : latest === 9
                       ? MAIN_REQUIRED_COLUMNS_V9
-                      : MAIN_REQUIRED_COLUMNS_V10
+                      : latest === 10
+                        ? MAIN_REQUIRED_COLUMNS_V10
+                        : MAIN_REQUIRED_COLUMNS_V11
   for (const [table, columns] of Object.entries(required)) {
     const tableRows = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -1211,6 +1267,23 @@ function migrateDatabaseIfNeeded(
       db.prepare(
         'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
       ).run(10, nowIso)
+    }
+    if (
+      latest === 1 ||
+      latest === 2 ||
+      latest === 3 ||
+      latest === 4 ||
+      latest === 5 ||
+      latest === 6 ||
+      latest === 7 ||
+      latest === 8 ||
+      latest === 9 ||
+      latest === 10
+    ) {
+      db.exec(CHANNEL_SCHEMA_V11)
+      db.prepare(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+      ).run(11, nowIso)
     }
     db.exec(`PRAGMA user_version = ${STORAGE_SCHEMA_VERSION}`)
     db.exec('COMMIT')

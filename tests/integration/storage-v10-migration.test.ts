@@ -14,6 +14,7 @@ import test from 'node:test'
 import { KanobotMemoryService } from '../../src/core/memory/index.ts'
 import {
   createWorkspace,
+  dropCurrentChannelTables,
   downgradeMemoriesToV9,
 } from '../helpers/storage-fixture.ts'
 
@@ -50,6 +51,7 @@ test('v9 memories migrate with explicit flag and cooling eligibility', () => {
   const db = new DatabaseSync(databasePath)
   try {
     downgradeMemoriesToV9(db)
+    dropCurrentChannelTables(db)
     db.exec('DELETE FROM schema_migrations')
     const insert = db.prepare(
       'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',

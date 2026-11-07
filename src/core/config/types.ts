@@ -193,11 +193,66 @@ export interface InitiativeConfig {
   }
 }
 
+export interface QqTargetConfig {
+  kind: 'private' | 'group'
+  id: string
+}
+
+/**
+ * QQ 只是外部 OneBot 渠道，所有平台字段都停在这个配置和渠道层。
+ * `accessTokenEnv` 只保存环境变量名，真实 token 不进入 TOML、日志或提示词。
+ */
+export interface QqChannelConfig {
+  enabled: boolean
+  wsUrl: string
+  allowRemote: boolean
+  accessTokenEnv: string | null
+  connectTimeoutMs: number
+  actionTimeoutMs: number
+  turnTimeoutMs: number
+  reconnectMinMs: number
+  reconnectMaxMs: number
+  pingIntervalMs: number
+  dedupeRetentionHours: number
+  privateAllow: string[]
+  groupAllow: string[]
+  groupRequireMention: boolean
+  coalesce: {
+    quietMs: number
+    maxWaitMs: number
+    maxImages: number
+    maxTotalImageBytes: number
+  }
+  images: {
+    downloadTimeoutMs: number
+  }
+  outbound: {
+    splitChars: number
+    maxParts: number
+    minIntervalMs: number
+  }
+  limits: {
+    maxInboundTurnsPerMinute: number
+    maxOutboundPartsPerMinute: number
+  }
+  /**
+   * 主动消息和提醒共用的明确发送目标；null 表示继续只投递到网页。
+   * 目标必须在对应白名单内，加载配置时就 fail-closed。
+   */
+  autonomousTarget: QqTargetConfig | null
+}
+
+export interface ChannelsConfig {
+  schemaVersion: 1
+  qq: QqChannelConfig
+}
+
 export interface LoadedConfig {
   system: SystemConfig
   identity: IdentityConfig
   lifeState: LifeStateConfig
   memory: MemoryConfig
   initiative: InitiativeConfig
+  channels: ChannelsConfig
   policy: PolicyConfig
 }

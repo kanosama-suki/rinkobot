@@ -14,9 +14,23 @@ export type {
   ModelImageInput,
 } from './model-catalog.ts'
 export { MockChatModel, MOCK_MODEL_ID } from './mock-model.ts'
+export {
+  ChatModelBudget,
+  DEFAULT_DAILY_MODEL_CALL_LIMIT,
+  DEFAULT_MAX_CONCURRENT_MODEL_CALLS,
+} from './budget.ts'
+export type {
+  ChatModelBudgetOptions,
+  ChatModelBudgetSnapshot,
+  ModelBudgetFailure,
+} from './budget.ts'
 export { KanobotChatService } from './service.ts'
 export type { ChatInitiativeOptions, ChatServiceOptions } from './service.ts'
-export { EMPTY_IMAGE_MESSAGE_TEXT, parseChatTurnInput } from './input.ts'
+export {
+  EMPTY_IMAGE_MESSAGE_TEXT,
+  EMPTY_MULTI_IMAGE_MESSAGE_TEXT,
+  parseChatTurnInput,
+} from './input.ts'
 export type { ChatTurn, ChatTurnLimits } from './input.ts'
 export {
   assembleChatContext,

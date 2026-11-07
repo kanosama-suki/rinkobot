@@ -16,6 +16,7 @@ import { parse } from 'smol-toml'
 import { ConfigError, ConfigFieldError } from './errors.ts'
 import type { ConfigIssue } from './errors.ts'
 import type {
+  ChannelsConfig,
   IdentityConfig,
   InitiativeConfig,
   LifeStateConfig,
@@ -23,6 +24,7 @@ import type {
   MemoryConfig,
   PolicyConfig,
   ChatProvider,
+  QqTargetConfig,
   SystemConfig,
   VisionConfig,
   VisionProvider,
@@ -57,6 +59,7 @@ const CONFIG_FILES = {
   lifeState: 'life-state.toml',
   memory: 'memory.toml',
   initiative: 'initiative.toml',
+  channels: 'channels.toml',
   policy: 'policy.toml',
 } as const
 
@@ -120,6 +123,7 @@ interface ParsedFiles {
   lifeState?: TomlTable
   memory?: TomlTable
   initiative?: TomlTable
+  channels?: TomlTable
   policy?: TomlTable
 }
 
@@ -153,6 +157,9 @@ export function loadConfigFromDirectory(configDir: string): LoadedConfig {
   // 逐文件读取，暂时保留成功解析的表；单个文件失败只记录 issue。
   for (const kind of Object.keys(CONFIG_FILES) as ConfigKind[]) {
     const file = join(configDir, CONFIG_FILES[kind])
+    // QQ 是可选渠道；没有 channels.toml 时按“渠道关闭”启动，已有 M2-M4
+    // 配置不需要为了升级先创建空文件。
+    if (kind === 'channels' && !existsSync(file)) continue
     const result = readConfigFile(file)
     if (result.issue) {
       issues.push(result.issue)
@@ -240,6 +247,20 @@ export function loadConfigFromDirectory(configDir: string): LoadedConfig {
     }
   }
 
+  let channels: ChannelsConfig | undefined
+  if (parsed.channels) {
+    try {
+      channels = validateChannels(
+        parsed.channels,
+        join(configDir, CONFIG_FILES.channels),
+      )
+    } catch (error) {
+      issues.push(toIssue(error, join(configDir, CONFIG_FILES.channels)))
+    }
+  } else {
+    channels = defaultChannelsConfig()
+  }
+
   // 缺失文件和字段错误都会走这里；错误列表为空时才算加载成功。
   if (
     issues.length > 0 ||
@@ -253,7 +274,7 @@ export function loadConfigFromDirectory(configDir: string): LoadedConfig {
     throw new ConfigError(issues)
   }
 
-  return { system, identity, lifeState, memory, initiative, policy }
+  return { system, identity, lifeState, memory, initiative, channels, policy }
 }
 
 function readConfigFile(file: string): { table?: TomlTable; issue?: ConfigIssue } {
@@ -1487,6 +1508,421 @@ function validateIdentity(
     displayName,
     ownerName,
     ...(personaFile === undefined ? {} : { personaFile }),
+  }
+}
+
+function defaultChannelsConfig(): ChannelsConfig {
+  return {
+    schemaVersion: CONFIG_SCHEMA_VERSION,
+    qq: {
+      enabled: false,
+      wsUrl: 'ws://127.0.0.1:3001',
+      allowRemote: false,
+      accessTokenEnv: null,
+      connectTimeoutMs: 10_000,
+      actionTimeoutMs: 15_000,
+      turnTimeoutMs: 180_000,
+      reconnectMinMs: 1_000,
+      reconnectMaxMs: 60_000,
+      pingIntervalMs: 30_000,
+      dedupeRetentionHours: 24,
+      privateAllow: [],
+      groupAllow: [],
+      groupRequireMention: true,
+      coalesce: {
+        quietMs: 2_500,
+        maxWaitMs: 10_000,
+        maxImages: 4,
+        maxTotalImageBytes: 12 * 1024 * 1024,
+      },
+      images: {
+        downloadTimeoutMs: 20_000,
+      },
+      outbound: {
+        splitChars: 1_200,
+        maxParts: 4,
+        minIntervalMs: 350,
+      },
+      limits: {
+        maxInboundTurnsPerMinute: 20,
+        maxOutboundPartsPerMinute: 40,
+      },
+      autonomousTarget: null,
+    },
+  }
+}
+
+function validateChannels(
+  table: TomlTable,
+  file: string,
+): ChannelsConfig {
+  knownKeys(table, ['schema_version', 'qq'], '')
+  requireSchemaVersion(table, CONFIG_SCHEMA_VERSION)
+  const qq = requiredTable(table, 'qq', 'qq')
+  knownKeys(
+    qq,
+    [
+      'enabled',
+      'ws_url',
+      'allow_remote',
+      'access_token_env',
+      'connect_timeout_ms',
+      'action_timeout_ms',
+      'turn_timeout_ms',
+      'reconnect_min_ms',
+      'reconnect_max_ms',
+      'ping_interval_ms',
+      'dedupe_retention_hours',
+      'private_allow',
+      'group_allow',
+      'group_require_mention',
+      'coalesce',
+      'images',
+      'outbound',
+      'limits',
+      'autonomous_target',
+    ],
+    'qq',
+  )
+
+  const enabled = requiredBoolean(qq, 'enabled', 'qq.enabled')
+  const wsUrl = requiredString(qq, 'ws_url', 'qq.ws_url', 1, 512)
+  const allowRemote = requiredBoolean(
+    qq,
+    'allow_remote',
+    'qq.allow_remote',
+  )
+  validateQqWebSocketUrl(wsUrl, allowRemote)
+  const accessTokenEnv = optionalString(
+    qq,
+    'access_token_env',
+    'qq.access_token_env',
+    1,
+    128,
+  )
+  if (
+    accessTokenEnv !== null &&
+    !/^[A-Za-z_][A-Za-z0-9_]*$/.test(accessTokenEnv)
+  ) {
+    fail('qq.access_token_env', 'expected an environment variable name')
+  }
+  if (!isLoopbackWebSocketUrl(wsUrl) && accessTokenEnv === null) {
+    fail(
+      'qq.access_token_env',
+      'remote WebSocket endpoints must reference an access token environment variable',
+    )
+  }
+
+  const connectTimeoutMs = requiredInteger(
+    qq,
+    'connect_timeout_ms',
+    'qq.connect_timeout_ms',
+    1_000,
+    60_000,
+  )
+  const actionTimeoutMs = requiredInteger(
+    qq,
+    'action_timeout_ms',
+    'qq.action_timeout_ms',
+    1_000,
+    120_000,
+  )
+  const turnTimeoutMs = requiredInteger(
+    qq,
+    'turn_timeout_ms',
+    'qq.turn_timeout_ms',
+    10_000,
+    600_000,
+  )
+  const reconnectMinMs = requiredInteger(
+    qq,
+    'reconnect_min_ms',
+    'qq.reconnect_min_ms',
+    500,
+    60_000,
+  )
+  const reconnectMaxMs = requiredInteger(
+    qq,
+    'reconnect_max_ms',
+    'qq.reconnect_max_ms',
+    1_000,
+    300_000,
+  )
+  if (reconnectMaxMs < reconnectMinMs) {
+    fail(
+      'qq.reconnect_max_ms',
+      'must be greater than or equal to qq.reconnect_min_ms',
+    )
+  }
+  const pingIntervalMs = requiredInteger(
+    qq,
+    'ping_interval_ms',
+    'qq.ping_interval_ms',
+    0,
+    300_000,
+  )
+  const dedupeRetentionHours = requiredInteger(
+    qq,
+    'dedupe_retention_hours',
+    'qq.dedupe_retention_hours',
+    1,
+    168,
+  )
+
+  const privateAllow = requiredStringArray(
+    qq,
+    'private_allow',
+    'qq.private_allow',
+  )
+  const groupAllow = requiredStringArray(
+    qq,
+    'group_allow',
+    'qq.group_allow',
+  )
+  for (const id of privateAllow) {
+    requireQqId(id, 'qq.private_allow')
+  }
+  for (const id of groupAllow) {
+    requireQqId(id, 'qq.group_allow')
+  }
+  const groupRequireMention = requiredBoolean(
+    qq,
+    'group_require_mention',
+    'qq.group_require_mention',
+  )
+
+  const coalesce = requiredTable(qq, 'coalesce', 'qq.coalesce')
+  knownKeys(
+    coalesce,
+    ['quiet_ms', 'max_wait_ms', 'max_images', 'max_total_image_bytes'],
+    'qq.coalesce',
+  )
+  const quietMs = requiredInteger(
+    coalesce,
+    'quiet_ms',
+    'qq.coalesce.quiet_ms',
+    200,
+    10_000,
+  )
+  const maxWaitMs = requiredInteger(
+    coalesce,
+    'max_wait_ms',
+    'qq.coalesce.max_wait_ms',
+    1_000,
+    30_000,
+  )
+  if (maxWaitMs < quietMs) {
+    fail(
+      'qq.coalesce.max_wait_ms',
+      'must be greater than or equal to qq.coalesce.quiet_ms',
+    )
+  }
+  const maxImages = requiredInteger(
+    coalesce,
+    'max_images',
+    'qq.coalesce.max_images',
+    1,
+    4,
+  )
+  const maxTotalImageBytes = requiredInteger(
+    coalesce,
+    'max_total_image_bytes',
+    'qq.coalesce.max_total_image_bytes',
+    1,
+    20 * 1024 * 1024,
+  )
+
+  const images = requiredTable(qq, 'images', 'qq.images')
+  knownKeys(images, ['download_timeout_ms'], 'qq.images')
+  const downloadTimeoutMs = requiredInteger(
+    images,
+    'download_timeout_ms',
+    'qq.images.download_timeout_ms',
+    1_000,
+    60_000,
+  )
+
+  const outbound = requiredTable(qq, 'outbound', 'qq.outbound')
+  knownKeys(
+    outbound,
+    ['split_chars', 'max_parts', 'min_interval_ms'],
+    'qq.outbound',
+  )
+  const splitChars = requiredInteger(
+    outbound,
+    'split_chars',
+    'qq.outbound.split_chars',
+    200,
+    2_000,
+  )
+  const maxParts = requiredInteger(
+    outbound,
+    'max_parts',
+    'qq.outbound.max_parts',
+    1,
+    8,
+  )
+  if (splitChars * maxParts < 4_000) {
+    fail(
+      'qq.outbound.max_parts',
+      'split_chars * max_parts must cover the 4000-character reply limit',
+    )
+  }
+  const minIntervalMs = requiredInteger(
+    outbound,
+    'min_interval_ms',
+    'qq.outbound.min_interval_ms',
+    0,
+    10_000,
+  )
+
+  const limits = requiredTable(qq, 'limits', 'qq.limits')
+  knownKeys(
+    limits,
+    ['max_inbound_turns_per_minute', 'max_outbound_parts_per_minute'],
+    'qq.limits',
+  )
+  const maxInboundTurnsPerMinute = requiredInteger(
+    limits,
+    'max_inbound_turns_per_minute',
+    'qq.limits.max_inbound_turns_per_minute',
+    1,
+    120,
+  )
+  const maxOutboundPartsPerMinute = requiredInteger(
+    limits,
+    'max_outbound_parts_per_minute',
+    'qq.limits.max_outbound_parts_per_minute',
+    1,
+    300,
+  )
+
+  const rawAutonomousTarget = optionalString(
+    qq,
+    'autonomous_target',
+    'qq.autonomous_target',
+    1,
+    64,
+  )
+  const autonomousTarget = rawAutonomousTarget === null
+    ? null
+    : parseQqTarget(rawAutonomousTarget)
+  if (autonomousTarget !== null) {
+    const allowed = autonomousTarget.kind === 'private'
+      ? privateAllow.includes(autonomousTarget.id)
+      : groupAllow.includes(autonomousTarget.id)
+    if (!allowed) {
+      fail(
+        'qq.autonomous_target',
+        'target must be present in the matching whitelist',
+      )
+    }
+    if (autonomousTarget.kind === 'group' && !groupRequireMention) {
+      fail(
+        'qq.autonomous_target',
+        'group autonomous delivery requires qq.group_require_mention = true',
+      )
+    }
+  }
+
+  return {
+    schemaVersion: CONFIG_SCHEMA_VERSION,
+    qq: {
+      enabled,
+      wsUrl,
+      allowRemote,
+      accessTokenEnv,
+      connectTimeoutMs,
+      actionTimeoutMs,
+      turnTimeoutMs,
+      reconnectMinMs,
+      reconnectMaxMs,
+      pingIntervalMs,
+      dedupeRetentionHours,
+      privateAllow,
+      groupAllow,
+      groupRequireMention,
+      coalesce: {
+        quietMs,
+        maxWaitMs,
+        maxImages,
+        maxTotalImageBytes,
+      },
+      images: {
+        downloadTimeoutMs,
+      },
+      outbound: {
+        splitChars,
+        maxParts,
+        minIntervalMs,
+      },
+      limits: {
+        maxInboundTurnsPerMinute,
+        maxOutboundPartsPerMinute,
+      },
+      autonomousTarget,
+    },
+  }
+}
+
+function validateQqWebSocketUrl(value: string, allowRemote: boolean): void {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    fail('qq.ws_url', 'expected a valid ws:// or wss:// URL')
+  }
+  if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
+    fail('qq.ws_url', 'expected a ws:// or wss:// URL')
+  }
+  if (url.username !== '' || url.password !== '') {
+    fail('qq.ws_url', 'credentials must not be embedded in the URL')
+  }
+  if (url.search !== '' || url.hash !== '') {
+    fail('qq.ws_url', 'query strings and fragments are not allowed')
+  }
+  if (url.hostname === '') {
+    fail('qq.ws_url', 'host is required')
+  }
+  if (!isLoopbackHostname(url.hostname) && url.protocol !== 'wss:') {
+    fail(
+      'qq.ws_url',
+      'remote WebSocket endpoints must use wss:// to protect the access token',
+    )
+  }
+  if (!allowRemote && !isLoopbackHostname(url.hostname)) {
+    fail(
+      'qq.ws_url',
+      'remote WebSocket hosts require qq.allow_remote = true',
+    )
+  }
+}
+
+function requireQqId(value: string, field: string): void {
+  if (!/^[1-9]\d{4,19}$/.test(value)) {
+    fail(field, 'expected a 5..20 digit QQ/group id without leading zero')
+  }
+}
+
+function isLoopbackWebSocketUrl(value: string): boolean {
+  try {
+    return isLoopbackHostname(new URL(value).hostname)
+  } catch {
+    return false
+  }
+}
+
+function parseQqTarget(value: string): QqTargetConfig {
+  const match = /^(private|group):([1-9]\d{4,19})$/.exec(value)
+  if (match === null) {
+    fail(
+      'qq.autonomous_target',
+      'expected "private:<qq>" or "group:<group>"',
+    )
+  }
+  return {
+    kind: match[1] as 'private' | 'group',
+    id: match[2],
   }
 }
 

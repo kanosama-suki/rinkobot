@@ -51,6 +51,7 @@ import {
   type ReminderCandidateView,
   type ReminderView,
   type CareItemView,
+  type ExternalOutboxDelivery,
 } from './types.ts'
 import { InitiativeError } from './types.ts'
 
@@ -61,6 +62,12 @@ export interface InitiativeServiceOptions {
   quietHoursEnd: string
   emergency: KanobotEmergencyService
   memory?: KanobotMemoryService
+  /**
+   * 主动消息和提醒的目标。默认仍是网页；QQ 启用时由宿主传入明确的
+   * `qq:private:<id>` / `qq:group:<id>`，不能在核心层写死平台字段。
+   */
+  outboxTarget?: string
+  externalOutbox?: ExternalOutboxDelivery
   clock?: Clock
   conversationId?: string
   random?: () => number
@@ -76,6 +83,8 @@ export class KanobotInitiativeService {
   private readonly quietHoursEnd: string
   private readonly emergency: KanobotEmergencyService
   private readonly memory: KanobotMemoryService | undefined
+  private readonly outboxTarget: string
+  private readonly externalOutbox: ExternalOutboxDelivery | undefined
   private readonly clock: Clock
   private readonly conversationId: string
   private readonly random: () => number
@@ -95,6 +104,15 @@ export class KanobotInitiativeService {
     this.quietHoursEnd = options.quietHoursEnd
     this.emergency = options.emergency
     this.memory = options.memory
+    this.outboxTarget = options.outboxTarget ?? 'web:owner'
+    if (
+      this.outboxTarget.length === 0 ||
+      this.outboxTarget.length > 512 ||
+      this.outboxTarget.includes('\0')
+    ) {
+      throw new RangeError('outboxTarget must be a non-empty target string')
+    }
+    this.externalOutbox = options.externalOutbox
     this.clock = options.clock ?? systemClock
     this.conversationId = options.conversationId ?? 'main'
     this.random = options.random ?? Math.random
@@ -135,9 +153,9 @@ export class KanobotInitiativeService {
 
       result.planGenerated = await this.runDailyPlan(now, signal)
       this.queueDueReminders(nowIso)
-      result.deliveredOutbox += this.processOutbox(now)
+      result.deliveredOutbox += await this.processOutbox(now, signal)
       result.proactiveSent = await this.runProactive(now, signal)
-      result.deliveredOutbox += this.processOutbox(now)
+      result.deliveredOutbox += await this.processOutbox(now, signal)
       result.reviewCompleted = await this.runDailyReview(now, signal)
       this.storage.updateInitiativeState({ lastTickAt: this.clock.now().toISOString() })
       this.recordRun('tick', 'allowed', 'tick_completed')
@@ -446,6 +464,7 @@ export class KanobotInitiativeService {
           reminder.id,
           nowIso,
           this.config.outbox.maxAttempts,
+          this.outboxTarget,
         )
         this.recordRun(
           'reminder',
@@ -464,7 +483,10 @@ export class KanobotInitiativeService {
     }
   }
 
-  private processOutbox(now: Date): number {
+  private async processOutbox(
+    now: Date,
+    signal: AbortSignal,
+  ): Promise<number> {
     const nowIso = now.toISOString()
     let delivered = 0
     for (const candidate of this.storage.listDueOutbox(nowIso, 50)) {
@@ -498,12 +520,21 @@ export class KanobotInitiativeService {
         continue
       }
       if (claimed.target !== 'web:owner') {
+        const external = this.externalOutbox
+        if (external !== undefined && external.supports(claimed.target)) {
+          delivered += await this.deliverExternalOutbox(
+            claimed,
+            external,
+            now,
+            signal,
+          )
+          continue
+        }
         try {
-          this.storage.markOutboxFailure(
+          this.storage.abandonOutbox(
             claimed.id,
             'unsupported_target',
             nowIso,
-            null,
           )
         } catch {
           // 下一次启动仍会看到这条未知目标，不能把它当成已发送。
@@ -538,6 +569,94 @@ export class KanobotInitiativeService {
       }
     }
     return delivered
+  }
+
+  private async deliverExternalOutbox(
+    claimed: OutboxRecord,
+    external: ExternalOutboxDelivery,
+    now: Date,
+    signal: AbortSignal,
+  ): Promise<number> {
+    const nowIso = now.toISOString()
+    const body = this.storage.getBody(claimed.payloadRef)
+    if (body === null) {
+      try {
+        this.storage.abandonOutbox(
+          claimed.id,
+          'payload_missing',
+          nowIso,
+        )
+      } catch {
+        // 原始缺失错误已经足以说明这条投递不可完成。
+      }
+      this.recordRun('outbox', 'failed', 'payload_missing', claimed.id)
+      return 0
+    }
+    try {
+      const result = await external.deliver({
+        target: claimed.target,
+        text: body.content,
+        signal,
+      })
+      if (result.status === 'delivered') {
+        this.storage.deliverOutbox(claimed.id, nowIso)
+        this.recordRun('outbox', 'sent', 'outbox_delivered', claimed.id)
+        if (claimed.kind === 'proactive') {
+          this.afterProactiveDelivery(nowIso)
+        }
+        return 1
+      }
+      if (result.status === 'unknown') {
+        this.storage.markOutboxUnknown(
+          claimed.id,
+          externalErrorCode(result.errorCode),
+          nowIso,
+        )
+        this.recordRun(
+          'outbox',
+          'failed',
+          externalErrorCode(result.errorCode),
+          claimed.id,
+        )
+        return 0
+      }
+      if (!result.retryable) {
+        this.storage.abandonOutbox(
+          claimed.id,
+          externalErrorCode(result.errorCode),
+          nowIso,
+        )
+      } else {
+        const retryAt = claimed.attempts < claimed.maxAttempts
+          ? new Date(
+              now.getTime() + this.config.outbox.retryBackoffMinutes * 60_000,
+            ).toISOString()
+          : null
+        this.storage.markOutboxFailure(
+          claimed.id,
+          externalErrorCode(result.errorCode),
+          nowIso,
+          retryAt,
+        )
+      }
+      this.recordRun(
+        'outbox',
+        'failed',
+        externalErrorCode(result.errorCode),
+        claimed.id,
+      )
+      return 0
+    } catch (error) {
+      // 适配器自身异常无法证明消息未发出，按结果未知处理，避免重启后重复。
+      const code = errorCode(error)
+      try {
+        this.storage.markOutboxUnknown(claimed.id, code, nowIso)
+      } catch {
+        // 投递结果已经不确定，不能再把它当成可重试状态。
+      }
+      this.recordRun('outbox', 'failed', code, claimed.id)
+      return 0
+    }
   }
 
   /**
@@ -721,7 +840,7 @@ export class KanobotInitiativeService {
         : dueCare.find(item => item.id === draft.careItemId)
       const careItemIds = matchedCare === undefined ? [] : [matchedCare.id]
       this.storage.enqueueOutbox({
-        target: 'web:owner',
+        target: this.outboxTarget,
         kind: 'proactive',
         text: draft.message,
         dueAt: nowIso,
@@ -1019,4 +1138,10 @@ function errorCode(error: unknown): string {
   }
   if (error instanceof Error && error.name === 'AbortError') return 'aborted'
   return 'initiative_failed'
+}
+
+function externalErrorCode(value: string): string {
+  return /^[a-z][a-z0-9_.-]{0,127}$/.test(value)
+    ? value
+    : 'external_delivery_failed'
 }

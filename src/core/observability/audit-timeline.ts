@@ -6,6 +6,7 @@
  */
 
 import type {
+  ChannelAuditRecord,
   ChatTurnAuditRecord,
   KanobotStorage,
   MemoryDecisionAction,
@@ -24,6 +25,7 @@ export const AUDIT_TIMELINE_SOURCES = [
   'model',
   'style',
   'chat',
+  'channel',
 ] as const
 
 export type AuditTimelineSource = typeof AUDIT_TIMELINE_SOURCES[number]
@@ -33,6 +35,7 @@ export type AuditTimelineOutcome =
   | 'failed'
   | 'aborted'
   | 'running'
+  | 'unknown'
   | 'info'
 
 export interface AuditTimelineEntry {
@@ -87,6 +90,10 @@ export interface AuditTimelineEntry {
     styleOk: boolean | null
     violationCodes: string[]
     retryCount: number | null
+  }
+  channel?: {
+    direction: 'inbound' | 'outbound'
+    kind: string
   }
 }
 
@@ -218,6 +225,20 @@ export class AuditTimelineService {
         })),
       )
     }
+    if (filter === 'all' || filter === 'channel') {
+      entries.push(
+        ...this.storage.listChannelAudit(limit).map(audit => ({
+          id: `channel:${audit.id}`,
+          source: 'channel' as const,
+          kind: audit.kind,
+          occurredAt: audit.occurredAt,
+          outcome: audit.outcome,
+          targetId: audit.targetId,
+          detailCode: audit.detailCode,
+          channel: channelEntry(audit),
+        })),
+      )
+    }
 
     return entries
       .sort(
@@ -247,6 +268,13 @@ function chatEntry(turn: ChatTurnAuditRecord) {
     styleOk: turn.styleOk,
     violationCodes: [...turn.violationCodes],
     retryCount: turn.retryCount,
+  }
+}
+
+function channelEntry(audit: ChannelAuditRecord) {
+  return {
+    direction: audit.direction,
+    kind: audit.kind,
   }
 }
 

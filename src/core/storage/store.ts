@@ -81,6 +81,8 @@ import type {
   ChatMessageInput,
   ChatMessageRecord,
   ChatTurnAuditRecord,
+  ChannelAuditRecord,
+  ChannelInboundClaimInput,
   ConfirmReminderCandidateResult,
   ConversationRecord,
   DailyPlanRecord,
@@ -118,6 +120,7 @@ import type {
   PutReminderInput,
   RecordMemoryDecisionInput,
   RecordOwnerAuditInput,
+  RecordChannelAuditInput,
   RecordInitiativeRunInput,
   ReminderCandidateRecord,
   ReminderCandidateStatus,
@@ -1211,6 +1214,140 @@ export class KanobotStorage {
     return Number(row?.count ?? 0)
   }
 
+  /**
+   * 外部渠道消息去重。调用方在进入聚合器之前先 claim；返回 false 表示
+   * 同一平台消息已经处理过，不能再触发一次核心回合。
+   */
+  claimChannelInbound(input: ChannelInboundClaimInput): boolean {
+    this.assertOpen()
+    if (input.channel !== 'qq') {
+      invalid('channelInbound.channel', 'expected "qq"')
+    }
+    const messageKey = validateChannelKey(
+      input.messageKey,
+      'channelInbound.messageKey',
+    )
+    const conversationKey = validateChannelKey(
+      input.conversationKey,
+      'channelInbound.conversationKey',
+    )
+    const receivedAt = validateInstant(
+      input.receivedAt,
+      'channelInbound.receivedAt',
+    )
+    const expiresAt = validateInstant(
+      input.expiresAt,
+      'channelInbound.expiresAt',
+    )
+    if (Date.parse(expiresAt) <= Date.parse(receivedAt)) {
+      invalid(
+        'channelInbound.expiresAt',
+        'must be later than channelInbound.receivedAt',
+      )
+    }
+    const result = this.db.prepare(
+      `INSERT INTO channel_inbound
+        (channel, message_key, conversation_key, received_at, expires_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(channel, message_key) DO NOTHING`,
+    ).run(
+      input.channel,
+      messageKey,
+      conversationKey,
+      receivedAt,
+      expiresAt,
+    )
+    return Number(result.changes) === 1
+  }
+
+  purgeExpiredChannelInbound(at: string = this.nowIso()): number {
+    this.assertOpen()
+    const cutoff = validateInstant(at, 'channelInbound.cutoff')
+    const result = this.db.prepare(
+      'DELETE FROM channel_inbound WHERE expires_at <= ?',
+    ).run(cutoff)
+    return Number(result.changes)
+  }
+
+  /**
+   * 渠道审计只保存连接/接收/投递的元数据，不保存 QQ 号以外的正文、
+   * 图片地址、昵称或 token。
+   */
+  recordChannelAudit(input: RecordChannelAuditInput): ChannelAuditRecord {
+    this.assertOpen()
+    if (input.channel !== 'qq') {
+      invalid('channelAudit.channel', 'expected "qq"')
+    }
+    if (input.direction !== 'inbound' && input.direction !== 'outbound') {
+      invalid('channelAudit.direction', 'expected "inbound" or "outbound"')
+    }
+    const kind = validateChannelAuditKind(input.kind)
+    const outcome = input.outcome ?? 'info'
+    if (
+      outcome !== 'succeeded' &&
+      outcome !== 'failed' &&
+      outcome !== 'unknown' &&
+      outcome !== 'info'
+    ) {
+      invalid('channelAudit.outcome', 'unsupported channel audit outcome')
+    }
+    const targetId = input.targetId === undefined || input.targetId === null
+      ? null
+      : validateChannelKey(input.targetId, 'channelAudit.targetId')
+    const detailCode = input.detailCode === undefined ||
+        input.detailCode === null
+      ? null
+      : validateReasonCode(input.detailCode, 'channelAudit.detailCode')
+    const occurredAt = validateInstant(
+      input.occurredAt ?? this.nowIso(),
+      'channelAudit.occurredAt',
+    )
+    const id = validateIdentifier(
+      input.id ?? `channel-audit-${randomUUID()}`,
+      'channelAudit.id',
+    )
+    try {
+      this.db.prepare(
+        `INSERT INTO channel_audit
+          (id, occurred_at, channel, direction, kind, outcome, target_id,
+           detail_code)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        occurredAt,
+        input.channel,
+        input.direction,
+        kind,
+        outcome,
+        targetId,
+        detailCode,
+      )
+    } catch (error) {
+      throw mapInsertError(error, 'channel audit', id)
+    }
+    return {
+      id,
+      occurredAt,
+      channel: input.channel,
+      direction: input.direction,
+      kind,
+      outcome,
+      targetId,
+      detailCode,
+    }
+  }
+
+  listChannelAudit(limit = 50): ChannelAuditRecord[] {
+    this.assertOpen()
+    assertAuditLimit(limit, 'channel audit')
+    const rows = this.db.prepare(
+      `SELECT * FROM channel_audit
+       ORDER BY occurred_at DESC, id DESC
+       LIMIT ?`,
+    ).all(limit) as Array<Record<string, unknown>>
+    return rows.map(channelAuditFromRow)
+  }
+
   getEmergencyState(): EmergencyStateRecord {
     this.assertOpen()
     const row = this.db.prepare(
@@ -2169,11 +2306,20 @@ export class KanobotStorage {
     id: string,
     at: string = this.nowIso(),
     maxAttempts = 5,
+    target = 'web:owner',
   ): OutboxRecord {
     this.assertOpen()
     const reminderId = validateIdentifier(id, 'reminder.id')
     const createdAt = validateInstant(at, 'reminder.queueAt')
     validatePositiveInteger(maxAttempts, 'outbox.maxAttempts')
+    if (
+      typeof target !== 'string' ||
+      target.length === 0 ||
+      target.length > 512 ||
+      target.includes('\0')
+    ) {
+      invalid('outbox.target', 'expected 1..512 characters without NUL')
+    }
     const outboxId = `outbox-reminder-${randomUUID()}`
     this.inTransaction(() => {
       const reminder = this.getReminder(reminderId)
@@ -2194,10 +2340,11 @@ export class KanobotStorage {
           (id, target, payload_ref, kind, status, due_at, created_at,
            updated_at, attempts, max_attempts, last_error_code,
            delivered_message_id)
-         VALUES (?, 'web:owner', ?, 'reminder', 'pending', ?, ?, ?,
+         VALUES (?, ?, ?, 'reminder', 'pending', ?, ?, ?,
                  0, ?, NULL, NULL)`,
       ).run(
         outboxId,
+        target,
         reminder.bodyRef,
         createdAt,
         createdAt,
@@ -2715,6 +2862,40 @@ export class KanobotStorage {
         `outbox "${outboxId}" is not sending`,
       )
     }
+    return this.requireOutbox(outboxId)
+  }
+
+  /**
+   * 明确不可重试的失败（例如目标未配置、正文已缺失）直接把 attempts
+   * 推到上限并释放依赖项，避免调度器每分钟重复撞同一堵墙。
+   */
+  abandonOutbox(
+    id: string,
+    errorCode: string,
+    at: string = this.nowIso(),
+  ): OutboxRecord {
+    this.assertOpen()
+    const outboxId = validateIdentifier(id, 'outbox.id')
+    const code = validateReasonCode(errorCode, 'outbox.errorCode')
+    const updatedAt = validateInstant(at, 'outbox.updatedAt')
+    this.inTransaction(() => {
+      const result = this.db.prepare(
+        `UPDATE outbox
+         SET status = 'failed', last_error_code = ?, updated_at = ?,
+             attempts = max_attempts, due_at = NULL
+         WHERE id = ? AND status = 'sending'`,
+      ).run(code, updatedAt, outboxId)
+      if (Number(result.changes) !== 1) {
+        throw new StorageError(
+          'RECORD_INVALID',
+          `outbox "${outboxId}" is not sending`,
+        )
+      }
+      this.releaseUndeliveredDependents(
+        this.requireOutbox(outboxId),
+        updatedAt,
+      )
+    })
     return this.requireOutbox(outboxId)
   }
 
@@ -4600,6 +4781,46 @@ function ownerAuditFromRow(row: Record<string, unknown>): OwnerAuditRecord {
   }
 }
 
+function channelAuditFromRow(
+  row: Record<string, unknown>,
+): ChannelAuditRecord {
+  if (
+    typeof row.id !== 'string' ||
+    typeof row.occurred_at !== 'string' ||
+    (row.channel !== 'qq') ||
+    (row.direction !== 'inbound' && row.direction !== 'outbound') ||
+    typeof row.kind !== 'string' ||
+    (row.outcome !== 'succeeded' &&
+      row.outcome !== 'failed' &&
+      row.outcome !== 'unknown' &&
+      row.outcome !== 'info') ||
+    (row.target_id !== null && typeof row.target_id !== 'string') ||
+    (row.detail_code !== null && typeof row.detail_code !== 'string')
+  ) {
+    throw new StorageIntegrityError(
+      'channel audit row has invalid column types',
+      ':channel_audit:',
+    )
+  }
+  return {
+    id: validateIdentifier(row.id, 'channelAudit.id'),
+    occurredAt: validateInstant(
+      row.occurred_at,
+      'channelAudit.occurredAt',
+    ),
+    channel: 'qq',
+    direction: row.direction,
+    kind: validateChannelAuditKind(row.kind),
+    outcome: row.outcome,
+    targetId: row.target_id === null
+      ? null
+      : validateChannelKey(row.target_id, 'channelAudit.targetId'),
+    detailCode: row.detail_code === null
+      ? null
+      : validateReasonCode(row.detail_code, 'channelAudit.detailCode'),
+  }
+}
+
 function mapInsertError(error: unknown, kind: string, id: string): StorageError {
   if (messageOf(error).includes('UNIQUE constraint failed')) {
     return new StorageError('DUPLICATE_ID', `${kind} "${id}" already exists`, {
@@ -4611,6 +4832,28 @@ function mapInsertError(error: unknown, kind: string, id: string): StorageError 
     `cannot insert ${kind} "${id}": ${messageOf(error)}`,
     { cause: error },
   )
+}
+
+function validateChannelKey(value: unknown, field: string): string {
+  if (
+    typeof value !== 'string' ||
+    value.length < 1 ||
+    value.length > 256 ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    invalid(field, 'expected 1..256 printable characters')
+  }
+  return value
+}
+
+function validateChannelAuditKind(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    !/^[a-z][a-z0-9_.-]{0,63}$/.test(value)
+  ) {
+    invalid('channelAudit.kind', 'expected a lowercase audit kind')
+  }
+  return value
 }
 
 function validateModelLabel(value: unknown, field: string): string {

@@ -834,7 +834,7 @@ async function handleAuditRequest(
       res,
       400,
       'invalid_source',
-      'source 只能是 all、owner、memory、model、style 或 chat',
+      'source 只能是 all、owner、memory、model、style、chat 或 channel',
       true,
     )
     return

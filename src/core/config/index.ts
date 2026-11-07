@@ -12,6 +12,7 @@ export {
 } from './loader.ts'
 export type {
   ChatProvider,
+  ChannelsConfig,
   Environment,
   IdentityConfig,
   IdentityMode,
@@ -20,6 +21,8 @@ export type {
   LoadedConfig,
   MemoryConfig,
   PolicyConfig,
+  QqChannelConfig,
+  QqTargetConfig,
   SystemConfig,
   VisionConfig,
   VisionProvider,

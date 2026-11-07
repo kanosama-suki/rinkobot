@@ -56,6 +56,14 @@ export function dropCurrentInitiativeTables(db: DatabaseSync): void {
   `)
 }
 
+/** 把当前 v11 库还原成 v10 形状时，先移除 M5 才出现的渠道表。 */
+export function dropCurrentChannelTables(db: DatabaseSync): void {
+  db.exec(`
+    DROP TABLE IF EXISTS channel_audit;
+    DROP TABLE IF EXISTS channel_inbound;
+  `)
+}
+
 /**
  * 把当前 v10 的记忆表还原成 v9 形状，供迁移测试从真实旧结构重放。
  * 只在测试夹具里使用；生产迁移永远只向前走。

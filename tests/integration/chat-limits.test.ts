@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  ChatModelBudget,
   ChatInputError,
   KanobotChatService,
   type ChatModel,
@@ -72,6 +73,49 @@ test('the concurrency limit rejects a second in-flight call and audits the abort
     await assert.rejects(iterator.next(), /aborted/)
     assert.equal(store.chatMessageCount(), 1)
     assert.equal(store.latestModelCall()?.status, 'aborted')
+  } finally {
+    store.close()
+  }
+})
+
+test('separate web and QQ chat services share one concurrency budget', async () => {
+  const ws = createWorkspace(test)
+  const store = ws.open()
+  const controller = new AbortController()
+  try {
+    const budget = new ChatModelBudget({
+      dailyModelCallLimit: 10,
+      maxConcurrentModelCalls: 1,
+    })
+    const web = new KanobotChatService(store, new BlockingChatModel(), {
+      modelBudget: budget,
+    })
+    const qq = new KanobotChatService(
+      store,
+      new ImmediateChatModel(),
+      {
+        conversationId: 'qq-private-10001',
+        modelBudget: budget,
+      },
+    )
+
+    const iterator = web
+      .streamMessage('网页正在处理的虚构消息', controller.signal)
+      [Symbol.asyncIterator]()
+    assert.equal((await iterator.next()).value?.type, 'ready')
+    assert.equal((await iterator.next()).value?.type, 'delta')
+
+    await assert.rejects(
+      collect(qq, 'QQ 不应该获得第二个并发槽'),
+      (error: unknown) =>
+        error instanceof ChatInputError &&
+        error.code === 'model_capacity_reached',
+    )
+
+    controller.abort()
+    await assert.rejects(iterator.next(), /aborted/)
+    assert.equal(budget.snapshot().activeModelCalls, 0)
+    assert.equal(budget.snapshot().reservedModelCalls, 0)
   } finally {
     store.close()
   }

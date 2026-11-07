@@ -1,8 +1,9 @@
 /**
  * 图片请求的严格输入校验。
  *
- * 只接受单张 PNG/JPEG/WebP 的规范 base64。这里同时检查解码后的字节数、
- * 规范编码和文件魔数，避免把任意二进制或伪装 MIME 的内容送进模型。
+ * 只接受 PNG/JPEG/WebP 的规范 base64；数量由调用方上限控制。这里同时
+ * 检查解码后的字节数、规范编码和文件魔数，避免把任意二进制或伪装 MIME
+ * 的内容送进模型。
  */
 
 import {
@@ -18,6 +19,8 @@ const BASE64 =
 
 export interface VisionInputLimits {
   maxImageBytes: number
+  /** 默认沿用 M3 的单图上限；M5 渠道可显式抬高到 4。 */
+  maxImages?: number
 }
 
 export function validateVisionImages(
@@ -36,11 +39,14 @@ export function validateVisionImages(
     throw new VisionInputError('invalid_images', 'images 必须是数组')
   }
   if (value.length === 0) return []
-  if (value.length > MAX_VISION_IMAGES) {
-    // 第一版只允许一张，避免视觉费用和上下文长度不可控。
+  const maxImages = limits.maxImages ?? MAX_VISION_IMAGES
+  if (!Number.isInteger(maxImages) || maxImages < 1 || maxImages > 4) {
+    throw new RangeError('maxImages must be an integer between 1 and 4')
+  }
+  if (value.length > maxImages) {
     throw new VisionInputError(
       'too_many_images',
-      `每条消息最多附加 ${MAX_VISION_IMAGES} 张图片`,
+      `每条消息最多附加 ${maxImages} 张图片`,
     )
   }
   return value.map((item, index) => validateImage(item, index, limits))
