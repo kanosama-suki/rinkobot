@@ -12,11 +12,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
 
 import type {
-  ChatInputError,
   ChatStreamEvent,
   ConversationView,
   KanobotChatService,
 } from '../core/chat/index.ts'
+import { ChatInputError } from '../core/chat/index.ts'
 import {
   MemoryInputError,
   type KanobotMemoryService,
@@ -242,6 +242,27 @@ async function handleRequest(
     return
   }
 
+  if (pathname.startsWith(`${CHAT_BASE_PATH}/api/conversations/`)) {
+    if (req.method !== 'PUT') {
+      writeMethodNotAllowed(res, ['PUT'], true)
+      return
+    }
+    const conversationId = pathname.slice(
+      `${CHAT_BASE_PATH}/api/conversations/`.length,
+    )
+    if (!CONVERSATION_ID_PATTERN.test(conversationId)) {
+      writeError(res, 400, 'invalid_conversation', '会话 ID 不合法', true)
+      return
+    }
+    await handleConversationRename(
+      req,
+      res,
+      conversationId,
+      options,
+    )
+    return
+  }
+
   if (pathname === `${CHAT_BASE_PATH}/api/timeline`) {
     if (req.method !== 'GET') {
       writeMethodNotAllowed(res, ['GET'], true)
@@ -351,6 +372,55 @@ async function handleRequest(
   }
 
   writeError(res, 404, 'not_found', '接口不存在', api)
+}
+
+async function handleConversationRename(
+  req: IncomingMessage,
+  res: ServerResponse,
+  conversationId: string,
+  options: ChatSurfaceOptions,
+): Promise<void> {
+  try {
+    const body = await readJsonBody(req)
+    if (
+      typeof body !== 'object' ||
+      body === null ||
+      Array.isArray(body) ||
+      !Object.hasOwn(body, 'displayName') ||
+      Object.keys(body).some(key => key !== 'displayName')
+    ) {
+      throw new RequestError(
+        400,
+        'invalid_body',
+        '请求体只能包含 displayName 字段',
+      )
+    }
+    writeJson(
+      res,
+      200,
+      options.chat.renameConversation(
+        conversationId,
+        (body as Record<string, unknown>).displayName,
+      ),
+    )
+  } catch (error) {
+    if (error instanceof ChatInputError) {
+      const status =
+        error.code === 'conversation_not_found'
+          ? 404
+          : error.code === 'owner_conversation_immutable'
+            ? 409
+            : 400
+      writeError(res, status, error.code, error.message, true)
+      return
+    }
+    if (error instanceof RequestError) {
+      writeError(res, error.status, error.code, error.message, true)
+      return
+    }
+    options.logger.error?.('[kanobot] conversation rename failed')
+    writeError(res, 500, 'internal_error', '会话名称保存失败', true)
+  }
 }
 
 async function handleModelSettingsRequest(

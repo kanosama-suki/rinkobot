@@ -26,6 +26,7 @@ export type {
 } from './budget.ts'
 export { KanobotChatService } from './service.ts'
 export type { ChatInitiativeOptions, ChatServiceOptions } from './service.ts'
+export { mergeOwnerConversationHistory } from './owner-history.ts'
 export {
   EMPTY_IMAGE_MESSAGE_TEXT,
   EMPTY_MULTI_IMAGE_MESSAGE_TEXT,

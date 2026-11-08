@@ -119,6 +119,10 @@ export interface QqChannelStatusView {
   label: string
   configured: boolean
   enabled: boolean
+  /** 只有显式 owner_qq 才允许 QQ 私聊进入网页 main。 */
+  ownerQqConfigured: boolean
+  /** 磁盘配置里是否已有 owner_qq；用于区分“未设置”和“已保存待重启”。 */
+  ownerQqSaved: boolean
   selfId: string | null
 }
 
@@ -130,6 +134,8 @@ export interface QqConnectionTestResult {
 
 export interface QqRuntimeSnapshot {
   enabled: boolean
+  /** 当前已启动运行时实际采用的 owner_qq；保存后重启前仍保持旧值。 */
+  ownerQqConfigured: boolean
   connection: QqGatewayState | null
 }
 
@@ -167,7 +173,12 @@ export class ChannelSettingsService {
     this.secretStore =
       options.secretStore ?? new LocalSecretStore(options.configDir)
     this.runtimeStatus =
-      options.runtimeStatus ?? (() => ({ enabled: false, connection: null }))
+      options.runtimeStatus ??
+      (() => ({
+        enabled: false,
+        ownerQqConfigured: false,
+        connection: null,
+      }))
     this.testConnection = options.testConnection ?? testOneBotConnection
   }
 
@@ -208,12 +219,16 @@ export class ChannelSettingsService {
     const runtime = this.runtimeStatus()
     const connection = runtime.connection
     const selfId = connection?.selfId ?? null
+    const ownerQqConfigured = runtime.ownerQqConfigured
+    const ownerQqSaved = this.loaded.channels.qq.ownerQqId !== null
     if (!configured) {
       return {
         state: 'disabled',
         label: 'QQ 未配置',
         configured: false,
         enabled: false,
+        ownerQqConfigured,
+        ownerQqSaved,
         selfId: null,
       }
     }
@@ -223,6 +238,8 @@ export class ChannelSettingsService {
         label: 'QQ 未启用',
         configured: true,
         enabled: false,
+        ownerQqConfigured,
+        ownerQqSaved,
         selfId: null,
       }
     }
@@ -232,6 +249,8 @@ export class ChannelSettingsService {
         label: 'QQ 连接中',
         configured: true,
         enabled: true,
+        ownerQqConfigured,
+        ownerQqSaved,
         selfId: null,
       }
     }
@@ -241,6 +260,8 @@ export class ChannelSettingsService {
         label: 'QQ 重连中',
         configured: true,
         enabled: true,
+        ownerQqConfigured,
+        ownerQqSaved,
         selfId,
       }
     }
@@ -251,6 +272,8 @@ export class ChannelSettingsService {
         label: stopped ? 'QQ 已停止' : 'QQ 连接错误',
         configured: true,
         enabled: true,
+        ownerQqConfigured,
+        ownerQqSaved,
         selfId,
       }
     }
@@ -260,6 +283,8 @@ export class ChannelSettingsService {
         label: 'QQ 连接中',
         configured: true,
         enabled: true,
+        ownerQqConfigured,
+        ownerQqSaved,
         selfId,
       }
     }
@@ -270,6 +295,8 @@ export class ChannelSettingsService {
         label: loginFailed ? 'QQ 登录信息读取失败' : 'QQ 登录确认中',
         configured: true,
         enabled: true,
+        ownerQqConfigured,
+        ownerQqSaved,
         selfId: null,
       }
     }
@@ -278,6 +305,8 @@ export class ChannelSettingsService {
       label: `QQ 已连接 · ${selfId}`,
       configured: true,
       enabled: true,
+      ownerQqConfigured,
+      ownerQqSaved,
       selfId,
     }
   }

@@ -56,6 +56,28 @@
                   <option value="">全部来源</option>
                 </select>
               </label>
+              <div id="archive-rename" class="archive-rename" hidden>
+                <label class="archive-filter" for="archive-rename-input">
+                  名称
+                  <input
+                    id="archive-rename-input"
+                    type="text"
+                    maxlength="60"
+                    autocomplete="off"
+                    spellcheck="false"
+                  >
+                </label>
+                <button
+                  id="archive-rename-save"
+                  class="small-button"
+                  type="button"
+                >保存</button>
+                <button
+                  id="archive-rename-reset"
+                  class="small-button"
+                  type="button"
+                >默认</button>
+              </div>
               <button id="archive-refresh" class="small-button" type="button">
                 刷新
               </button>
@@ -64,16 +86,24 @@
           <p id="chat-context-note" class="chat-context-note">
             这里是你和她的共享会话；指定所有者 QQ 的私聊也会进入这里。
           </p>
+          <p
+            id="owner-qq-warning"
+            class="chat-context-warning"
+            role="status"
+            hidden
+          ></p>
           <div id="notice" class="notice" role="alert" hidden></div>
           <p id="vision-status" class="vision-status" role="status" hidden></p>
           <div id="empty-state" class="empty-state" hidden>
             <p>这里还没有消息。</p>
             <span id="empty-note">这是占位人格；发送消息后才会调用配置的模型路由。</span>
           </div>
-          <button id="history-more" class="history-more" type="button" hidden>
-            加载更早的消息
-          </button>
-          <div id="messages" class="messages" role="log" aria-live="polite"></div>
+          <div class="messages-shell">
+            <button id="history-more" class="history-more" type="button" hidden>
+              加载更早的消息
+            </button>
+            <div id="messages" class="messages" role="log" aria-live="polite"></div>
+          </div>
           <form id="composer" class="composer">
             <div class="composer-entry">
               <div id="image-preview" class="image-preview" hidden>

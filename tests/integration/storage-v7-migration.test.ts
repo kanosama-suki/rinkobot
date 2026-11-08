@@ -106,7 +106,7 @@ test('a v6 model_calls table migrates to v7 without losing history', () => {
       ).all() as Array<Record<string, unknown>>
       assert.deepEqual(
         versions.map(row => Number(row.version)),
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
       )
       const ddl = db.prepare(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'model_calls'",

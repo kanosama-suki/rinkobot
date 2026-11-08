@@ -29,7 +29,12 @@ import { fileURLToPath } from 'node:url'
 
 import { createAppServer } from '../../src/app/index.ts'
 import type { ChatStreamEvent } from '../../src/core/chat/index.ts'
-import { STORAGE_SCHEMA_VERSION } from '../../src/core/storage/index.ts'
+import { loadConfigFromDirectory } from '../../src/core/config/index.ts'
+import {
+  KanobotStorage,
+  STORAGE_SCHEMA_VERSION,
+} from '../../src/core/storage/index.ts'
+import { systemClock } from '../../src/core/state/index.ts'
 import type { ModelSettingsView } from '../../src/settings/index.ts'
 
 const examplesDir = fileURLToPath(
@@ -82,6 +87,8 @@ test('the standalone app authenticates, persists, and releases its port', async 
     assert.match(pageText, /id="chat-view-owner"/)
     assert.match(pageText, /id="chat-view-archive"/)
     assert.match(pageText, /id="archive-conversation"/)
+    assert.match(pageText, /id="archive-rename-input"/)
+    assert.match(pageText, /id="owner-qq-warning"/)
     assert.match(pageText, /id="history-more"/)
     assert.match(pageText, /id="channel-owner-qq"/)
 
@@ -238,6 +245,84 @@ test('the standalone app rejects missing directories, shared directories, and un
     /host does not expose ctx\.llm/,
   )
   assert.equal(existsSync(unavailableDataDir), false)
+})
+
+test('the standalone app merges pre-existing owner QQ history on startup', async t => {
+  const layout = createLayout(t)
+  configureChatModel(layout.configDir, 'mock')
+  disableInitiative(layout.configDir)
+
+  const beforeOwner = loadConfigFromDirectory(layout.configDir)
+  const store = KanobotStorage.openFromConfig(
+    beforeOwner,
+    layout.dataDir,
+    systemClock,
+  )
+  try {
+    store.appendChatMessage({
+      conversationId: 'main',
+      role: 'user',
+      text: '网页主会话的虚构消息。',
+      id: 'startup-main',
+      createdAt: '2026-11-08T01:00:00.000Z',
+    })
+    store.appendChatMessage({
+      conversationId: 'qq-private-10001',
+      role: 'user',
+      text: '配置所有者之前的私聊虚构消息。',
+      id: 'startup-owner-private',
+      createdAt: '2026-11-08T02:00:00.000Z',
+    })
+  } finally {
+    store.close()
+  }
+  configureOwnerQq(layout.configDir, '10001')
+
+  const app = await createAppServer({
+    configDir: layout.configDir,
+    dataDir: layout.dataDir,
+    port: 0,
+    logger: { info(): void {}, error(): void {} },
+  })
+  try {
+    const cookie = await login(app.bootstrapUrl)
+    const conversation = await fetch(
+      `${app.baseUrl}/kanobot/api/conversation`,
+      { headers: { cookie } },
+    )
+    assert.equal(conversation.status, 200)
+    const body = await conversation.json() as {
+      messages: Array<{ id: string; conversationId: string }>
+    }
+    assert.deepEqual(
+      body.messages.map(message => message.id),
+      ['startup-main', 'startup-owner-private'],
+    )
+    assert.ok(
+      body.messages.every(message => message.conversationId === 'main'),
+    )
+
+    const directory = await fetch(
+      `${app.baseUrl}/kanobot/api/conversations`,
+      { headers: { cookie } },
+    )
+    const directoryBody = await directory.json() as {
+      conversations: Array<{ conversationId: string; messageCount: number }>
+    }
+    assert.equal(
+      directoryBody.conversations.some(
+        item => item.conversationId === 'qq-private-10001',
+      ),
+      false,
+    )
+    assert.equal(
+      directoryBody.conversations.find(item => item.conversationId === 'main')
+        ?.messageCount,
+      2,
+    )
+  } finally {
+    await app.close()
+  }
 })
 
 test('switching chat provider preserves identity, conversation, memory, and state', async t => {
@@ -417,6 +502,19 @@ function configureOpenAiCompatible(
     `${source.slice(0, start)}${section}\n${source.slice(end)}`,
     'utf8',
   )
+}
+
+function configureOwnerQq(configDir: string, ownerQqId: string): void {
+  const path = join(configDir, 'channels.toml')
+  const source = readFileSync(path, 'utf8')
+  const updated = source
+    .replace('private_allow = []', `private_allow = ["${ownerQqId}"]`)
+    .replace(
+      '# owner_qq = "123456789"',
+      `owner_qq = "${ownerQqId}"`,
+    )
+  assert.notEqual(updated, source)
+  writeFileSync(path, updated, 'utf8')
 }
 
 function disableInitiative(configDir: string): void {

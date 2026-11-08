@@ -155,6 +155,8 @@ export interface ConversationSummaryView {
   conversationId: string
   conversationKind: ConversationKind
   conversationLabel: string
+  /** null 表示使用 conversationId 作为默认标签。 */
+  displayName: string | null
   messageCount: number
   lastSequence: number
   createdAt: string

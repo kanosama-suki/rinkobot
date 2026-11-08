@@ -201,7 +201,7 @@ test('conversation pages and the cross-conversation timeline use stable cursors'
     )
     assert.equal(
       timeline.messages.at(-1)?.conversationLabel,
-      'QQ 私聊 · 40004',
+      'qq-private-40004',
     )
 
     const directoryResponse = await fetch(
@@ -255,6 +255,173 @@ test('conversation APIs reject malformed limits, cursors, and conversation ids',
       const body = await response.json() as { error: { code: string } }
       assert.equal(body.error.code, code, path)
     }
+  } finally {
+    await harness.close()
+  }
+})
+
+test('conversation display names are editable without changing stable ids', async () => {
+  const harness = await createHarness()
+  try {
+    harness.store.appendChatMessage({
+      conversationId: 'main',
+      role: 'user',
+      text: '所有者虚构消息。',
+      id: 'display-main',
+    })
+    harness.store.appendChatMessage({
+      conversationId: 'qq-private-40004',
+      role: 'user',
+      text: '私聊虚构消息。',
+      id: 'display-private',
+    })
+    harness.store.appendChatMessage({
+      conversationId: 'qq-group-20002',
+      role: 'user',
+      text: '群聊虚构消息。',
+      id: 'display-group',
+    })
+
+    const initialDirectory = await fetch(
+      `${harness.baseUrl}/kanobot/api/conversations`,
+      { headers: authHeaders() },
+    )
+    const initial = await initialDirectory.json() as {
+      conversations: Array<{
+        conversationId: string
+        conversationLabel: string
+        displayName: string | null
+      }>
+    }
+    assert.equal(
+      initial.conversations.find(
+        item => item.conversationId === 'qq-private-40004',
+      )?.conversationLabel,
+      'qq-private-40004',
+    )
+    assert.equal(
+      initial.conversations.find(
+        item => item.conversationId === 'qq-group-20002',
+      )?.conversationLabel,
+      'qq-group-20002',
+    )
+
+    const rename = await fetch(
+      `${harness.baseUrl}/kanobot/api/conversations/qq-private-40004`,
+      {
+        method: 'PUT',
+        headers: {
+          ...authHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ displayName: '  夜间私聊  ' }),
+      },
+    )
+    assert.equal(rename.status, 200)
+    const renamed = await rename.json() as {
+      conversationId: string
+      conversationLabel: string
+      displayName: string | null
+      messageCount: number
+    }
+    assert.equal(renamed.conversationId, 'qq-private-40004')
+    assert.equal(renamed.displayName, '夜间私聊')
+    assert.equal(renamed.conversationLabel, '夜间私聊')
+    assert.equal(renamed.messageCount, 1)
+
+    const timelineResponse = await fetch(
+      `${harness.baseUrl}/kanobot/api/timeline?conversationId=qq-private-40004`,
+      { headers: authHeaders() },
+    )
+    const timeline = await timelineResponse.json() as {
+      messages: Array<{
+        conversationId: string
+        conversationLabel: string
+      }>
+    }
+    assert.equal(timeline.messages[0]?.conversationId, 'qq-private-40004')
+    assert.equal(timeline.messages[0]?.conversationLabel, '夜间私聊')
+
+    const reset = await fetch(
+      `${harness.baseUrl}/kanobot/api/conversations/qq-private-40004`,
+      {
+        method: 'PUT',
+        headers: {
+          ...authHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ displayName: null }),
+      },
+    )
+    assert.equal(reset.status, 200)
+    const restored = await reset.json() as {
+      conversationLabel: string
+      displayName: string | null
+    }
+    assert.equal(restored.displayName, null)
+    assert.equal(restored.conversationLabel, 'qq-private-40004')
+
+    const rejected = [
+      {
+        path: '/kanobot/api/conversations/main',
+        status: 409,
+        code: 'owner_conversation_immutable',
+        body: { displayName: '不能改名' },
+      },
+      {
+        path: '/kanobot/api/conversations/qq-private-99999',
+        status: 404,
+        code: 'conversation_not_found',
+        body: { displayName: '不存在' },
+      },
+      {
+        path: '/kanobot/api/conversations/qq-private-40004',
+        status: 400,
+        code: 'invalid_display_name',
+        body: { displayName: '换\n行' },
+      },
+      {
+        path: '/kanobot/api/conversations/qq-private-40004',
+        status: 400,
+        code: 'invalid_display_name',
+        body: { displayName: '名'.repeat(61) },
+      },
+      {
+        path: '/kanobot/api/conversations/qq-private-40004',
+        status: 400,
+        code: 'invalid_body',
+        body: { displayName: '合法', extra: true },
+      },
+      {
+        path: '/kanobot/api/conversations/bad%2Fid',
+        status: 400,
+        code: 'invalid_conversation',
+        body: { displayName: '非法 ID' },
+      },
+    ] as const
+    for (const item of rejected) {
+      const response = await fetch(`${harness.baseUrl}${item.path}`, {
+        method: 'PUT',
+        headers: {
+          ...authHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(item.body),
+      })
+      assert.equal(response.status, item.status, item.path)
+      const error = await response.json() as { error: { code: string } }
+      assert.equal(error.error.code, item.code, item.path)
+    }
+
+    const unauthenticated = await fetch(
+      `${harness.baseUrl}/kanobot/api/conversations/qq-private-40004`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ displayName: '未认证' }),
+      },
+    )
+    assert.equal(unauthenticated.status, 401)
   } finally {
     await harness.close()
   }

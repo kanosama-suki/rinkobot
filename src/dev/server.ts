@@ -149,7 +149,11 @@ export async function createDevServer(
     loaded,
     secretStore: new LocalSecretStore(configDir),
     readOnly,
-    runtimeStatus: () => ({ enabled: false, connection: null }),
+    runtimeStatus: () => ({
+      enabled: false,
+      ownerQqConfigured: false,
+      connection: null,
+    }),
   })
 
   let storage: KanobotStorage | undefined

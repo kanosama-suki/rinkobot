@@ -16,6 +16,7 @@ import {
   CHAT_CONVERSATION_ID,
   ChatModelBudget,
   KanobotChatService,
+  mergeOwnerConversationHistory,
   type ChatServiceOptions,
 } from '../core/chat/index.ts'
 import {
@@ -146,8 +147,15 @@ export async function apply(
     })
     // 数据库损坏、schema 不兼容或路径逃逸都会在这里阻止插件继续激活。
     storage = KanobotStorage.openFromConfig(loaded, dataDir, clock)
-    // 备份失败也应阻止“看似启动成功”：日备份是 M2 的数据安全边界。
+    // 备份失败也必须阻止“看似启动成功”：日备份是 M2 的数据安全边界。
+    // 先备份再回填，确保首次迁移既有历史前仍有一份当日快照。
     storage.maybeCreateDailyBackup()
+    // 所有者 QQ 可能是在已有私聊之后才配置的；启动时幂等迁移旧归属，
+    // 让网页 main 与后续 QQ 所有者消息共享同一段连续历史。
+    const ownerQqId = loaded.channels.qq.ownerQqId
+    if (ownerQqId !== null) {
+      mergeOwnerConversationHistory(storage, ownerQqId)
+    }
     const memory = new KanobotMemoryService(storage, clock, {
       recall: loaded.memory.recall,
       candidateArchiveDays: loaded.memory.candidateArchiveDays,
@@ -191,6 +199,9 @@ export async function apply(
       clock,
     }
     const chat = new KanobotChatService(storage, model, baseChatOptions)
+    // owner_qq 只有在实例重启后才会进入 QQ 路由；状态接口据此显示
+    // “保存后待重启”，不能让页面把磁盘配置误当成运行时状态。
+    const activeOwnerQqId = loaded.channels.qq.ownerQqId
     if (loaded.channels.qq.enabled) {
       const qqConfig = loaded.channels.qq
       qqChannel = new QqChannel({
@@ -269,6 +280,7 @@ export async function apply(
       readOnly: configDir === bundledExamplesDir(),
       runtimeStatus: () => ({
         enabled: qqChannel !== undefined,
+        ownerQqConfigured: activeOwnerQqId !== null,
         connection: qqChannel?.connection() ?? null,
       }),
     })

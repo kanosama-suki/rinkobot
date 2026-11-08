@@ -28,7 +28,7 @@ import {
   StorageIntegrityError,
 } from './errors.ts'
 
-export const STORAGE_SCHEMA_VERSION = 11
+export const STORAGE_SCHEMA_VERSION = 12
 export const TOMBSTONE_STORE_SCHEMA_VERSION = 1
 
 type DatabaseKind = 'main' | 'tombstones'
@@ -285,6 +285,14 @@ const MAIN_REQUIRED_COLUMNS_V11: Record<string, readonly string[]> = {
     'outcome',
     'target_id',
     'detail_code',
+  ],
+}
+
+const MAIN_REQUIRED_COLUMNS_V12: Record<string, readonly string[]> = {
+  ...MAIN_REQUIRED_COLUMNS_V11,
+  conversations: [
+    ...MAIN_REQUIRED_COLUMNS_V11.conversations,
+    'display_name',
   ],
 }
 
@@ -838,6 +846,18 @@ CREATE INDEX channel_audit_occurred_index ON channel_audit(occurred_at);
 CREATE INDEX channel_audit_outcome_index ON channel_audit(outcome, occurred_at);
 `
 
+/**
+ * M5.2.1 允许所有者给其他会话起可读名称。
+ * 名称只影响网页标签；conversation_id、消息顺序和模型上下文都不改变。
+ */
+const CONVERSATION_DISPLAY_NAME_SCHEMA_V12 = `
+ALTER TABLE conversations ADD COLUMN display_name TEXT
+  CHECK (
+    display_name IS NULL OR
+    (length(display_name) BETWEEN 1 AND 60)
+  );
+`
+
 const TOMBSTONE_SCHEMA = `
 CREATE TABLE schema_migrations (
   version INTEGER PRIMARY KEY,
@@ -960,7 +980,7 @@ function initializeDatabase(
     kind === 'main' ? STORAGE_SCHEMA_VERSION : TOMBSTONE_STORE_SCHEMA_VERSION
   const schema =
     kind === 'main'
-      ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}\n${MODEL_CALLS_SCHEMA_V3}\n${MEMORY_SEARCH_SCHEMA_V4}\n${MODEL_CALL_PURPOSE_SCHEMA_V5}\n${CONTROL_SCHEMA_V6}\n${MODEL_CALL_PURPOSE_SCHEMA_V7}\n${STYLE_RETRY_SCHEMA_V8}\n${INITIATIVE_SCHEMA_V9}\n${MEMORY_BOUNDARY_SCHEMA_V10_BASE}\n${MEMORY_BOUNDARY_INDEXES_V10}\n${CHANNEL_SCHEMA_V11}`
+      ? `${MAIN_SCHEMA_V1}\n${CHAT_SCHEMA_V2}\n${MODEL_CALLS_SCHEMA_V3}\n${MEMORY_SEARCH_SCHEMA_V4}\n${MODEL_CALL_PURPOSE_SCHEMA_V5}\n${CONTROL_SCHEMA_V6}\n${MODEL_CALL_PURPOSE_SCHEMA_V7}\n${STYLE_RETRY_SCHEMA_V8}\n${INITIATIVE_SCHEMA_V9}\n${MEMORY_BOUNDARY_SCHEMA_V10_BASE}\n${MEMORY_BOUNDARY_INDEXES_V10}\n${CHANNEL_SCHEMA_V11}\n${CONVERSATION_DISPLAY_NAME_SCHEMA_V12}`
       : TOMBSTONE_SCHEMA
   db.exec('BEGIN IMMEDIATE')
   try {
@@ -1081,7 +1101,7 @@ function assertSchemaCompatible(
   const latest = versions.at(-1)
   const supported =
     kind === 'main'
-      ? [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+      ? [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
       : [TOMBSTONE_STORE_SCHEMA_VERSION]
   if (
     latest === undefined ||
@@ -1115,7 +1135,9 @@ function assertSchemaCompatible(
                       ? MAIN_REQUIRED_COLUMNS_V9
                       : latest === 10
                         ? MAIN_REQUIRED_COLUMNS_V10
-                        : MAIN_REQUIRED_COLUMNS_V11
+                        : latest === 11
+                          ? MAIN_REQUIRED_COLUMNS_V11
+                          : MAIN_REQUIRED_COLUMNS_V12
   for (const [table, columns] of Object.entries(required)) {
     const tableRows = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -1285,6 +1307,24 @@ function migrateDatabaseIfNeeded(
         'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
       ).run(11, nowIso)
     }
+    if (
+      latest === 1 ||
+      latest === 2 ||
+      latest === 3 ||
+      latest === 4 ||
+      latest === 5 ||
+      latest === 6 ||
+      latest === 7 ||
+      latest === 8 ||
+      latest === 9 ||
+      latest === 10 ||
+      latest === 11
+    ) {
+      migrateConversationDisplayNameToV12(db)
+      db.prepare(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+      ).run(12, nowIso)
+    }
     db.exec(`PRAGMA user_version = ${STORAGE_SCHEMA_VERSION}`)
     db.exec('COMMIT')
   } catch (error) {
@@ -1298,6 +1338,17 @@ function migrateDatabaseIfNeeded(
       path,
       error,
     )
+  }
+}
+
+function migrateConversationDisplayNameToV12(db: DatabaseSync): void {
+  const columns = new Set(
+    (db.prepare('PRAGMA table_info("conversations")').all() as Array<
+      Record<string, unknown>
+    >).map(row => String(row.name)),
+  )
+  if (!columns.has('display_name')) {
+    db.exec(CONVERSATION_DISPLAY_NAME_SCHEMA_V12)
   }
 }
 

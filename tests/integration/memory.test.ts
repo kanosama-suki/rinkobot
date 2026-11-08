@@ -279,7 +279,7 @@ test('active memory search survives restart and a v3 to v6 migration', () => {
       ).all() as Array<Record<string, unknown>>
       assert.deepEqual(
         versions.map(row => Number(row.version)),
-        [3, 4, 5, 6, 7, 8, 9, 10, 11],
+        [3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
       )
     } finally {
       check.close()

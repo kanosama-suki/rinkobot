@@ -12,8 +12,13 @@ const elements = {
   chatViewArchive: document.querySelector('#chat-view-archive'),
   archiveControls: document.querySelector('#archive-controls'),
   archiveConversation: document.querySelector('#archive-conversation'),
+  archiveRename: document.querySelector('#archive-rename'),
+  archiveRenameInput: document.querySelector('#archive-rename-input'),
+  archiveRenameSave: document.querySelector('#archive-rename-save'),
+  archiveRenameReset: document.querySelector('#archive-rename-reset'),
   archiveRefresh: document.querySelector('#archive-refresh'),
   chatContextNote: document.querySelector('#chat-context-note'),
+  ownerQqWarning: document.querySelector('#owner-qq-warning'),
   historyMore: document.querySelector('#history-more'),
   messages: document.querySelector('#messages'),
   empty: document.querySelector('#empty-state'),
@@ -247,6 +252,7 @@ const state = {
   archiveConversationId: '',
   archiveConversations: [],
   archiveLoading: false,
+  archiveRenameBusy: false,
   historyLoading: false,
   activeTab: 'status',
   memoryStatus: 'active',
@@ -458,7 +464,22 @@ elements.chatViewArchive.addEventListener('click', () => {
 
 elements.archiveConversation.addEventListener('change', () => {
   state.archiveConversationId = elements.archiveConversation.value
+  updateArchiveRenameControls()
   void loadArchivePage(true)
+})
+
+elements.archiveRenameSave.addEventListener('click', () => {
+  void saveArchiveConversationName(elements.archiveRenameInput.value)
+})
+
+elements.archiveRenameReset.addEventListener('click', () => {
+  void saveArchiveConversationName(null)
+})
+
+elements.archiveRenameInput.addEventListener('keydown', event => {
+  if (event.key !== 'Enter' || event.isComposing) return
+  event.preventDefault()
+  elements.archiveRenameSave.click()
 })
 
 elements.archiveRefresh.addEventListener('click', () => {
@@ -468,6 +489,10 @@ elements.archiveRefresh.addEventListener('click', () => {
 elements.historyMore.addEventListener('click', () => {
   void loadOlderMessages()
 })
+
+elements.messages.addEventListener('scroll', () => {
+  updateHistoryControls()
+}, { passive: true })
 
 async function setChatView(view) {
   if (view !== 'owner' && view !== 'archive') return
@@ -501,6 +526,11 @@ async function loadConversationDirectory() {
   state.archiveConversations = Array.isArray(view.conversations)
     ? view.conversations
     : []
+  renderArchiveConversationOptions()
+  updateArchiveRenameControls()
+}
+
+function renderArchiveConversationOptions() {
   const selected = state.archiveConversationId
   const options = document.createDocumentFragment()
   const all = document.createElement('option')
@@ -532,6 +562,90 @@ async function loadConversationDirectory() {
   )
   state.archiveConversationId = stillPresent ? selected : ''
   elements.archiveConversation.value = state.archiveConversationId
+}
+
+function updateArchiveRenameControls() {
+  const conversation = state.archiveConversations.find(
+    item => item.conversationId === state.archiveConversationId,
+  )
+  const editable =
+    state.chatView === 'archive' &&
+    conversation !== undefined &&
+    conversation.conversationKind !== 'owner'
+  elements.archiveRename.hidden = !editable
+  if (!editable) return
+
+  elements.archiveRenameInput.placeholder = conversation.conversationId
+  if (document.activeElement !== elements.archiveRenameInput) {
+    elements.archiveRenameInput.value =
+      typeof conversation.displayName === 'string'
+        ? conversation.displayName
+        : ''
+  }
+  elements.archiveRenameSave.disabled = state.archiveRenameBusy
+  elements.archiveRenameReset.disabled =
+    state.archiveRenameBusy ||
+    typeof conversation.displayName !== 'string'
+}
+
+async function saveArchiveConversationName(displayName) {
+  if (state.archiveRenameBusy) return
+  const conversationId = state.archiveConversationId
+  const current = state.archiveConversations.find(
+    item => item.conversationId === conversationId,
+  )
+  if (current === undefined) return
+
+  const previous = captureScroll()
+  state.archiveRenameBusy = true
+  updateArchiveRenameControls()
+  try {
+    const response = await fetch(
+      `/kanobot/api/conversations/${encodeURIComponent(conversationId)}`,
+      {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ displayName }),
+      },
+    )
+    if (!response.ok) {
+      throw new Error(await responseMessage(response, '保存会话名称失败'))
+    }
+    const summary = await response.json()
+    if (
+      typeof summary.conversationLabel !== 'string' ||
+      (summary.displayName !== null &&
+        typeof summary.displayName !== 'string')
+    ) {
+      throw new Error('会话名称响应格式不正确')
+    }
+    const index = state.archiveConversations.findIndex(
+      item => item.conversationId === conversationId,
+    )
+    if (index >= 0) {
+      state.archiveConversations[index] = {
+        ...state.archiveConversations[index],
+        ...summary,
+      }
+    }
+    // 已加载的档案消息保留稳定 ID 和滚动位置，只更新来源标签。
+    for (const message of state.archiveMessages) {
+      if (message.conversationId === conversationId) {
+        message.conversationLabel = summary.conversationLabel
+      }
+    }
+    renderArchiveConversationOptions()
+    renderCurrentView('anchor', previous)
+  } catch (error) {
+    showNotice(errorMessage(error))
+  } finally {
+    state.archiveRenameBusy = false
+    updateArchiveRenameControls()
+  }
 }
 
 async function loadArchivePage(replace) {
@@ -721,11 +835,13 @@ function renderCurrentView(scrollMode = 'preserve', previous = null) {
     !ownerView,
   )
   updateHistoryControls()
+  updateArchiveRenameControls()
   if (scrollMode === 'bottom') {
     scrollToBottom()
   } else if (scrollMode === 'anchor' && previous !== null) {
     const delta = elements.messages.scrollHeight - previous.height
     elements.messages.scrollTop = previous.top + delta
+    updateHistoryControls()
   }
 }
 
@@ -808,7 +924,9 @@ function updateHistoryControls() {
   const hasMore = state.chatView === 'owner'
     ? state.ownerHasMore
     : state.archiveHasMore
-  elements.historyMore.hidden = !hasMore
+  const atTop = elements.messages.scrollTop <= 24
+  elements.historyMore.hidden =
+    !hasMore || !atTop || state.historyLoading
   elements.historyMore.disabled = state.historyLoading
   elements.historyMore.textContent = state.historyLoading
     ? '正在加载更早的消息…'
@@ -1404,6 +1522,7 @@ function focusComposer() {
 
 function scrollToBottom() {
   elements.messages.scrollTop = elements.messages.scrollHeight
+  updateHistoryControls()
 }
 
 function formatTime(value) {
@@ -3178,6 +3297,7 @@ async function loadChannelStatus() {
       label: 'QQ 未配置',
       configured: false,
       enabled: false,
+      ownerQqSaved: false,
       selfId: null,
     })
     return null
@@ -3205,6 +3325,21 @@ function applyChannelStatus(status) {
   elements.channelConnectionState.textContent = label
   elements.channelConnectionState.dataset.state =
     typeof status.state === 'string' ? status.state : 'disabled'
+  const missingOwner =
+    status.enabled === true && status.ownerQqConfigured !== true
+  elements.ownerQqWarning.hidden = !missingOwner
+  if (!missingOwner) {
+    elements.ownerQqWarning.textContent = ''
+  } else if (status.ownerQqSaved === true) {
+    elements.ownerQqWarning.textContent =
+      '所有者 QQ 已保存，但当前实例尚未重启；QQ 私聊仍只会出现在“全部对话”。' +
+      '请重启当前实例，重启后已有的对应私聊会合并到“我们的对话”。'
+  } else {
+    elements.ownerQqWarning.textContent =
+      'QQ 已启用，但还没有设置所有者 QQ；QQ 私聊目前只会出现在“全部对话”。' +
+      '请在“设置 → QQ → 所有者 QQ”中填写，并重启当前实例；' +
+      '重启后已有的对应私聊会合并到“我们的对话”。'
+  }
 }
 
 async function loadChannelSettings() {

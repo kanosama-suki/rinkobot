@@ -33,6 +33,7 @@ test('v10 migrates to v11 and channel state survives a clean reopen', () => {
   const db = new DatabaseSync(databasePath)
   try {
     dropCurrentChannelTables(db)
+    db.exec('ALTER TABLE conversations DROP COLUMN display_name')
     db.exec('DELETE FROM schema_migrations')
     const insert = db.prepare(
       'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
@@ -97,7 +98,7 @@ test('v10 migrates to v11 and channel state survives a clean reopen', () => {
     ).all() as Array<Record<string, unknown>>
     assert.deepEqual(
       versions.map(row => Number(row.version)),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
     )
     assert.ok(tableExists(check, 'channel_inbound'))
     assert.ok(tableExists(check, 'channel_audit'))

@@ -26,6 +26,7 @@ import {
   CHAT_CONVERSATION_ID,
   ChatModelBudget,
   KanobotChatService,
+  mergeOwnerConversationHistory,
   type ChatServiceOptions,
 } from '../core/chat/index.ts'
 import {
@@ -162,7 +163,16 @@ export async function createAppServer(
 
   try {
     storage = KanobotStorage.openFromConfig(loaded, dataDir, clock)
+    // 先做当日备份，再做历史归属迁移；这样首次回填前仍保留一份可恢复
+    // 的当日快照，备份失败也会在修改数据前阻止启动。
     storage.maybeCreateDailyBackup()
+    // 所有者 QQ 的配置可能晚于首条私聊到达数据库。启动时做一次幂等
+    // 归属迁移，把已有 qq-private-<owner> 历史并入唯一主会话；消息正文、
+    // seq 和 model_calls 都不复制，只移动 conversation_id。
+    const ownerQqId = loaded.channels.qq.ownerQqId
+    if (ownerQqId !== null) {
+      mergeOwnerConversationHistory(storage, ownerQqId)
+    }
     const memory = new KanobotMemoryService(storage, clock, {
       recall: loaded.memory.recall,
       candidateArchiveDays: loaded.memory.candidateArchiveDays,
@@ -206,6 +216,9 @@ export async function createAppServer(
       clock,
     }
     const chat = new KanobotChatService(storage, model, baseChatOptions)
+    // 状态接口必须报告“正在运行的”QQ 渠道配置，而不是刚保存但尚未
+    // 重启的 overlay，否则页面会误以为 owner_qq 已经生效。
+    const activeOwnerQqId = loaded.channels.qq.ownerQqId
     if (loaded.channels.qq.enabled) {
       const qqConfig = loaded.channels.qq
       qqChannel = new QqChannel({
@@ -285,6 +298,7 @@ export async function createAppServer(
       readOnly: configDir === bundledExamplesDir(),
       runtimeStatus: () => ({
         enabled: qqChannel !== undefined,
+        ownerQqConfigured: activeOwnerQqId !== null,
         connection: qqChannel?.connection() ?? null,
       }),
     })

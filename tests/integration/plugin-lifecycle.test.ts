@@ -20,6 +20,9 @@ import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
 import { apply, PLUGIN_NAME, PLUGIN_VERSION } from '../../src/plugin/index.ts'
+import { loadConfigFromDirectory } from '../../src/core/config/index.ts'
+import { KanobotStorage } from '../../src/core/storage/index.ts'
+import { systemClock } from '../../src/core/state/index.ts'
 import type { DshLlmBridge } from '../../src/model-providers/index.ts'
 import type {
   DshPreparedCall,
@@ -255,6 +258,73 @@ test('an explicit startup report proves successful activation', async () => {
     assert.equal(report.visionProvider, null)
     assert.equal(report.visionModel, null)
   } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('plugin activation merges pre-existing owner QQ history', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kanobot-plugin-owner-history-'))
+  const configDir = join(dir, 'config')
+  const dataDir = join(dir, 'data')
+  const fake = createFakeContext()
+  try {
+    cpSync(examplesDir, configDir, { recursive: true })
+    const store = KanobotStorage.openFromConfig(
+      loadConfigFromDirectory(configDir),
+      dataDir,
+      systemClock,
+    )
+    try {
+      store.appendChatMessage({
+        conversationId: 'main',
+        role: 'user',
+        text: '插件启动前的主会话虚构消息。',
+        id: 'plugin-main',
+        createdAt: '2026-11-08T01:00:00.000Z',
+      })
+      store.appendChatMessage({
+        conversationId: 'qq-private-10001',
+        role: 'user',
+        text: '插件启动前的所有者私聊虚构消息。',
+        id: 'plugin-owner-private',
+        createdAt: '2026-11-08T02:00:00.000Z',
+      })
+    } finally {
+      store.close()
+    }
+
+    const channelsPath = join(configDir, 'channels.toml')
+    const channels = readFileSync(channelsPath, 'utf8')
+      .replace('private_allow = []', 'private_allow = ["10001"]')
+      .replace(
+        '# owner_qq = "123456789"',
+        'owner_qq = "10001"',
+      )
+    writeFileSync(channelsPath, channels, 'utf8')
+
+    await apply(fake.ctx, {
+      configDir,
+      dataDir,
+      heartbeatMs: 60_000,
+      modelMode: 'mock',
+    })
+  } finally {
+    fake.dispose()
+  }
+
+  const reopened = KanobotStorage.openFromConfig(
+    loadConfigFromDirectory(configDir),
+    dataDir,
+    systemClock,
+  )
+  try {
+    assert.deepEqual(
+      reopened.listChatMessages('main', 10).map(message => message.id),
+      ['plugin-main', 'plugin-owner-private'],
+    )
+    assert.equal(reopened.getConversation('qq-private-10001'), null)
+  } finally {
+    reopened.close()
     rmSync(dir, { recursive: true, force: true })
   }
 })

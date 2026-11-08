@@ -38,6 +38,8 @@ export type ChatRole = 'user' | 'assistant'
 
 export interface ConversationRecord {
   id: string
+  /** 所有者设置的显示名；null 表示使用界面默认值。 */
+  displayName: string | null
   createdAt: string
   updatedAt: string
 }
@@ -57,6 +59,8 @@ export interface ChatMessageRecord {
  */
 export interface SequencedChatMessageRecord extends ChatMessageRecord {
   sequence: number
+  /** 只用于界面标签，不改变消息所属 conversationId。 */
+  conversationDisplayName: string | null
 }
 
 export interface ChatMessagePage {

@@ -21,6 +21,8 @@ import {
   type ModelCallRecord,
   type ReminderCandidateRecord,
   type SequencedChatMessageRecord,
+  type ConversationRecord,
+  type ConversationSummaryRecord,
 } from '../storage/index.ts'
 import { StorageError } from '../storage/index.ts'
 import {
@@ -50,6 +52,7 @@ import {
   type ConversationDirectoryView,
   type ConversationKind,
   type ConversationMessageView,
+  type ConversationSummaryView,
   type ConversationTimelineView,
   type ConversationView,
   type ChatVisionView,
@@ -385,19 +388,53 @@ export class KanobotChatService {
     }
     return {
       ownerConversationId: this.conversationId,
-      conversations: this.storage.listConversationSummaries(limit).map(item => {
-        const source = conversationSource(item.id)
-        return {
-          conversationId: item.id,
-          conversationKind: source.kind,
-          conversationLabel: source.label,
-          messageCount: item.messageCount,
-          lastSequence: item.lastSequence,
-          createdAt: item.createdAt,
-          updatedAt: item.updatedAt,
-        }
-      }),
+      conversations: this.storage.listConversationSummaries(limit)
+        .map(item => conversationSummaryView(item)),
     }
+  }
+
+  /**
+   * 只允许修改非所有者会话的展示名。名称与 conversationId 分离，因此
+   * 改名不会改变模型上下文、消息归属或跨会话只读边界。
+   */
+  renameConversation(
+    conversationId: string,
+    displayName: unknown,
+  ): ConversationSummaryView {
+    if (conversationId === this.conversationId) {
+      throw new ChatInputError(
+        'owner_conversation_immutable',
+        '“我们的对话”名称固定，不能改名',
+      )
+    }
+    if (displayName !== null && typeof displayName !== 'string') {
+      throw new ChatInputError(
+        'invalid_display_name',
+        'displayName 必须是字符串或 null',
+      )
+    }
+    if (this.storage.getConversation(conversationId) === null) {
+      throw new ChatInputError('conversation_not_found', '会话不存在')
+    }
+    let updated: ConversationRecord
+    try {
+      updated = this.storage.renameConversation(conversationId, displayName)
+    } catch (error) {
+      if (
+        error instanceof StorageError &&
+        (error.code === 'RECORD_INVALID' ||
+          error.code === 'REFERENCE_MISSING')
+      ) {
+        throw new ChatInputError('invalid_display_name', '会话名称不合法')
+      }
+      throw error
+    }
+    const page = this.storage.listChatMessagePage(conversationId, 1)
+    return conversationSummaryView({
+      ...updated,
+      messageCount: this.storage.chatMessageCount(conversationId),
+      lastSequence: page.messages.at(-1)?.sequence ?? 0,
+    })
   }
 
   /**
@@ -428,7 +465,10 @@ export class KanobotChatService {
   private messageView(
     message: SequencedChatMessageRecord,
   ): ConversationMessageView {
-    const source = conversationSource(message.conversationId)
+    const source = conversationSource(
+      message.conversationId,
+      message.conversationDisplayName,
+    )
     return {
       ...message,
       conversationKind: source.kind,
@@ -2085,6 +2125,7 @@ function errorMessage(error: unknown): string {
 
 function conversationSource(
   conversationId: string,
+  displayName: string | null = null,
 ): { kind: ConversationKind; label: string } {
   if (conversationId === CHAT_CONVERSATION_ID) {
     return { kind: 'owner', label: '我们的对话' }
@@ -2093,17 +2134,33 @@ function conversationSource(
   if (privateMatch !== null) {
     return {
       kind: 'qq-private',
-      label: `QQ 私聊 · ${privateMatch[1]}`,
+      label: displayName ?? conversationId,
     }
   }
   const groupMatch = /^qq-group-([1-9]\d{4,19})$/.exec(conversationId)
   if (groupMatch !== null) {
     return {
       kind: 'qq-group',
-      label: `QQ 群 · ${groupMatch[1]}`,
+      label: displayName ?? conversationId,
     }
   }
-  return { kind: 'other', label: conversationId }
+  return { kind: 'other', label: displayName ?? conversationId }
+}
+
+function conversationSummaryView(
+  item: ConversationSummaryRecord,
+): ConversationSummaryView {
+  const source = conversationSource(item.id, item.displayName)
+  return {
+    conversationId: item.id,
+    conversationKind: source.kind,
+    conversationLabel: source.label,
+    displayName: item.displayName,
+    messageCount: item.messageCount,
+    lastSequence: item.lastSequence,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+  }
 }
 
 function abortError(): Error {

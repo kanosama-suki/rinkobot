@@ -47,7 +47,11 @@ test('channel settings save a local secret without echoing it', async () => {
       configDir,
       loaded,
       secretStore: store,
-      runtimeStatus: () => ({ enabled: false, connection: null }),
+      runtimeStatus: () => ({
+        enabled: false,
+        ownerQqConfigured: false,
+        connection: null,
+      }),
     })
     const token = 'napcat-test-token-must-not-leak'
     const draft = draftFromView(service.view())
@@ -83,6 +87,8 @@ test('channel settings save a local secret without echoing it', async () => {
     assert.equal(status.state, 'disabled')
     assert.equal(status.label, 'QQ 未启用')
     assert.equal(status.configured, true)
+    assert.equal(status.ownerQqConfigured, false)
+    assert.equal(status.ownerQqSaved, false)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -110,6 +116,9 @@ test('owner QQ must be explicit, whitelisted, and removable', async () => {
     draft.qq.privateAllow = ['10001']
     const saved = await service.save(draft)
     assert.equal(saved.qq.ownerQqId, '10001')
+    // 保存只写磁盘，运行时仍要重启后才采用新的 owner_qq。
+    assert.equal(service.status().ownerQqConfigured, false)
+    assert.equal(service.status().ownerQqSaved, true)
     assert.equal(
       loadConfigFromDirectory(configDir).channels.qq.ownerQqId,
       '10001',
@@ -119,6 +128,8 @@ test('owner QQ must be explicit, whitelisted, and removable', async () => {
     cleared.qq.ownerQqId = null
     const restored = await service.save(cleared)
     assert.equal(restored.qq.ownerQqId, null)
+    assert.equal(service.status().ownerQqConfigured, false)
+    assert.equal(service.status().ownerQqSaved, false)
     assert.equal(
       loadConfigFromDirectory(configDir).channels.qq.ownerQqId,
       null,
@@ -264,7 +275,11 @@ test('status maps every runtime state without pretending a save reconnects', () 
   const root = createRoot()
   try {
     const configDir = join(root, 'config')
-    let runtime: QqRuntimeSnapshot = { enabled: false, connection: null }
+    let runtime: QqRuntimeSnapshot = {
+      enabled: false,
+      ownerQqConfigured: false,
+      connection: null,
+    }
     const service = new ChannelSettingsService({
       configDir,
       loaded: loadConfigFromDirectory(configDir),
@@ -272,10 +287,15 @@ test('status maps every runtime state without pretending a save reconnects', () 
     })
 
     assert.equal(service.status().state, 'disabled')
-    runtime = { enabled: true, connection: null }
+    runtime = {
+      enabled: true,
+      ownerQqConfigured: false,
+      connection: null,
+    }
     assert.equal(service.status().state, 'connecting')
     runtime = {
       enabled: true,
+      ownerQqConfigured: false,
       connection: {
         connected: true,
         selfId: '10001',
@@ -284,8 +304,12 @@ test('status maps every runtime state without pretending a save reconnects', () 
     }
     assert.equal(service.status().state, 'connected')
     assert.equal(service.status().selfId, '10001')
+    assert.equal(service.status().ownerQqConfigured, false)
+    runtime = { ...runtime, ownerQqConfigured: true }
+    assert.equal(service.status().ownerQqConfigured, true)
     runtime = {
       enabled: true,
+      ownerQqConfigured: true,
       connection: {
         connected: false,
         selfId: '10001',
@@ -296,6 +320,7 @@ test('status maps every runtime state without pretending a save reconnects', () 
     assert.equal(service.status().state, 'reconnecting')
     runtime = {
       enabled: true,
+      ownerQqConfigured: false,
       connection: {
         connected: false,
         selfId: null,
@@ -306,6 +331,7 @@ test('status maps every runtime state without pretending a save reconnects', () 
     assert.equal(service.status().state, 'stopped')
     runtime = {
       enabled: true,
+      ownerQqConfigured: false,
       connection: {
         connected: false,
         selfId: null,

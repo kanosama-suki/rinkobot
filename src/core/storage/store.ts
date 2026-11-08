@@ -474,9 +474,94 @@ export class KanobotStorage {
     this.assertOpen()
     const conversationId = validateIdentifier(id, 'conversation.id')
     const row = this.db.prepare(
-      'SELECT id, created_at, updated_at FROM conversations WHERE id = ?',
+      `SELECT id, display_name, created_at, updated_at
+       FROM conversations WHERE id = ?`,
     ).get(conversationId) as Record<string, unknown> | undefined
     return row === undefined ? null : conversationFromRow(row)
+  }
+
+  renameConversation(
+    id: string,
+    displayName: string | null,
+    at: string = this.nowIso(),
+  ): ConversationRecord {
+    this.assertOpen()
+    const conversationId = validateIdentifier(id, 'conversation.id')
+    const normalized = normalizeConversationDisplayName(displayName)
+    const updatedAt = validateInstant(at, 'conversation.updatedAt')
+    const result = this.db.prepare(
+      `UPDATE conversations
+       SET display_name = ?, updated_at = ?
+       WHERE id = ?`,
+    ).run(normalized, updatedAt, conversationId)
+    if (result.changes !== 1) {
+      throw new StorageError(
+        'REFERENCE_MISSING',
+        `conversation "${conversationId}" does not exist`,
+      )
+    }
+    const conversation = this.getConversation(conversationId)
+    if (conversation === null) {
+      throw new StorageIntegrityError(
+        `conversation "${conversationId}" disappeared after rename`,
+        ':conversations:',
+      )
+    }
+    return conversation
+  }
+
+  /**
+   * 把一次历史私聊并入所有者会话。只改 conversation_id 归属，不复制
+   * 消息、不重排 seq，也不修改正文；用于配置 owner_qq 后的一次性回填。
+   */
+  mergeConversationHistory(
+    sourceId: string,
+    targetId: string,
+  ): {
+    movedMessages: number
+    movedModelCalls: number
+    removedConversation: boolean
+  } {
+    this.assertOpen()
+    const source = validateIdentifier(sourceId, 'conversation.sourceId')
+    const target = validateIdentifier(targetId, 'conversation.targetId')
+    if (source === target) {
+      throw new StorageError(
+        'RECORD_INVALID',
+        'source and target conversations must be different',
+      )
+    }
+
+    let result = {
+      movedMessages: 0,
+      movedModelCalls: 0,
+      removedConversation: false,
+    }
+    this.inTransaction(() => {
+      const sourceRow = this.getConversation(source)
+      if (sourceRow === null) {
+        return
+      }
+      this.ensureConversationRow(target, sourceRow.createdAt)
+      const messageResult = this.db.prepare(
+        'UPDATE messages SET conversation_id = ? WHERE conversation_id = ?',
+      ).run(target, source)
+      const modelCallResult = this.db.prepare(
+        'UPDATE model_calls SET conversation_id = ? WHERE conversation_id = ?',
+      ).run(target, source)
+      this.db.prepare(
+        `UPDATE conversations
+         SET updated_at = CASE WHEN updated_at < ? THEN ? ELSE updated_at END
+         WHERE id = ?`,
+      ).run(sourceRow.updatedAt, sourceRow.updatedAt, target)
+      this.db.prepare('DELETE FROM conversations WHERE id = ?').run(source)
+      result = {
+        movedMessages: Number(messageResult.changes),
+        movedModelCalls: Number(modelCallResult.changes),
+        removedConversation: true,
+      }
+    })
+    return result
   }
 
   appendChatMessage(input: ChatMessageInput): ChatMessageRecord {
@@ -621,13 +706,14 @@ export class KanobotStorage {
     const rows = this.db.prepare(
       `SELECT
          c.id,
+         c.display_name,
          c.created_at,
          c.updated_at,
          COUNT(m.seq) AS message_count,
          COALESCE(MAX(m.seq), 0) AS last_sequence
        FROM conversations c
        LEFT JOIN messages m ON m.conversation_id = c.id
-       GROUP BY c.id, c.created_at, c.updated_at
+       GROUP BY c.id, c.display_name, c.created_at, c.updated_at
        ORDER BY last_sequence DESC, c.updated_at DESC, c.id DESC
        LIMIT ?`,
     ).all(limit) as Array<Record<string, unknown>>
@@ -3696,7 +3782,8 @@ export class KanobotStorage {
        VALUES (?, ?, ?)`,
     ).run(id, at, at)
     const row = this.db.prepare(
-      'SELECT id, created_at, updated_at FROM conversations WHERE id = ?',
+      `SELECT id, display_name, created_at, updated_at
+       FROM conversations WHERE id = ?`,
     ).get(id) as Record<string, unknown> | undefined
     if (row === undefined) {
       throw new StorageIntegrityError(
@@ -4099,9 +4186,11 @@ function listMessagePageFromDatabase(
        m.conversation_id,
        m.role,
        b.content AS body_text,
+       c.display_name AS conversation_display_name,
        m.created_at
      FROM messages m
      JOIN bodies b ON b.id = m.body_id
+     JOIN conversations c ON c.id = m.conversation_id
      ${where}
      ORDER BY m.seq DESC
      LIMIT ?`,
@@ -4121,6 +4210,7 @@ function listMessagePageFromDatabase(
 function conversationFromRow(row: Record<string, unknown>): ConversationRecord {
   if (
     typeof row.id !== 'string' ||
+    (row.display_name !== null && typeof row.display_name !== 'string') ||
     typeof row.created_at !== 'string' ||
     typeof row.updated_at !== 'string'
   ) {
@@ -4133,6 +4223,7 @@ function conversationFromRow(row: Record<string, unknown>): ConversationRecord {
   validateInstant(row.updated_at, 'conversation.updatedAt')
   return {
     id: row.id,
+    displayName: row.display_name,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -4198,10 +4289,39 @@ function sequencedChatMessageFromRow(
       ':messages:',
     )
   }
+  if (
+    row.conversation_display_name !== null &&
+    typeof row.conversation_display_name !== 'string'
+  ) {
+    throw new StorageIntegrityError(
+      'chat message row has an invalid conversation display name',
+      ':messages:',
+    )
+  }
   return {
     ...chatMessageFromRow(row),
     sequence: Number(row.seq),
+    conversationDisplayName: row.conversation_display_name,
   }
+}
+
+function normalizeConversationDisplayName(value: string | null): string | null {
+  if (value === null) return null
+  if (typeof value !== 'string') {
+    throw new StorageError(
+      'RECORD_INVALID',
+      'conversation displayName must be a string or null',
+    )
+  }
+  const normalized = value.trim()
+  if (normalized === '') return null
+  if (Array.from(normalized).length > 60 || /\p{Cc}/u.test(normalized)) {
+    throw new StorageError(
+      'RECORD_INVALID',
+      'conversation displayName must be 1-60 characters without control characters',
+    )
+  }
+  return normalized
 }
 
 function modelCallFromRow(row: Record<string, unknown>): ModelCallRecord {

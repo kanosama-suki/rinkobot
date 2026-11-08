@@ -99,20 +99,41 @@ test('owner chat and the read-only archive are separate scrollable views', () =>
   assert.match(html, /id="archive-conversation"/)
   assert.match(html, /id="archive-refresh"/)
   assert.match(html, /id="history-more"/)
+  assert.match(
+    html,
+    /class="messages-shell"[\s\S]*?id="history-more"[\s\S]*?id="messages"/,
+  )
   assert.match(script, /state\.chatView === 'archive'/)
   assert.match(script, /\/kanobot\/api\/timeline/)
   assert.match(script, /\/kanobot\/api\/conversations/)
   assert.match(script, /ownerQqId: parseOwnerQqId/)
+  assert.match(script, /elements\.messages\.scrollTop <= 24/)
+  assert.match(script, /!hasMore \|\| !atTop \|\| state\.historyLoading/)
   assert.match(style, /\.messages \{[\s\S]*?overflow-y: scroll/)
+  assert.match(style, /\.messages-shell \{[\s\S]*?position: relative/)
+  assert.match(style, /\.history-more \{[\s\S]*?position: absolute/)
   assert.match(style, /\.chat-view-switch/)
   assert.match(style, /\.message-day/)
   assert.match(style, /\.composer\[hidden\][\s\S]*?display: none/)
 })
 
+test('archive conversation names are editable while the owner view stays fixed', () => {
+  assert.match(html, /id="archive-rename"/)
+  assert.match(html, /id="archive-rename-input"[^>]*maxlength="60"/)
+  assert.match(html, /id="archive-rename-save"/)
+  assert.match(html, /id="archive-rename-reset"/)
+  assert.match(script, /\/kanobot\/api\/conversations\/\$\{encodeURIComponent\(conversationId\)\}/)
+  assert.match(script, /conversation\.conversationKind !== 'owner'/)
+  assert.match(script, /saveArchiveConversationName\(null\)/)
+})
+
 test('the QQ badge and settings panel have independent status surfaces', () => {
   assert.match(html, /id="qq-badge"[\s\S]*?aria-live="polite"/)
   assert.match(html, /id="channel-connection-state"/)
+  assert.match(html, /id="owner-qq-warning"/)
   assert.match(script, /settings\/channels\/status/)
+  assert.match(script, /ownerQqConfigured !== true/)
+  assert.match(script, /status\.ownerQqSaved === true/)
   assert.match(script, /clearInterval\(state\.channelPollTimer\)/)
   assert.match(style, /\.settings-dialog-content[\s\S]*?overflow-y: scroll/)
   assert.match(style, /@media \(max-width: 620px\)[\s\S]*?\.settings-dialog/)
