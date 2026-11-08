@@ -6,7 +6,10 @@
  * 限频检查后投递，结果未知时绝不自动重试。
  */
 
-import type { KanobotChatService } from '../../core/chat/index.ts'
+import {
+  CHAT_CONVERSATION_ID,
+  type KanobotChatService,
+} from '../../core/chat/index.ts'
 import type { QqChannelConfig } from '../../core/config/index.ts'
 import type { ExternalOutboxDeliveryResult } from '../../core/initiative/index.ts'
 import type { KanobotEmergencyService } from '../../core/policy/index.ts'
@@ -57,6 +60,8 @@ export interface QqChannelOptions {
   emergency: KanobotEmergencyService
   gateway: QqGateway
   createChat(conversationId: string): KanobotChatService
+  /** 所有者的 QQ 私聊映射到哪个网页会话；默认 main。 */
+  ownerConversationId?: string
   maxImageBytes: number
   logger: ChannelLogger
   clock?: Clock
@@ -70,6 +75,7 @@ export class QqChannel {
   private readonly emergency: KanobotEmergencyService
   private readonly gateway: QqGateway
   private readonly createChat: (conversationId: string) => KanobotChatService
+  private readonly ownerConversationId: string
   private readonly maxImageBytes: number
   private readonly logger: ChannelLogger
   private readonly clock: Clock | undefined
@@ -97,6 +103,8 @@ export class QqChannel {
     this.emergency = options.emergency
     this.gateway = options.gateway
     this.createChat = options.createChat
+    this.ownerConversationId =
+      options.ownerConversationId ?? CHAT_CONVERSATION_ID
     this.maxImageBytes = options.maxImageBytes
     this.logger = options.logger
     this.clock = options.clock
@@ -404,7 +412,7 @@ export class QqChannel {
       )
       return
     }
-    const chat = this.chatFor(turn.conversationKey)
+    const chat = this.chatFor(this.coreConversationId(turn))
     if (turn.images.length > 0 && !chat.visionView().enabled) {
       this.audit(
         'inbound',
@@ -677,6 +685,19 @@ export class QqChannel {
     const created = this.createChat(conversationId)
     this.chats.set(conversationId, created)
     return created
+  }
+
+  /**
+   * 只有显式匹配 owner_qq 的私聊进入网页主会话。其他私聊和群聊永远
+   * 使用自己的 conversationKey，避免把第三人的上下文混进所有者对话。
+   */
+  private coreConversationId(turn: InboundTurn): string {
+    const target = parseQqTargetKey(turn.targetKey)
+    return target.kind === 'private' &&
+        this.config.ownerQqId !== null &&
+        target.id === this.config.ownerQqId
+      ? this.ownerConversationId
+      : turn.conversationKey
   }
 
   private coreText(turn: InboundTurn): string {

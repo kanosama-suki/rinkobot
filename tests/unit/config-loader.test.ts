@@ -253,8 +253,39 @@ test('missing channels file keeps external channels disabled', () => {
     assert.deepEqual(config.channels.qq.privateAllow, [])
     assert.deepEqual(config.channels.qq.groupAllow, [])
     assert.equal(config.channels.qq.autonomousTarget, null)
+    assert.equal(config.channels.qq.ownerQqId, null)
   } finally {
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('owner QQ is optional but must be present in the private allowlist', () => {
+  const missingFromAllow = writeConfigs({
+    channels: exampleChannels().replace(
+      '# owner_qq = "123456789"',
+      'owner_qq = "123456789"',
+    ),
+  })
+  try {
+    expectIssue(
+      () => loadConfigFromDirectory(missingFromAllow),
+      'qq.owner_qq',
+      'channels.toml',
+    )
+  } finally {
+    rmSync(missingFromAllow, { recursive: true, force: true })
+  }
+
+  const owner = writeConfigs({
+    channels: exampleChannels()
+      .replace('# owner_qq = "123456789"', 'owner_qq = "10001"')
+      .replace('private_allow = []', 'private_allow = ["10001"]'),
+  })
+  try {
+    const config = loadConfigFromDirectory(owner)
+    assert.equal(config.channels.qq.ownerQqId, '10001')
+  } finally {
+    rmSync(owner, { recursive: true, force: true })
   }
 })
 

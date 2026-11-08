@@ -51,6 +51,25 @@ export interface ChatMessageRecord {
   createdAt: string
 }
 
+/**
+ * 时间线分页必须使用 messages.seq，而不是 createdAt。同一毫秒内写入的
+ * 多条消息仍能稳定排序，删除或清理也不会让游标跳页。
+ */
+export interface SequencedChatMessageRecord extends ChatMessageRecord {
+  sequence: number
+}
+
+export interface ChatMessagePage {
+  messages: SequencedChatMessageRecord[]
+  hasMore: boolean
+  nextBeforeSequence: number | null
+}
+
+export interface ConversationSummaryRecord extends ConversationRecord {
+  messageCount: number
+  lastSequence: number
+}
+
 export interface ChatMessageInput {
   conversationId: string
   role: ChatRole

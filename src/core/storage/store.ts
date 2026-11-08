@@ -79,12 +79,14 @@ import type {
   CareItemRecord,
   CareItemStatus,
   ChatMessageInput,
+  ChatMessagePage,
   ChatMessageRecord,
   ChatTurnAuditRecord,
   ChannelAuditRecord,
   ChannelInboundClaimInput,
   ConfirmReminderCandidateResult,
   ConversationRecord,
+  ConversationSummaryRecord,
   DailyPlanRecord,
   DailyPlanItemRecord,
   DailySummaryRecord,
@@ -127,6 +129,7 @@ import type {
   ReminderRecord,
   ReminderStatus,
   ReplyStyleCheckRecord,
+  SequencedChatMessageRecord,
   SetEmergencyStateInput,
   SnapshotResult,
   StorageOptions,
@@ -567,6 +570,68 @@ export class KanobotStorage {
        ORDER BY seq ASC`,
     ).all(id, limit) as Array<Record<string, unknown>>
     return rows.map(chatMessageFromRow)
+  }
+
+  /**
+   * 单会话历史页。调用方拿 nextBeforeSequence 继续向前翻，分页口径是
+   * messages.seq，而不是可能重复的时间戳。
+   */
+  listChatMessagePage(
+    conversationId = 'main',
+    limit = 50,
+    beforeSequence: number | null = null,
+  ): ChatMessagePage {
+    this.assertOpen()
+    const id = validateIdentifier(conversationId, 'message.conversationId')
+    return listMessagePageFromDatabase(this.db, {
+      limit,
+      beforeSequence,
+      conversationId: id,
+    })
+  }
+
+  /**
+   * 所有会话的只读聚合页。正文仍按 conversation_id 独立存储；这个方法
+   * 只按 seq 做时间线切片，不复制消息，也不把不同会话合并成模型上下文。
+   */
+  listChatTimelinePage(
+    limit = 50,
+    beforeSequence: number | null = null,
+    conversationId: string | null = null,
+  ): ChatMessagePage {
+    this.assertOpen()
+    const id = conversationId === null
+      ? null
+      : validateIdentifier(conversationId, 'message.conversationId')
+    return listMessagePageFromDatabase(this.db, {
+      limit,
+      beforeSequence,
+      conversationId: id,
+    })
+  }
+
+  listConversationSummaries(limit = 100): ConversationSummaryRecord[] {
+    this.assertOpen()
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new StorageError(
+        'RECORD_INVALID',
+        'conversation limit must be an integer between 1 and 100',
+      )
+    }
+    const rows = this.db.prepare(
+      `SELECT
+         c.id,
+         c.created_at,
+         c.updated_at,
+         COUNT(m.seq) AS message_count,
+         COALESCE(MAX(m.seq), 0) AS last_sequence
+       FROM conversations c
+       LEFT JOIN messages m ON m.conversation_id = c.id
+       GROUP BY c.id, c.created_at, c.updated_at
+       ORDER BY last_sequence DESC, c.updated_at DESC, c.id DESC
+       LIMIT ?`,
+    ).all(limit) as Array<Record<string, unknown>>
+    return rows.map(conversationSummaryFromRow)
   }
 
   /**
@@ -3981,6 +4046,78 @@ function validateOptions(options: StorageOptions): void {
   }
 }
 
+function listMessagePageFromDatabase(
+  db: DatabaseSync,
+  options: {
+    limit: number
+    beforeSequence: number | null
+    conversationId: string | null
+  },
+): ChatMessagePage {
+  if (
+    !Number.isInteger(options.limit) ||
+    options.limit < 1 ||
+    options.limit > 100
+  ) {
+    throw new StorageError(
+      'RECORD_INVALID',
+      'message page limit must be an integer between 1 and 100',
+    )
+  }
+  if (
+    options.beforeSequence !== null &&
+    (!Number.isSafeInteger(options.beforeSequence) ||
+      options.beforeSequence < 1)
+  ) {
+    throw new StorageError(
+      'RECORD_INVALID',
+      'message page cursor must be a positive integer',
+    )
+  }
+
+  const conditions: string[] = []
+  const parameters: Array<string | number> = []
+  if (options.conversationId !== null) {
+    conditions.push('m.conversation_id = ?')
+    parameters.push(options.conversationId)
+  }
+  if (options.beforeSequence !== null) {
+    conditions.push('m.seq < ?')
+    parameters.push(options.beforeSequence)
+  }
+  const where = conditions.length === 0
+    ? ''
+    : `WHERE ${conditions.join(' AND ')}`
+  parameters.push(options.limit + 1)
+
+  // 多取一条只用于判断 hasMore；返回前裁掉最旧的一条并按 seq 升序重排。
+  const rows = db.prepare(
+    `SELECT
+       m.seq,
+       m.id,
+       m.body_id,
+       m.conversation_id,
+       m.role,
+       b.content AS body_text,
+       m.created_at
+     FROM messages m
+     JOIN bodies b ON b.id = m.body_id
+     ${where}
+     ORDER BY m.seq DESC
+     LIMIT ?`,
+  ).all(...parameters) as Array<Record<string, unknown>>
+  const hasMore = rows.length > options.limit
+  const pageRows = hasMore ? rows.slice(0, options.limit) : rows
+  const messages = pageRows
+    .map(sequencedChatMessageFromRow)
+    .reverse()
+  return {
+    messages,
+    hasMore,
+    nextBeforeSequence: hasMore ? (messages[0]?.sequence ?? null) : null,
+  }
+}
+
 function conversationFromRow(row: Record<string, unknown>): ConversationRecord {
   if (
     typeof row.id !== 'string' ||
@@ -3998,6 +4135,28 @@ function conversationFromRow(row: Record<string, unknown>): ConversationRecord {
     id: row.id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  }
+}
+
+function conversationSummaryFromRow(
+  row: Record<string, unknown>,
+): ConversationSummaryRecord {
+  const conversation = conversationFromRow(row)
+  if (
+    !Number.isSafeInteger(row.message_count) ||
+    Number(row.message_count) < 0 ||
+    !Number.isSafeInteger(row.last_sequence) ||
+    Number(row.last_sequence) < 0
+  ) {
+    throw new StorageIntegrityError(
+      'conversation summary row has invalid counts',
+      ':conversations:',
+    )
+  }
+  return {
+    ...conversation,
+    messageCount: Number(row.message_count),
+    lastSequence: Number(row.last_sequence),
   }
 }
 
@@ -4024,6 +4183,24 @@ function chatMessageFromRow(row: Record<string, unknown>): ChatMessageRecord {
     role: row.role,
     text: row.body_text,
     createdAt: row.created_at,
+  }
+}
+
+function sequencedChatMessageFromRow(
+  row: Record<string, unknown>,
+): SequencedChatMessageRecord {
+  if (
+    !Number.isSafeInteger(row.seq) ||
+    Number(row.seq) < 1
+  ) {
+    throw new StorageIntegrityError(
+      'chat message row has an invalid sequence',
+      ':messages:',
+    )
+  }
+  return {
+    ...chatMessageFromRow(row),
+    sequence: Number(row.seq),
   }
 }
 

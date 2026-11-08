@@ -79,6 +79,11 @@ test('the standalone app authenticates, persists, and releases its port', async 
     assert.match(pageText, /id="settings-test"[^>]*disabled/)
     assert.match(pageText, /id="settings-save"[^>]*disabled/)
     assert.match(pageText, /id="channel-settings-form"/)
+    assert.match(pageText, /id="chat-view-owner"/)
+    assert.match(pageText, /id="chat-view-archive"/)
+    assert.match(pageText, /id="archive-conversation"/)
+    assert.match(pageText, /id="history-more"/)
+    assert.match(pageText, /id="channel-owner-qq"/)
 
     const settings = await fetch(
       `${first.baseUrl}/kanobot/api/settings/models`,

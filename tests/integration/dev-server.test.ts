@@ -54,7 +54,7 @@ test('the local dev entry authenticates the whole surface with a one-time token'
       headers: { cookie },
     })
     assert.equal(page.status, 200)
-    assert.match(await page.text(), /M5\.1 聊天、记忆与渠道设置/)
+    assert.match(await page.text(), /M5\.2 聊天档案、QQ 会话与设置/)
 
     const channelView = await fetch(
       `${server.baseUrl}/kanobot/api/settings/channels`,

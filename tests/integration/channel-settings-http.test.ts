@@ -298,6 +298,7 @@ function draftFromView(view: ChannelSettingsView): ChannelSettingsDraft {
       wsUrl: qq.wsUrl,
       allowRemote: qq.allowRemote,
       credential: { mode: 'keep' },
+      ownerQqId: qq.ownerQqId,
       privateAllow: [...qq.privateAllow],
       groupAllow: [...qq.groupAllow],
       groupRequireMention: qq.groupRequireMention,

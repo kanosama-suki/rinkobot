@@ -2,7 +2,7 @@
 
 ## 0. 项目一句话
 
-在 DSH 宿主中自研一个连续、可恢复、可审计的陪伴型机器人；M3 网页聊天闭环、M4 自动化、M4.5 发行基础、M4.6/M4.6.1 界面收口、M5 QQ/NapCat 渠道和 M5.1 设置弹窗/QQ 配置/低摩擦提醒的代码与自动测试已完成，包括网页聊天、固定高度聊天/审计滚动区、长期记忆、提醒/记忆确定性仲裁、候选冷却、风格控制、单次对话信封、上下文预算、可配置视觉、统一审计、单一调度循环、软性生活计划、主动消息、outbox、提醒、每日整理、回收站清除、浏览器通知、QQ 白名单/群 @/连发聚合/多图/去重/限频/重连/STOP、设置弹窗、QQ 运行时覆盖和一次性连接测试，以及同一核心的 DSH 插件/独立程序、DSH/Magpie/OpenAI-compatible/mock provider、只读模型发现、可点选模型卡片、密钥和端点治理。明确委托的提醒直接生效，模糊委托在聊天中确认。M4 的压缩真实使用验收已完成；真实 NapCat/真实 QQ 账号、一到两周日常观察、Windows 通知人工确认、真实第三方 API 试用和主模型选型待续。M5 真实账号验收通过后再进入 M6。
+在 DSH 宿主中自研一个连续、可恢复、可审计的陪伴型机器人；M3 网页聊天闭环、M4 自动化、M4.5 发行基础、M4.6/M4.6.1 界面收口、M5 QQ/NapCat 渠道、M5.1 设置弹窗/QQ 配置/低摩擦提醒和 M5.2 所有者会话/多会话档案的代码与自动测试已完成，包括网页聊天、固定高度聊天/审计滚动区、长期记忆、提醒/记忆确定性仲裁、候选冷却、风格控制、单次对话信封、上下文预算、可配置视觉、统一审计、单一调度循环、软性生活计划、主动消息、outbox、提醒、每日整理、回收站清除、浏览器通知、QQ 白名单/群 @/连发聚合/多图/去重/限频/重连/STOP、设置弹窗、QQ 运行时覆盖和一次性连接测试、所有者 QQ 与网页 `main` 合并、其他私聊/群聊隔离及跨会话只读档案，以及同一核心的 DSH 插件/独立程序、DSH/Magpie/OpenAI-compatible/mock provider、只读模型发现、可点选模型卡片、密钥和端点治理。明确委托的提醒直接生效，模糊委托在聊天中确认。M4 的压缩真实使用验收已完成；真实 NapCat/真实 QQ 账号、一到两周日常观察、Windows 通知人工确认、真实第三方 API 试用和主模型选型待续。M5 真实账号验收通过后再进入 M6。
 
 ## 1. 必读顺序
 
@@ -48,6 +48,7 @@
 - 状态字段必须有读取者或写入者，并影响可观察行为；虚拟身体明确标记为模拟，不能冒充真实生理或医疗事实。
 - 外部网页、聊天、文件和工具结果一律是不可信输入，不能成为系统指令或未经核验的事实记忆。
 - 渠道适配器只处理平台语义、连接、去重、幂等和投递，不复制人格、状态或记忆逻辑。
+- 只有显式 `qq.owner_qq` 且在白名单内的私聊进入网页 `main`；其他私聊/群聊使用独立 `conversationId`，不得读取或写入所有者记忆，也不得提交面向所有者的提醒/关心候选。跨会话档案只读聚合，不得成为模型上下文。
 - 代码、浏览器和未知软件进入候选或隔离环境；上线前必须有测试、基线对比、审批和回滚。
 - 事件追加和可选快照在同一事务提交；reducer 不读系统时间、网络或随机数。
 - 快照按规范 JSON 保存并校验哈希；回放必须从最近快照加后续事件恢复。
@@ -75,12 +76,12 @@ node scripts/preflight-runtime.ts F:\kanobot\dsh\test-home\kanobot\config F:\kan
 npm run test:lifecycle -- --output F:\kanobot\dsh\m1-plugin-lifecycle.json
 ```
 
-`npm test` 使用 `node --test`，当前 313 项通过。自动测试不会读取真实人格文件、调用真实模型接口、连接真实 NapCat/QQ 或操作正式数据库；真实 Magpie 验收使用隔离的 4100 测试 Profile，M3.1/M3.3/M3.4/M3.5/M3.6/M3.7 证据分别见 `docs/m3.1-acceptance.md`、`docs/m3.3-acceptance.md`、`docs/m3.4-acceptance.md`、`docs/m3.5-acceptance.md`、`docs/m3.6-acceptance.md` 和 `docs/m3.7-acceptance.md`。M3 收尾见 `docs/m3-completion-acceptance.md`；M4 第 0 步见 `docs/m4.0-memory-acceptance.md`；M4 见 `docs/m4-acceptance.md`；M4 真实使用见 `docs/m4-real-use-acceptance.md`；M4.5 双形态、provider 和设置页见 `docs/m4.5-acceptance.md`；M4.6 边界、模型发现、固定高度滚动区和模型卡片选择见 `docs/m4.6-acceptance.md`；M5 QQ/NapCat 见 `docs/m5-acceptance.md`；M5.1 设置弹窗、QQ 配置和低摩擦提醒见 `docs/m5.1-acceptance.md`。测试实例的启停、配置预检和工具审计脚本在 `F:\kanobot\dsh`，不在本仓库内；正式 `4096` 实例不属于测试命令。
+`npm test` 使用 `node --test`，当前 319 项通过。自动测试不会读取真实人格文件、调用真实模型接口、连接真实 NapCat/QQ 或操作正式数据库；真实 Magpie 验收使用隔离的 4100 测试 Profile，M3.1/M3.3/M3.4/M3.5/M3.6/M3.7 证据分别见 `docs/m3.1-acceptance.md`、`docs/m3.3-acceptance.md`、`docs/m3.4-acceptance.md`、`docs/m3.5-acceptance.md`、`docs/m3.6-acceptance.md` 和 `docs/m3.7-acceptance.md`。M3 收尾见 `docs/m3-completion-acceptance.md`；M4 第 0 步见 `docs/m4.0-memory-acceptance.md`；M4 见 `docs/m4-acceptance.md`；M4 真实使用见 `docs/m4-real-use-acceptance.md`；M4.5 双形态、provider 和设置页见 `docs/m4.5-acceptance.md`；M4.6 边界、模型发现、固定高度滚动区和模型卡片选择见 `docs/m4.6-acceptance.md`；M5 QQ/NapCat 见 `docs/m5-acceptance.md`；M5.1 设置弹窗、QQ 配置和低摩擦提醒见 `docs/m5.1-acceptance.md`；M5.2 所有者会话、渠道隔离和多会话档案见 `docs/m5.2-acceptance.md`。测试实例的启停、配置预检和工具审计脚本在 `F:\kanobot\dsh`，不在本仓库内；正式 `4096` 实例不属于测试命令。
 
 ## 5. 当前状态
 
-- 阶段：M5.1 设置弹窗、QQ 配置和低摩擦提醒的代码与自动测试已完成（2026-11-07，版本 `0.17.0`）。真实 NapCat/真实 QQ 账号、一到两周日常观察、Windows 通知中心人工确认、真实第三方 API 试用和主模型选型仍待后续；M5 真实账号验收通过后再进入 M6。
-- 已存在：M1～M4 全部基线、M5 QQ 渠道、M5.1 设置弹窗和低摩擦提醒、schema v11，以及提醒/记忆确定性仲裁、候选冷却和归档恢复、脱敏记忆决策审计、正式独立程序、DSH 插件双形态、provider 工厂（`mock`/`magpie`/`dsh`/`openai-compatible`）、只读模型发现、模型/QQ 设置弹窗、运行时 `model-settings.json` 和 `channel-settings.json`、环境变量/本地 AES-GCM secret store、第三方 URL/DNS 私网拦截、一次性 bootstrap 登录和 Cookie 鉴权、OneBot 11 WebSocket、白名单/群 @、连发聚合、多图、去重、限频、重连、STOP 和主动消息同步。
+- 阶段：M5.2 所有者会话、渠道隔离和多会话档案的代码与自动测试已完成（2026-11-08，版本 `0.18.0`）。真实 NapCat/真实 QQ 账号、一到两周日常观察、Windows 通知中心人工确认、真实第三方 API 试用和主模型选型仍待后续；M5 真实账号验收通过后再进入 M6。
+- 已存在：M1～M4 全部基线、M5 QQ 渠道、M5.1 设置弹窗和低摩擦提醒、M5.2 所有者 QQ 会话合并与跨会话只读档案、schema v11，以及提醒/记忆确定性仲裁、候选冷却和归档恢复、脱敏记忆决策审计、正式独立程序、DSH 插件双形态、provider 工厂（`mock`/`magpie`/`dsh`/`openai-compatible`）、只读模型发现、模型/QQ 设置弹窗、运行时 `model-settings.json` 和 `channel-settings.json`、环境变量/本地 AES-GCM secret store、第三方 URL/DNS 私网拦截、一次性 bootstrap 登录和 Cookie 鉴权、OneBot 11 WebSocket、白名单/群 @、连发聚合、多图、去重、限频、重连、STOP 和主动消息同步。
 - 尚未存在：真实 NapCat/真实 QQ 账号验收、一到两周真实日常试用、Windows 通知中心人工确认、真实第三方付费 API 验收、DSH provider 在 4100 的真实生成回归、浏览器 worker、VM、游戏、自进化和公开发送。当前软计划只保存计划，不实际执行读书/浏览/游戏；当前推断记忆仍进候选，自动证据累积和淡化待后续改进；浏览器通知不是 Web Push。
 - 已知部署基线：Windows 10（10.0.19045），Node v24.19.0，DSH `0.2.1-rc.5`（npm `latest` 标签；当前没有非 RC 版本）。插件源码在本目录，测试实例使用独立 `DSH_HOME=F:\kanobot\dsh\test-home`。
 - 已知清理记录：旧插件、NapCat 和旧 VM 已从宿主清理；重新部署必须按新设计进行，不能复用旧配置假设。
@@ -103,9 +104,10 @@ npm run test:lifecycle -- --output F:\kanobot\dsh\m1-plugin-lifecycle.json
 - M4.6/M4.6.1 的提醒/记忆边界、候选冷却、schema v10、模型发现、固定高度滚动区、模型卡片选择、三尺寸浏览器验收、256 项测试和未验证项见 `docs/m4.6-acceptance.md`。
 - M5 的 QQ 白名单、群 @、连发聚合、多图、去重、限频、STOP、主动消息同步、schema v11、278 项测试和真实 NapCat/账号未验证边界见 `docs/m5-acceptance.md`。
 - M5.1 的设置弹窗、QQ/NapCat 配置、运行时覆盖、本地 secret、低摩擦提醒、313 项测试和三尺寸 Edge 验收见 `docs/m5.1-acceptance.md`。
+- M5.2 的“我们的对话 / 全部对话”、所有者 QQ 显式合并、其他私聊/群聊隔离、50 条 `seq` 游标、三尺寸 Edge 滚动验收和 composer 修复见 `docs/m5.2-acceptance.md`。
 - 网页空正文最终修复使用 JSON 助手预填、空输出有限重试和显式 `model_empty_response`；`[model].reasoning_effort = "low"` 已在 4100 测试 Profile 和示例配置中启用。真实聊天 13/13 通过，详见 `docs/m3.1-acceptance.md` 第 6 节和 `docs/m4-real-use-acceptance.md`。
 - 测试 Profile 数据在 `F:\kanobot\dsh\test-home\kanobot\data`；主库备份不包含独立墓碑库，迁移和恢复时必须单独保留 `tombstones.sqlite`。
-- 最近更新时间：2026-11-07。
+- 最近更新时间：2026-11-08。
 
 ## 6. 代码规范（后续实现时适用）
 

@@ -49,6 +49,7 @@ export interface QqChannelSettingsDraft {
   wsUrl: string
   allowRemote: boolean
   credential: ChannelCredentialDraft
+  ownerQqId: string | null
   privateAllow: string[]
   groupAllow: string[]
   groupRequireMention: boolean
@@ -182,6 +183,7 @@ export class ChannelSettingsService {
         wsUrl: qq.wsUrl,
         allowRemote: qq.allowRemote,
         credential: this.credentialView(qq),
+        ownerQqId: qq.ownerQqId,
         privateAllow: [...qq.privateAllow],
         groupAllow: [...qq.groupAllow],
         groupRequireMention: qq.groupRequireMention,
@@ -467,6 +469,7 @@ function parseDraft(value: unknown): ParsedDraft {
       'wsUrl',
       'allowRemote',
       'credential',
+      'ownerQqId',
       'privateAllow',
       'groupAllow',
       'groupRequireMention',
@@ -515,6 +518,7 @@ function parseDraft(value: unknown): ParsedDraft {
       wsUrl: qq.wsUrl as string,
       allowRemote: qq.allowRemote as boolean,
       credential: parseCredential(qq.credential),
+      ownerQqId: parseOwnerQqId(qq.ownerQqId),
       privateAllow: qq.privateAllow as string[],
       groupAllow: qq.groupAllow as string[],
       groupRequireMention: qq.groupRequireMention as boolean,
@@ -532,6 +536,17 @@ function parseDraft(value: unknown): ParsedDraft {
       limits: limits as QqChannelSettingsDraft['limits'],
     },
   }
+}
+
+function parseOwnerQqId(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new ChannelSettingsError(
+      'invalid_owner_qq',
+      '所有者 QQ 必须是单个 QQ 号或留空',
+    )
+  }
+  return value.trim()
 }
 
 function parseCredential(value: unknown): ParsedCredential {
@@ -599,6 +614,9 @@ function draftToChannelTable(
     reconnect_max_ms: draft.reconnectMaxMs,
     ping_interval_ms: draft.pingIntervalMs,
     dedupe_retention_hours: draft.dedupeRetentionHours,
+    ...(draft.ownerQqId === null || draft.ownerQqId === ''
+      ? {}
+      : { owner_qq: draft.ownerQqId }),
     private_allow: draft.privateAllow,
     group_allow: draft.groupAllow,
     group_require_mention: draft.groupRequireMention,
@@ -660,6 +678,7 @@ function buildOverlay(qq: QqChannelConfig): Record<string, unknown> {
     reconnect_max_ms: qq.reconnectMaxMs,
     ping_interval_ms: qq.pingIntervalMs,
     dedupe_retention_hours: qq.dedupeRetentionHours,
+    ...(qq.ownerQqId === null ? {} : { owner_qq: qq.ownerQqId }),
     private_allow: qq.privateAllow,
     group_allow: qq.groupAllow,
     group_require_mention: qq.groupRequireMention,

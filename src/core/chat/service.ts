@@ -20,6 +20,7 @@ import {
   type MemorySearchResult,
   type ModelCallRecord,
   type ReminderCandidateRecord,
+  type SequencedChatMessageRecord,
 } from '../storage/index.ts'
 import { StorageError } from '../storage/index.ts'
 import {
@@ -46,6 +47,10 @@ import {
   type ChatStateView,
   type ChatStreamEvent,
   type ChatStyleRetryView,
+  type ConversationDirectoryView,
+  type ConversationKind,
+  type ConversationMessageView,
+  type ConversationTimelineView,
   type ConversationView,
   type ChatVisionView,
   type ChatUsage,
@@ -346,20 +351,88 @@ export class KanobotChatService {
     }
   }
 
-  conversation(limit = this.historyLimit): ConversationView {
+  conversation(
+    limit = this.historyLimit,
+    beforeSequence: number | null = null,
+  ): ConversationView {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
       throw new RangeError('conversation limit must be an integer between 1 and 100')
     }
+    const page = this.storage.listChatMessagePage(
+      this.conversationId,
+      limit,
+      beforeSequence,
+    )
     return {
       conversationId: this.conversationId,
       model: this.identity(),
       vision: this.visionView(),
       state: this.state(),
       modelUsage: this.modelUsage(),
-      messages: this.storage.listChatMessages(
-        this.conversationId,
-        limit,
-      ),
+      messages: page.messages.map(message => this.messageView(message)),
+      hasMore: page.hasMore,
+      nextBeforeSequence: page.nextBeforeSequence,
+    }
+  }
+
+  /**
+   * 所有者会话目录只用于界面筛选。QQ 号只出现在已鉴权页面的来源标签里，
+   * 不进入模型上下文，也不复制到任何消息正文。
+   */
+  conversationDirectory(limit = 100): ConversationDirectoryView {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new RangeError('conversation limit must be an integer between 1 and 100')
+    }
+    return {
+      ownerConversationId: this.conversationId,
+      conversations: this.storage.listConversationSummaries(limit).map(item => {
+        const source = conversationSource(item.id)
+        return {
+          conversationId: item.id,
+          conversationKind: source.kind,
+          conversationLabel: source.label,
+          messageCount: item.messageCount,
+          lastSequence: item.lastSequence,
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+        }
+      }),
+    }
+  }
+
+  /**
+   * 跨会话只读时间线。传 conversationId 时退化为该会话历史页；不传时
+   * 按 seq 聚合显示所有来源，但绝不把这些消息合并进当前模型上下文。
+   */
+  timeline(
+    limit = 50,
+    beforeSequence: number | null = null,
+    conversationId: string | null = null,
+  ): ConversationTimelineView {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new RangeError('timeline limit must be an integer between 1 and 100')
+    }
+    const page = this.storage.listChatTimelinePage(
+      limit,
+      beforeSequence,
+      conversationId,
+    )
+    return {
+      conversationId,
+      messages: page.messages.map(message => this.messageView(message)),
+      hasMore: page.hasMore,
+      nextBeforeSequence: page.nextBeforeSequence,
+    }
+  }
+
+  private messageView(
+    message: SequencedChatMessageRecord,
+  ): ConversationMessageView {
+    const source = conversationSource(message.conversationId)
+    return {
+      ...message,
+      conversationKind: source.kind,
+      conversationLabel: source.label,
     }
   }
 
@@ -2008,6 +2081,29 @@ function errorCodeFrom(error: unknown, aborted: boolean): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function conversationSource(
+  conversationId: string,
+): { kind: ConversationKind; label: string } {
+  if (conversationId === CHAT_CONVERSATION_ID) {
+    return { kind: 'owner', label: '我们的对话' }
+  }
+  const privateMatch = /^qq-private-([1-9]\d{4,19})$/.exec(conversationId)
+  if (privateMatch !== null) {
+    return {
+      kind: 'qq-private',
+      label: `QQ 私聊 · ${privateMatch[1]}`,
+    }
+  }
+  const groupMatch = /^qq-group-([1-9]\d{4,19})$/.exec(conversationId)
+  if (groupMatch !== null) {
+    return {
+      kind: 'qq-group',
+      label: `QQ 群 · ${groupMatch[1]}`,
+    }
+  }
+  return { kind: 'other', label: conversationId }
 }
 
 function abortError(): Error {

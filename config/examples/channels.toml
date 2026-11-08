@@ -26,6 +26,9 @@ ping_interval_ms = 30000
 dedupe_retention_hours = 24
 
 # 只处理这些私聊好友和群。空数组表示谁都不处理。
+# owner_qq 填所有者自己的 QQ 号；只有这个私聊会与网页主会话共用上下文
+# 和长期记忆。留空时所有 QQ 会话都与网页隔离。
+# owner_qq = "123456789"
 private_allow = []
 group_allow = []
 group_require_mention = true

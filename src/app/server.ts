@@ -23,6 +23,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
+  CHAT_CONVERSATION_ID,
   ChatModelBudget,
   KanobotChatService,
   type ChatServiceOptions,
@@ -221,20 +222,32 @@ export async function createAppServer(
           pingIntervalMs: qqConfig.pingIntervalMs,
           logger,
         }),
-        createChat: conversationId =>
-          new KanobotChatService(storage as KanobotStorage, model, {
-            ...baseChatOptions,
-            conversationId,
-            vision: visionModel === null
-              ? undefined
-              : {
-                  model: visionModel,
-                  maxImageBytes: loaded.system.vision.maxImageBytes,
-                  maxDescriptionChars:
-                    loaded.system.vision.maxDescriptionChars,
-                  maxImages: qqConfig.coalesce.maxImages,
-                },
-          }),
+        createChat: conversationId => {
+          // 所有者 QQ 私聊复用网页主会话，确保上下文和记忆连续；
+          // 其他私聊/群聊不读取也不写入所有者记忆，也不能创建面向
+          // 所有者的提醒或后续关心候选。
+          if (conversationId === CHAT_CONVERSATION_ID) return chat
+          return new KanobotChatService(
+            storage as KanobotStorage,
+            model,
+            {
+              modelBudget: chatModelBudget,
+              context: loaded.system.context,
+              vision: visionModel === null
+                ? undefined
+                : {
+                    model: visionModel,
+                    maxImageBytes: loaded.system.vision.maxImageBytes,
+                    maxDescriptionChars:
+                      loaded.system.vision.maxDescriptionChars,
+                    maxImages: qqConfig.coalesce.maxImages,
+                  },
+              timezone: loaded.system.time.timezone,
+              clock,
+              conversationId,
+            },
+          )
+        },
         maxImageBytes: loaded.system.vision.maxImageBytes,
         logger,
         clock,

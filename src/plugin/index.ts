@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 
 import { loadConfigFromDirectory } from '../core/config/index.ts'
 import {
+  CHAT_CONVERSATION_ID,
   ChatModelBudget,
   KanobotChatService,
   type ChatServiceOptions,
@@ -206,20 +207,31 @@ export async function apply(
           pingIntervalMs: qqConfig.pingIntervalMs,
           logger: ctx.logger,
         }),
-        createChat: conversationId =>
-          new KanobotChatService(storage as KanobotStorage, model, {
-            ...baseChatOptions,
-            conversationId,
-            vision: visionModel === null
-              ? undefined
-              : {
-                  model: visionModel,
-                  maxImageBytes: loaded.system.vision.maxImageBytes,
-                  maxDescriptionChars:
-                    loaded.system.vision.maxDescriptionChars,
-                  maxImages: qqConfig.coalesce.maxImages,
-                },
-          }),
+        createChat: conversationId => {
+          // 只有显式 owner_qq 的私聊会映射到 main 并复用网页会话。
+          // 其他会话不读写所有者记忆，也不提交提醒/关心候选。
+          if (conversationId === CHAT_CONVERSATION_ID) return chat
+          return new KanobotChatService(
+            storage as KanobotStorage,
+            model,
+            {
+              modelBudget: chatModelBudget,
+              context: loaded.system.context,
+              vision: visionModel === null
+                ? undefined
+                : {
+                    model: visionModel,
+                    maxImageBytes: loaded.system.vision.maxImageBytes,
+                    maxDescriptionChars:
+                      loaded.system.vision.maxDescriptionChars,
+                    maxImages: qqConfig.coalesce.maxImages,
+                  },
+              timezone: loaded.system.time.timezone,
+              clock,
+              conversationId,
+            },
+          )
+        },
         maxImageBytes: loaded.system.vision.maxImageBytes,
         logger: ctx.logger,
         clock,

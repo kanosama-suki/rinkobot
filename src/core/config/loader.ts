@@ -1574,6 +1574,7 @@ function defaultChannelsConfig(): ChannelsConfig {
       reconnectMaxMs: 60_000,
       pingIntervalMs: 30_000,
       dedupeRetentionHours: 24,
+      ownerQqId: null,
       privateAllow: [],
       groupAllow: [],
       groupRequireMention: true,
@@ -1622,6 +1623,7 @@ export function validateChannels(
       'reconnect_max_ms',
       'ping_interval_ms',
       'dedupe_retention_hours',
+      'owner_qq',
       'private_allow',
       'group_allow',
       'group_require_mention',
@@ -1744,6 +1746,17 @@ export function validateChannels(
     168,
   )
 
+  const ownerQqId = optionalString(
+    qq,
+    'owner_qq',
+    'qq.owner_qq',
+    5,
+    20,
+  )
+  if (ownerQqId !== null) {
+    requireQqId(ownerQqId, 'qq.owner_qq')
+  }
+
   const privateAllow = requiredStringArray(
     qq,
     'private_allow',
@@ -1759,6 +1772,12 @@ export function validateChannels(
   }
   for (const id of groupAllow) {
     requireQqId(id, 'qq.group_allow')
+  }
+  if (ownerQqId !== null && !privateAllow.includes(ownerQqId)) {
+    fail(
+      'qq.owner_qq',
+      'owner QQ must be present in qq.private_allow',
+    )
   }
   const groupRequireMention = requiredBoolean(
     qq,
@@ -1915,6 +1934,7 @@ export function validateChannels(
       reconnectMaxMs,
       pingIntervalMs,
       dedupeRetentionHours,
+      ownerQqId,
       privateAllow,
       groupAllow,
       groupRequireMention,

@@ -50,6 +50,7 @@ test('the QQ settings page exposes the complete draft fields', () => {
     'channel-enabled',
     'channel-ws-url',
     'channel-allow-remote',
+    'channel-owner-qq',
     'channel-credential-mode',
     'channel-credential-env',
     'channel-credential-secret',
@@ -90,6 +91,22 @@ test('the QQ settings page exposes the complete draft fields', () => {
     /id="channel-credential-secret"[^>]*value=/.test(html),
     false,
   )
+})
+
+test('owner chat and the read-only archive are separate scrollable views', () => {
+  assert.match(html, /id="chat-view-owner"/)
+  assert.match(html, /id="chat-view-archive"/)
+  assert.match(html, /id="archive-conversation"/)
+  assert.match(html, /id="archive-refresh"/)
+  assert.match(html, /id="history-more"/)
+  assert.match(script, /state\.chatView === 'archive'/)
+  assert.match(script, /\/kanobot\/api\/timeline/)
+  assert.match(script, /\/kanobot\/api\/conversations/)
+  assert.match(script, /ownerQqId: parseOwnerQqId/)
+  assert.match(style, /\.messages \{[\s\S]*?overflow-y: scroll/)
+  assert.match(style, /\.chat-view-switch/)
+  assert.match(style, /\.message-day/)
+  assert.match(style, /\.composer\[hidden\][\s\S]*?display: none/)
 })
 
 test('the QQ badge and settings panel have independent status surfaces', () => {

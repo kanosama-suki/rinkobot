@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>Kanobot · M5.1 聊天、记忆与渠道设置</title>
+    <title>Kanobot · M5.2 聊天档案、QQ 会话与设置</title>
     <link rel="stylesheet" href="/kanobot/app.css">
   </head>
   <body>
@@ -13,8 +13,8 @@
         <div class="brand-block">
           <span class="brand-mark" aria-hidden="true">K</span>
           <div>
-            <p class="eyebrow">Kanobot / M5.1</p>
-            <h1>聊天、记忆、主动性与渠道设置</h1>
+            <p class="eyebrow">Kanobot / M5.2</p>
+            <h1>聊天、完整档案与渠道设置</h1>
           </div>
         </div>
         <div class="topbar-actions">
@@ -34,12 +34,45 @@
 
       <main class="workspace">
         <section class="chat-panel" aria-label="聊天">
+          <div class="chat-view-bar">
+            <div class="chat-view-switch" role="group" aria-label="聊天视图">
+              <button
+                id="chat-view-owner"
+                class="chat-view-button active"
+                type="button"
+                aria-pressed="true"
+              >我们的对话</button>
+              <button
+                id="chat-view-archive"
+                class="chat-view-button"
+                type="button"
+                aria-pressed="false"
+              >全部对话</button>
+            </div>
+            <div id="archive-controls" class="archive-controls" hidden>
+              <label class="archive-filter" for="archive-conversation">
+                会话
+                <select id="archive-conversation">
+                  <option value="">全部来源</option>
+                </select>
+              </label>
+              <button id="archive-refresh" class="small-button" type="button">
+                刷新
+              </button>
+            </div>
+          </div>
+          <p id="chat-context-note" class="chat-context-note">
+            这里是你和她的共享会话；指定所有者 QQ 的私聊也会进入这里。
+          </p>
           <div id="notice" class="notice" role="alert" hidden></div>
           <p id="vision-status" class="vision-status" role="status" hidden></p>
           <div id="empty-state" class="empty-state" hidden>
             <p>这里还没有消息。</p>
             <span id="empty-note">这是占位人格；发送消息后才会调用配置的模型路由。</span>
           </div>
+          <button id="history-more" class="history-more" type="button" hidden>
+            加载更早的消息
+          </button>
           <div id="messages" class="messages" role="log" aria-live="polite"></div>
           <form id="composer" class="composer">
             <div class="composer-entry">
@@ -183,11 +216,16 @@
 
             <section class="panel-card subtle-card">
               <p class="eyebrow">当前边界</p>
-              <h2>M5.1 陪伴与自主活动</h2>
+              <h2>M5.2 会话与渠道边界</h2>
               <ul class="boundary-list">
                 <li>复用 DSH 浏览器登录态</li>
                 <li>单次模型调用返回一个 JSON 信封</li>
                 <li>正文仍然逐字流式显示</li>
+                <li>所有者 QQ 私聊与网页共用同一会话</li>
+                <li>其他私聊和群聊只读汇总，不进入我们的上下文</li>
+                <li>非所有者会话不读写所有者长期记忆</li>
+                <li>网页普通回复不会自动推送到 QQ</li>
+                <li>历史按 50 条游标分页，不一次性铺开</li>
                 <li>记忆候选复用引用、敏感和去重门禁</li>
                 <li>心情与承诺写入版本化状态事件</li>
                 <li>图片由独立、可配置的视觉模型转述</li>
@@ -932,6 +970,21 @@
                 <section class="panel-card">
                   <p class="eyebrow">访问边界</p>
                   <h2>白名单与群聊</h2>
+                  <label class="field settings-wide-field">
+                    <span>所有者 QQ（留空则不合并任何私聊）</span>
+                    <input
+                      id="channel-owner-qq"
+                      type="text"
+                      inputmode="numeric"
+                      maxlength="20"
+                      placeholder="123456789"
+                    >
+                  </label>
+                  <p class="settings-note">
+                    只有这里的 QQ 号私聊会与网页“我们的对话”共用上下文和
+                    长期记忆，且必须同时出现在私聊白名单。其他私聊和群聊
+                    仍可在“全部对话”中查看，但不会进入所有者上下文。
+                  </p>
                   <div class="field-row field-row-two">
                     <label class="field">
                       <span>私聊白名单（逗号或换行分隔）</span>

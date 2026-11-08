@@ -1,13 +1,23 @@
 /**
- * M5.1 聊天、记忆、主动性、状态、视觉、审计、设置弹窗与紧急停止面板。
+ * M5.2 聊天、完整对话档案、记忆、主动性、状态、视觉、审计、设置弹窗
+ * 与紧急停止面板。
  *
  * 所有来自服务器和模型的文本都通过 textContent 渲染；SSE 只接受本页面
  * 固定的聊天流格式。记忆操作必须经过 DSH 登录态，页面不保存任何凭据。
  */
 
 const elements = {
+  chatPanel: document.querySelector('.chat-panel'),
+  chatViewOwner: document.querySelector('#chat-view-owner'),
+  chatViewArchive: document.querySelector('#chat-view-archive'),
+  archiveControls: document.querySelector('#archive-controls'),
+  archiveConversation: document.querySelector('#archive-conversation'),
+  archiveRefresh: document.querySelector('#archive-refresh'),
+  chatContextNote: document.querySelector('#chat-context-note'),
+  historyMore: document.querySelector('#history-more'),
   messages: document.querySelector('#messages'),
   empty: document.querySelector('#empty-state'),
+  emptyTitle: document.querySelector('#empty-state p'),
   notice: document.querySelector('#notice'),
   form: document.querySelector('#composer'),
   input: document.querySelector('#message-input'),
@@ -35,6 +45,7 @@ const elements = {
   statusCommitments: document.querySelector('#status-commitments'),
   statusEvents: document.querySelector('#status-events'),
   emptyNote: document.querySelector('#empty-note'),
+  composerHint: document.querySelector('.composer-hint'),
   tabStatus: document.querySelector('#tab-status'),
   tabInitiative: document.querySelector('#tab-initiative'),
   tabMemory: document.querySelector('#tab-memory'),
@@ -180,6 +191,7 @@ const elements = {
   channelEnabled: document.querySelector('#channel-enabled'),
   channelWsUrl: document.querySelector('#channel-ws-url'),
   channelAllowRemote: document.querySelector('#channel-allow-remote'),
+  channelOwnerQq: document.querySelector('#channel-owner-qq'),
   channelCredentialMode: document.querySelector('#channel-credential-mode'),
   channelCredentialStatus: document.querySelector('#channel-credential-status'),
   channelCredentialEnvField: document.querySelector('#channel-credential-env-field'),
@@ -215,13 +227,27 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 const POLL_INTERVAL_MS = 30_000
 const MODEL_CHOICE_LIMIT = 8
+const PAGE_SIZE = 50
 
 const state = {
   sending: false,
   polling: false,
   image: null,
   maxImageBytes: MAX_IMAGE_BYTES,
-  messageIds: new Set(),
+  model: null,
+  chatView: 'owner',
+  ownerMessages: [],
+  ownerMessageIds: new Set(),
+  ownerHasMore: false,
+  ownerNextBeforeSequence: null,
+  archiveMessages: [],
+  archiveMessageIds: new Set(),
+  archiveHasMore: false,
+  archiveNextBeforeSequence: null,
+  archiveConversationId: '',
+  archiveConversations: [],
+  archiveLoading: false,
+  historyLoading: false,
   activeTab: 'status',
   memoryStatus: 'active',
   memoryQuery: '',
@@ -251,7 +277,8 @@ void initialize()
 async function initialize() {
   try {
     const view = await fetchConversation()
-    renderConversation(view)
+    applyOwnerPage(view, true)
+    renderCurrentView('bottom')
     focusComposer()
   } catch (error) {
     showNotice(error instanceof Error ? error.message : String(error))
@@ -310,6 +337,9 @@ async function pollUpdates() {
     if (!state.sending) {
       try {
         const newMessages = await refreshConversation()
+        if (state.chatView === 'archive') {
+          await refreshArchiveLatest()
+        }
         const latestProactiveAt = initiativeView?.lastProactiveAt ?? null
         if (
           latestProactiveAt !== null &&
@@ -334,23 +364,53 @@ async function pollUpdates() {
 }
 
 async function refreshConversation() {
-  const previousIds = new Set(state.messageIds)
+  const previousIds = new Set(state.ownerMessageIds)
   const view = await fetchConversation()
+  const newMessages = applyOwnerPage(view, false)
+  if (state.chatView === 'owner' && newMessages.length > 0) {
+    for (const message of newMessages) {
+      appendMessage(
+        message.role,
+        message.text,
+        message.createdAt,
+        message.id,
+      )
+    }
+  }
+  return newMessages.filter(message => !previousIds.has(message.id))
+}
+
+function applyOwnerPage(view, replace) {
+  const previousIds = new Set(state.ownerMessageIds)
   applyModel(view.model)
   applyVision(view.vision)
   applyState(view.state)
   applyUsage(view.modelUsage)
-  const newMessages = []
-  for (const message of view.messages) {
-    if (previousIds.has(message.id)) continue
-    appendMessage(message.role, message.text, message.createdAt, message.id)
-    newMessages.push(message)
+  const incoming = Array.isArray(view.messages) ? view.messages : []
+  const byId = new Map()
+  if (!replace) {
+    for (const message of state.ownerMessages) byId.set(message.id, message)
   }
+  for (const message of incoming) byId.set(message.id, message)
+  state.ownerMessages = sortMessages(Array.from(byId.values()))
+  state.ownerMessageIds = new Set(
+    state.ownerMessages.map(message => message.id),
+  )
+  state.ownerHasMore = view.hasMore === true
+  state.ownerNextBeforeSequence =
+    Number.isSafeInteger(view.nextBeforeSequence)
+      ? view.nextBeforeSequence
+      : null
+  const newMessages = incoming.filter(message => !previousIds.has(message.id))
   return newMessages
 }
 
-async function fetchConversation() {
-  const response = await fetch('/kanobot/api/conversation?limit=100', {
+async function fetchConversation(beforeSequence = null) {
+  const params = new URLSearchParams({ limit: String(PAGE_SIZE) })
+  if (Number.isSafeInteger(beforeSequence)) {
+    params.set('beforeSeq', String(beforeSequence))
+  }
+  const response = await fetch(`/kanobot/api/conversation?${params}`, {
     credentials: 'same-origin',
     headers: { accept: 'application/json' },
   })
@@ -358,19 +418,6 @@ async function fetchConversation() {
     throw new Error(await responseMessage(response, '读取聊天记录失败'))
   }
   return response.json()
-}
-
-function renderConversation(view) {
-  elements.messages.replaceChildren()
-  state.messageIds.clear()
-  applyModel(view.model)
-  applyVision(view.vision)
-  applyState(view.state)
-  applyUsage(view.modelUsage)
-  for (const message of view.messages) {
-    appendMessage(message.role, message.text, message.createdAt, message.id)
-  }
-  updateEmptyState()
 }
 
 elements.form.addEventListener('submit', event => {
@@ -400,6 +447,373 @@ elements.imageRemove.addEventListener('click', () => {
   clearImage()
   elements.input.focus({ preventScroll: true })
 })
+
+elements.chatViewOwner.addEventListener('click', () => {
+  void setChatView('owner')
+})
+
+elements.chatViewArchive.addEventListener('click', () => {
+  void setChatView('archive')
+})
+
+elements.archiveConversation.addEventListener('change', () => {
+  state.archiveConversationId = elements.archiveConversation.value
+  void loadArchivePage(true)
+})
+
+elements.archiveRefresh.addEventListener('click', () => {
+  void refreshArchive()
+})
+
+elements.historyMore.addEventListener('click', () => {
+  void loadOlderMessages()
+})
+
+async function setChatView(view) {
+  if (view !== 'owner' && view !== 'archive') return
+  if (state.chatView === view) return
+  if (state.sending) {
+    showNotice('当前回复完成后才能切换视图。')
+    return
+  }
+  state.chatView = view
+  if (view === 'owner') {
+    renderCurrentView('bottom')
+    focusComposer()
+    return
+  }
+  renderCurrentView('bottom')
+  await Promise.all([
+    loadConversationDirectory(),
+    loadArchivePage(true),
+  ])
+}
+
+async function loadConversationDirectory() {
+  const response = await fetch('/kanobot/api/conversations', {
+    credentials: 'same-origin',
+    headers: { accept: 'application/json' },
+  })
+  if (!response.ok) {
+    throw new Error(await responseMessage(response, '读取会话目录失败'))
+  }
+  const view = await response.json()
+  state.archiveConversations = Array.isArray(view.conversations)
+    ? view.conversations
+    : []
+  const selected = state.archiveConversationId
+  const options = document.createDocumentFragment()
+  const all = document.createElement('option')
+  all.value = ''
+  all.textContent = '全部来源'
+  options.append(all)
+  for (const conversation of state.archiveConversations) {
+    if (
+      typeof conversation.conversationId !== 'string' ||
+      typeof conversation.conversationLabel !== 'string'
+    ) {
+      continue
+    }
+    if (
+      conversation.conversationKind !== 'owner' &&
+      !(Number(conversation.messageCount) > 0)
+    ) {
+      continue
+    }
+    const option = document.createElement('option')
+    option.value = conversation.conversationId
+    option.textContent = `${conversation.conversationLabel}` +
+      ` (${Number(conversation.messageCount) || 0})`
+    options.append(option)
+  }
+  elements.archiveConversation.replaceChildren(options)
+  const stillPresent = state.archiveConversations.some(
+    conversation => conversation.conversationId === selected,
+  )
+  state.archiveConversationId = stillPresent ? selected : ''
+  elements.archiveConversation.value = state.archiveConversationId
+}
+
+async function loadArchivePage(replace) {
+  if (state.archiveLoading) return
+  state.archiveLoading = true
+  try {
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE) })
+    if (state.archiveConversationId !== '') {
+      params.set('conversationId', state.archiveConversationId)
+    }
+    const response = await fetch(`/kanobot/api/timeline?${params}`, {
+      credentials: 'same-origin',
+      headers: { accept: 'application/json' },
+    })
+    if (!response.ok) {
+      throw new Error(await responseMessage(response, '读取对话档案失败'))
+    }
+    const view = await response.json()
+    const byId = new Map()
+    if (!replace) {
+      for (const message of state.archiveMessages) byId.set(message.id, message)
+    }
+    for (const message of Array.isArray(view.messages) ? view.messages : []) {
+      byId.set(message.id, message)
+    }
+    state.archiveMessages = sortMessages(Array.from(byId.values()))
+    state.archiveMessageIds = new Set(
+      state.archiveMessages.map(message => message.id),
+    )
+    state.archiveHasMore = view.hasMore === true
+    state.archiveNextBeforeSequence =
+      Number.isSafeInteger(view.nextBeforeSequence)
+        ? view.nextBeforeSequence
+        : null
+    renderCurrentView('bottom')
+  } catch (error) {
+    showNotice(errorMessage(error))
+  } finally {
+    state.archiveLoading = false
+    updateHistoryControls()
+  }
+}
+
+async function refreshArchive() {
+  await loadConversationDirectory().catch(error => showNotice(errorMessage(error)))
+  await loadArchivePage(true)
+}
+
+async function refreshArchiveLatest() {
+  if (state.archiveLoading) return
+  const previous = captureScroll()
+  state.archiveLoading = true
+  try {
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE) })
+    if (state.archiveConversationId !== '') {
+      params.set('conversationId', state.archiveConversationId)
+    }
+    const response = await fetch(`/kanobot/api/timeline?${params}`, {
+      credentials: 'same-origin',
+      headers: { accept: 'application/json' },
+    })
+    if (!response.ok) {
+      throw new Error(await responseMessage(response, '刷新对话档案失败'))
+    }
+    const view = await response.json()
+    const byId = new Map(
+      state.archiveMessages.map(message => [message.id, message]),
+    )
+    let changed = false
+    for (const message of Array.isArray(view.messages) ? view.messages : []) {
+      if (!byId.has(message.id)) changed = true
+      byId.set(message.id, message)
+    }
+    if (!changed) return
+    const previouslyHadMore = state.archiveHasMore
+    state.archiveMessages = sortMessages(Array.from(byId.values()))
+    state.archiveMessageIds = new Set(
+      state.archiveMessages.map(message => message.id),
+    )
+    state.archiveHasMore = previouslyHadMore || view.hasMore === true
+    state.archiveNextBeforeSequence = state.archiveHasMore
+      ? (state.archiveMessages[0]?.sequence ?? null)
+      : null
+    if (state.chatView === 'archive') {
+      renderCurrentView('anchor', previous)
+    }
+  } catch {
+    // 后台刷新失败不覆盖当前档案；手动刷新仍会显示具体错误。
+  } finally {
+    state.archiveLoading = false
+    updateHistoryControls()
+  }
+}
+
+async function loadOlderMessages() {
+  if (state.historyLoading) return
+  if (state.chatView === 'owner' && !state.ownerHasMore) return
+  if (state.chatView === 'archive' && !state.archiveHasMore) return
+  state.historyLoading = true
+  updateHistoryControls()
+  const previous = captureScroll()
+  try {
+    if (state.chatView === 'owner') {
+      const cursor = state.ownerNextBeforeSequence
+      if (!Number.isSafeInteger(cursor)) return
+      const view = await fetchConversation(cursor)
+      applyOwnerPage(view, false)
+      renderCurrentView('anchor', previous)
+    } else {
+      const cursor = state.archiveNextBeforeSequence
+      if (!Number.isSafeInteger(cursor)) return
+      const params = new URLSearchParams({
+        limit: String(PAGE_SIZE),
+        beforeSeq: String(cursor),
+      })
+      if (state.archiveConversationId !== '') {
+        params.set('conversationId', state.archiveConversationId)
+      }
+      const response = await fetch(`/kanobot/api/timeline?${params}`, {
+        credentials: 'same-origin',
+        headers: { accept: 'application/json' },
+      })
+      if (!response.ok) {
+        throw new Error(await responseMessage(response, '读取更早对话失败'))
+      }
+      const view = await response.json()
+      const byId = new Map(
+        state.archiveMessages.map(message => [message.id, message]),
+      )
+      for (const message of Array.isArray(view.messages) ? view.messages : []) {
+        byId.set(message.id, message)
+      }
+      state.archiveMessages = sortMessages(Array.from(byId.values()))
+      state.archiveMessageIds = new Set(
+        state.archiveMessages.map(message => message.id),
+      )
+      state.archiveHasMore = view.hasMore === true
+      state.archiveNextBeforeSequence =
+        Number.isSafeInteger(view.nextBeforeSequence)
+          ? view.nextBeforeSequence
+          : null
+      renderCurrentView('anchor', previous)
+    }
+  } catch (error) {
+    showNotice(errorMessage(error))
+  } finally {
+    state.historyLoading = false
+    updateHistoryControls()
+  }
+}
+
+function sortMessages(messages) {
+  return [...messages].sort((left, right) => {
+    const leftSequence = Number.isSafeInteger(left.sequence)
+      ? left.sequence
+      : Number.MAX_SAFE_INTEGER
+    const rightSequence = Number.isSafeInteger(right.sequence)
+      ? right.sequence
+      : Number.MAX_SAFE_INTEGER
+    if (leftSequence !== rightSequence) return leftSequence - rightSequence
+    return Date.parse(left.createdAt) - Date.parse(right.createdAt)
+  })
+}
+
+function captureScroll() {
+  return {
+    top: elements.messages.scrollTop,
+    height: elements.messages.scrollHeight,
+  }
+}
+
+function renderCurrentView(scrollMode = 'preserve', previous = null) {
+  const ownerView = state.chatView === 'owner'
+  elements.chatViewOwner.classList.toggle('active', ownerView)
+  elements.chatViewArchive.classList.toggle('active', !ownerView)
+  elements.chatViewOwner.setAttribute('aria-pressed', String(ownerView))
+  elements.chatViewArchive.setAttribute('aria-pressed', String(!ownerView))
+  elements.archiveControls.hidden = ownerView
+  elements.form.hidden = !ownerView
+  elements.composerHint.hidden = !ownerView
+  elements.chatContextNote.textContent = ownerView
+    ? '这里是你和她的共享会话；指定所有者 QQ 的私聊也会进入这里。'
+    : '这里是跨会话只读档案；不会把这些消息合并进“我们的对话”，也不能在这里发送。'
+  updateEmptyCopy()
+  renderMessageList(
+    ownerView ? state.ownerMessages : state.archiveMessages,
+    !ownerView,
+  )
+  updateHistoryControls()
+  if (scrollMode === 'bottom') {
+    scrollToBottom()
+  } else if (scrollMode === 'anchor' && previous !== null) {
+    const delta = elements.messages.scrollHeight - previous.height
+    elements.messages.scrollTop = previous.top + delta
+  }
+}
+
+function updateEmptyCopy() {
+  const archive = state.chatView === 'archive'
+  elements.emptyTitle.textContent = archive
+    ? '还没有可查看的对话。'
+    : '这里还没有消息。'
+  if (archive) {
+    elements.emptyNote.textContent =
+      '所有来源的消息会按时间顺序汇总在这里；这里只读，不会改变“我们的对话”。'
+    return
+  }
+  const model = state.model
+  if (model === null) {
+    elements.emptyNote.textContent = '正在读取模型状态…'
+  } else if (model.mode === 'mock') {
+    elements.emptyNote.textContent =
+      '这是占位人格和本地 mock 回复，不会调用真实模型。'
+  } else {
+    elements.emptyNote.textContent =
+      '这是占位人格；回复来自配置的模型路由。'
+  }
+}
+
+function renderMessageList(messages, includeSource) {
+  const fragment = document.createDocumentFragment()
+  let currentDay = ''
+  for (const message of messages) {
+    const day = formatDate(message.createdAt)
+    if (day !== currentDay) {
+      const separator = document.createElement('div')
+      separator.className = 'message-day'
+      separator.dataset.day = day
+      separator.textContent = formatDayLabel(message.createdAt)
+      fragment.append(separator)
+      currentDay = day
+    }
+    fragment.append(
+      createMessageElement(
+        message.role,
+        message.text,
+        message.createdAt,
+        message.id,
+        includeSource ? message.conversationLabel : null,
+      ),
+    )
+  }
+  elements.messages.replaceChildren(fragment)
+  updateEmptyState()
+}
+
+function createMessageElement(role, text, createdAt, id, sourceLabel = null) {
+  const article = document.createElement('article')
+  article.className = `message ${role}`
+  const day = formatDate(createdAt)
+  if (day !== '') article.dataset.day = day
+  if (id) article.dataset.messageId = id
+
+  const content = document.createElement('p')
+  content.className = 'message-text'
+  content.textContent = text
+  const meta = document.createElement('div')
+  meta.className = 'message-meta'
+  if (sourceLabel !== null && sourceLabel !== '') {
+    const source = document.createElement('span')
+    source.className = 'message-source'
+    source.textContent = sourceLabel
+    meta.append(source)
+  }
+  const time = document.createElement('span')
+  time.className = 'message-time'
+  time.textContent = formatTime(createdAt)
+  meta.append(time)
+  article.append(content, meta)
+  return article
+}
+
+function updateHistoryControls() {
+  const hasMore = state.chatView === 'owner'
+    ? state.ownerHasMore
+    : state.archiveHasMore
+  elements.historyMore.hidden = !hasMore
+  elements.historyMore.disabled = state.historyLoading
+  elements.historyMore.textContent = state.historyLoading
+    ? '正在加载更早的消息…'
+    : '加载更早的消息'
+}
 
 async function sendMessage() {
   if (state.sending) return
@@ -492,7 +906,9 @@ async function sendMessage() {
     }
     showNotice(errorMessage(error))
     try {
-      renderConversation(await fetchConversation())
+      const view = await fetchConversation()
+      applyOwnerPage(view, true)
+      renderCurrentView('bottom')
     } catch {
       // 初始错误已经展示，刷新失败不再覆盖它。
     }
@@ -582,12 +998,23 @@ async function consumeEvents(stream, onEvent) {
 }
 
 function appendMessage(role, text, createdAt, id, existingElement = null) {
-  if (id && state.messageIds.has(id)) return existingElement
-  const article = existingElement ?? document.createElement('article')
+  let article = existingElement
+  if (article === null && id) {
+    article = elements.messages.querySelector(
+      `[data-message-id="${cssEscape(id)}"]`,
+    )
+  }
+  const known = id !== null && state.ownerMessageIds.has(id)
+  if (known && article !== null && article.isConnected) return article
+  if (article === null) {
+    article = createMessageElement(role, text, createdAt, id)
+  }
   article.classList.add('message', role)
+  const day = formatDate(createdAt)
+  if (day !== '') article.dataset.day = day
   if (id) {
     article.dataset.messageId = id
-    state.messageIds.add(id)
+    state.ownerMessageIds.add(id)
   }
 
   let content = article.querySelector('.message-text')
@@ -604,17 +1031,53 @@ function appendMessage(role, text, createdAt, id, existingElement = null) {
     meta.className = 'message-meta'
     article.append(meta)
   }
-  meta.textContent = formatTime(createdAt)
+  const time = meta.querySelector('.message-time')
+  if (time === null) {
+    meta.replaceChildren()
+    const createdTime = document.createElement('span')
+    createdTime.className = 'message-time'
+    createdTime.textContent = formatTime(createdAt)
+    meta.append(createdTime)
+  } else {
+    time.textContent = formatTime(createdAt)
+  }
 
-  if (!article.isConnected) elements.messages.append(article)
+  if (id && !known) {
+    const storedText = text === ''
+      ? (content?.textContent ?? '')
+      : text
+    const without = state.ownerMessages.filter(message => message.id !== id)
+    state.ownerMessages = sortMessages([
+      ...without,
+      { id, role, text: storedText, createdAt },
+    ])
+  }
+
+  if (!article.isConnected) {
+    ensureDaySeparator(createdAt)
+    elements.messages.append(article)
+  }
   scrollToBottom()
   updateEmptyState()
   return article
 }
 
+function ensureDaySeparator(createdAt) {
+  const day = formatDate(createdAt)
+  if (day === '') return
+  const last = elements.messages.lastElementChild
+  if (last !== null && last.dataset.day === day) return
+  const separator = document.createElement('div')
+  separator.className = 'message-day'
+  separator.dataset.day = day
+  separator.textContent = formatDayLabel(createdAt)
+  elements.messages.append(separator)
+}
+
 function appendPendingAssistant(recalledMemoryCount) {
   const article = document.createElement('article')
   article.className = 'message assistant pending'
+  article.dataset.day = formatDate(new Date().toISOString())
   const content = document.createElement('p')
   content.className = 'message-text'
   const meta = document.createElement('div')
@@ -808,6 +1271,7 @@ function envelopeIssueLabel(code) {
 
 function applyModel(model) {
   if (!model || typeof model.id !== 'string') return
+  state.model = model
   const isMock = model.mode === 'mock'
   elements.modelBadge.textContent = isMock
     ? 'mock · 未连接真实模型'
@@ -815,9 +1279,7 @@ function applyModel(model) {
   elements.statusModel.textContent = `${model.id} (${model.mode})`
   elements.statusProvider.textContent =
     typeof model.provider === 'string' ? model.provider : model.mode
-  elements.emptyNote.textContent = isMock
-    ? '这是占位人格和本地 mock 回复，不会调用真实模型。'
-    : '这是占位人格；回复来自本地 Magpie 路由中的精确模型。'
+  updateEmptyCopy()
 }
 
 function applyVision(value) {
@@ -963,6 +1425,33 @@ function formatDate(value) {
     month: '2-digit',
     day: '2-digit',
   }).format(date)
+}
+
+function formatDayLabel(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const today = new Date()
+  const yesterday = new Date()
+  yesterday.setDate(today.getDate() - 1)
+  if (formatDate(date.toISOString()) === formatDate(today.toISOString())) {
+    return '今天'
+  }
+  if (formatDate(date.toISOString()) === formatDate(yesterday.toISOString())) {
+    return '昨天'
+  }
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    weekday: 'short',
+  }).format(date)
+}
+
+function cssEscape(value) {
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+    return CSS.escape(value)
+  }
+  return String(value).replace(/["\\]/g, '\\$&')
 }
 
 async function loadInitiative() {
@@ -2747,6 +3236,8 @@ function applyChannelSettings(view) {
   elements.channelEnabled.checked = qq.enabled === true
   elements.channelWsUrl.value = String(qq.wsUrl ?? '')
   elements.channelAllowRemote.checked = qq.allowRemote === true
+  elements.channelOwnerQq.value =
+    typeof qq.ownerQqId === 'string' ? qq.ownerQqId : ''
   elements.channelCredentialMode.value = 'keep'
   elements.channelCredentialEnv.value =
     typeof qq.credential?.environmentName === 'string'
@@ -2997,6 +3488,7 @@ function buildChannelSettingsDraft() {
       wsUrl: requiredSettingText(elements.channelWsUrl, 'QQ WebSocket URL'),
       allowRemote: elements.channelAllowRemote.checked,
       credential,
+      ownerQqId: parseOwnerQqId(elements.channelOwnerQq.value),
       privateAllow: parseQqIdList(
         elements.channelPrivateAllow.value,
         '私聊白名单',
@@ -3102,6 +3594,15 @@ function parseQqIdList(value, label) {
     }
   }
   return [...new Set(items)]
+}
+
+function parseOwnerQqId(value) {
+  const trimmed = String(value).trim()
+  if (trimmed === '') return null
+  if (!/^[1-9]\d{4,19}$/.test(trimmed)) {
+    throw new Error('所有者 QQ 必须是 5–20 位数字，且不能以 0 开头')
+  }
+  return trimmed
 }
 
 async function channelSettingsRequest(method, path, body) {

@@ -1,6 +1,6 @@
 # 项目文件结构
 
-以下路径相对于项目根目录 `a/`。当前仓库处于 M5.1 代码和自动测试完成、等待真实 NapCat/QQ 账号验收的状态：已有 DSH Host 插件、正式独立程序、开发入口、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、网页聊天和 SSE、固定高度聊天/审计滚动区、长期记忆与中文检索、提醒/记忆确定性仲裁、候选冷却、单次 JSON 信封、所有者面板、风格检查、上下文预算、独立视觉模型、schema v11 的主动性与提醒闭环，以及聊天/视觉分开的 provider 设置弹窗、只读模型发现、可点选模型卡片、运行时覆盖、环境变量/本地加密 secret store 和第三方端点治理。M5 增加了外部 NapCat/OneBot 11 QQ 渠道、白名单、群 @、连发聚合、多图、去重、限频、重连、发送结果未知不重发和脱敏渠道审计。M5.1 把设置移入原生弹窗，增加 QQ 渠道配置与一次性连接测试，通过 `channel-settings.json` 覆盖 `channels.toml` 的 `qq` 段，并让明确委托的提醒直接生效、模糊委托在聊天里确认。真实 QQ 账号、真实图片样本、日常观察、浏览器 worker、VM、游戏、自进化和公开发送仍不存在。双形态是“同一核心 + DSH 插件 + 独立程序”，两者共用数据库契约；`src/dev` 仍只是开发工具，不是产品。
+以下路径相对于项目根目录 `a/`。当前仓库处于 M5.2 代码和自动测试完成、等待真实 NapCat/QQ 账号验收的状态：已有 DSH Host 插件、正式独立程序、开发入口、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、网页聊天和 SSE、固定高度聊天/审计滚动区、长期记忆与中文检索、提醒/记忆确定性仲裁、候选冷却、单次 JSON 信封、所有者面板、风格检查、上下文预算、独立视觉模型、schema v11 的主动性与提醒闭环，以及聊天/视觉分开的 provider 设置弹窗、只读模型发现、可点选模型卡片、运行时覆盖、环境变量/本地加密 secret store 和第三方端点治理。M5 增加了外部 NapCat/OneBot 11 QQ 渠道、白名单、群 @、连发聚合、多图、去重、限频、重连、发送结果未知不重发和脱敏渠道审计。M5.1 把设置移入原生弹窗，增加 QQ 渠道配置与一次性连接测试，通过 `channel-settings.json` 覆盖 `channels.toml` 的 `qq` 段，并让明确委托的提醒直接生效、模糊委托在聊天里确认。M5.2 增加显式 `owner_qq`：只有所有者 QQ 私聊与网页 `main` 共享上下文和长期记忆，其他私聊、群聊独立存储；网页新增“我们的对话 / 全部对话”，档案按 `messages.seq` 以 50 条游标分页、按日期分组并显示来源徽标。真实 QQ 账号、真实图片样本、日常观察、浏览器 worker、VM、游戏、自进化和公开发送仍不存在。双形态是“同一核心 + DSH 插件 + 独立程序”，两者共用数据库契约；`src/dev` 仍只是开发工具，不是产品。
 
 ## 1. 当前结构
 
@@ -67,11 +67,11 @@ kanobot/a/
 │   │   │   └── errors.ts             带文件和字段位置的错误
 │   │   ├── chat/
 │   │   │   ├── index.ts              聊天领域公开导出
-│   │   │   ├── types.ts              模型、SSE 事件和会话视图契约
+│   │   │   ├── types.ts              模型、SSE、会话目录/时间线和分页视图契约
 │   │   │   ├── input.ts              文本/单图输入边界和纯图片占位正文
 │   │   │   ├── envelope.ts           单次 JSON 信封解析和 reply 增量提取
 │   │   │   ├── context.ts            时间/状态/记忆/历史的分块预算和确定性裁剪
-│   │   │   ├── service.ts            校验、视觉/聊天模型流、正文/记忆/appraisal/承诺写入
+│   │   │   ├── service.ts            校验、模型流、正文/记忆/状态写入、会话目录和只读时间线
 │   │   │   ├── style.ts              确定性回复风格检查和违规代码
 │   │   │   ├── mock-model.ts         不联网的明确占位模型
 │   │   │   ├── magpie-model.ts       Magpie OpenAI-compatible 流式网关
@@ -108,7 +108,7 @@ kanobot/a/
 │   │   │   └── scheduler.ts          唯一后台 tick、重入保护和停用清理
 │   │   ├── storage/
 │   │   │   ├── database.ts           打开、完整性、迁移和表 schema
-│   │   │   ├── store.ts              事务、回放、独立墓碑级联、清除、回收站和恢复
+│   │   │   ├── store.ts              事务、回放、独立墓碑级联、清除、回收站、恢复和消息游标页
 │   │   │   ├── snapshots.ts          快照构造、写入和严格读取
 │   │   │   ├── backup.ts             VACUUM INTO、quick_check、保留和恢复
 │   │   │   ├── paths.ts              数据目录内的安全路径解析
@@ -127,11 +127,11 @@ kanobot/a/
 │   │   └── server.ts                 回环监听、一次性 token、会话鉴权和网页装配
 │   └── web/
 │       ├── index.ts                  Web 适配层公开导出
-│       ├── chat-http.ts              DSH 鉴权、聊天 API、SSE、记忆 API 和静态资源路由
+│       ├── chat-http.ts              鉴权、聊天/Timeline/会话目录、SSE、记忆和静态资源路由
 │       └── assets/
-│           ├── index.html            聊天页、四个所有者页签、设置弹窗、QQ 配置和图片选择
-│           ├── app.js                SSE、主动性轮询、设置/QQ API、记忆/审计和 DOM 渲染
-│           └── app.css               响应式浅色/深色样式
+│           ├── index.html            双聊天视图、四个所有者页签、设置弹窗、QQ 配置和图片选择
+│           ├── app.js                SSE、档案游标、主动性轮询、设置/QQ API、记忆/审计和 DOM 渲染
+│           └── app.css               响应式浅色/深色样式和独立滚动容器
 ├── tests/
 │   ├── unit/                         配置、上下文组装和纯 reducer
 │   ├── integration/                  插件、聊天/SSE、视觉、上下文预算、对话信封、记忆面板、存储、清除、备份、强杀和 fail-closed
@@ -150,6 +150,7 @@ kanobot/a/
     ├── m4.6-acceptance.md             M4.6/M4.6.1 提醒/记忆边界、冷却、模型发现和界面收口验收
     ├── m5-acceptance.md               M5 QQ/NapCat 渠道、schema v11 和自动测试验收
     ├── m5.1-acceptance.md             M5.1 设置弹窗、QQ 配置和低摩擦提醒验收
+    ├── m5.2-acceptance.md             M5.2 所有者会话、渠道隔离和多会话档案验收
     ├── m1-acceptance.md              M1 八项验收、证据和已知边界
     ├── m2-acceptance.md              M2 五项验收、运行证据和已知边界
     ├── m3-acceptance.md              M3.0 聊天骨架验收、证据和未完成项
@@ -194,6 +195,14 @@ kanobot/a/
 - `docs/m4.6-acceptance.md` 记录 M4.6 的提醒/记忆仲裁、候选冷却、schema v10、模型发现、三尺寸浏览器验收、256 项自动测试和未验证边界，以及 M4.6.1 的固定高度滚动区和模型卡片选择修复。
 - `docs/m5-acceptance.md` 记录 M5 的 QQ 白名单、群 @、连发聚合、多图、去重、限频、STOP、主动消息同步、schema v11、278 项自动测试和真实 NapCat/账号未验证边界。
 - `docs/m5.1-acceptance.md` 记录 M5.1 的设置弹窗、QQ 渠道配置、运行时覆盖、低摩擦提醒、313 项自动测试和三尺寸 Edge 验收。
+- `docs/m5.2-acceptance.md` 记录 M5.2 的“我们的对话 / 全部对话”、所有者 QQ 显式合并、其他会话隔离、50 条 `seq` 游标、319 项自动测试和三尺寸 Edge 验收。
+
+聊天档案的接口边界：
+
+- `GET /kanobot/api/conversation?limit=50&beforeSeq=<seq>` 只读取当前所有者 `main` 会话，返回 `messages/hasMore/nextBeforeSequence`。
+- `GET /kanobot/api/conversations` 返回所有者会话 ID 和按最近消息排序的会话摘要，只用于已鉴权页面的来源筛选。
+- `GET /kanobot/api/timeline?limit=50&beforeSeq=<seq>&conversationId=<id>` 跨会话只读聚合；`conversationId` 可省略，非法值显式 400。
+- 三个接口都使用 `messages.seq` 作为稳定游标；档案查询不复制消息，不写入当前会话，也不改变模型上下文。
 
 ## 2. 目标结构
 

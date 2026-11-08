@@ -10,6 +10,7 @@ import type {
   ChatMessageRecord,
   ChatRole,
   ModelCallPurpose,
+  SequencedChatMessageRecord,
 } from '../storage/index.ts'
 import type { MemoryExtractionSummary } from '../memory/index.ts'
 import type { VisionModelIdentity } from '../vision/types.ts'
@@ -120,13 +121,54 @@ export interface ChatStateView {
   }
 }
 
-export interface ConversationView {
+export type ConversationKind =
+  | 'owner'
+  | 'qq-private'
+  | 'qq-group'
+  | 'other'
+
+/**
+ * 网页时间线中的一条消息。conversationKind/label 只用于所有者界面分组，
+ * 不会被写回消息正文；模型上下文仍只读取指定 conversationId 的记录。
+ */
+export interface ConversationMessageView
+  extends SequencedChatMessageRecord {
+  conversationKind: ConversationKind
+  conversationLabel: string
+}
+
+export interface ConversationPageView {
+  messages: ConversationMessageView[]
+  hasMore: boolean
+  nextBeforeSequence: number | null
+}
+
+export interface ConversationView extends ConversationPageView {
   conversationId: string
   model: ChatModelIdentity
   vision: ChatVisionView
   state: ChatStateView
   modelUsage: ChatModelUsageView
-  messages: ChatMessageRecord[]
+}
+
+export interface ConversationSummaryView {
+  conversationId: string
+  conversationKind: ConversationKind
+  conversationLabel: string
+  messageCount: number
+  lastSequence: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ConversationDirectoryView {
+  ownerConversationId: string
+  conversations: ConversationSummaryView[]
+}
+
+export interface ConversationTimelineView extends ConversationPageView {
+  /** null 表示跨会话总时间线；否则是单会话筛选。 */
+  conversationId: string | null
 }
 
 export interface ModelCallView {

@@ -51,6 +51,7 @@ const MAX_CHAT_BODY_BYTES = 8 * 1024 * 1024
 // QQ 设置包含多个嵌套区间，但仍是纯 JSON；不需要聊天图片级别的大请求体。
 const MAX_CHANNEL_SETTINGS_BODY_BYTES = 256 * 1024
 const MAX_LIMIT = 100
+const CONVERSATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 
 const SECURITY_HEADERS = {
   'cache-control': 'no-store',
@@ -215,13 +216,66 @@ async function handleRequest(
       writeMethodNotAllowed(res, ['GET'], true)
       return
     }
-    const limit = parseLimit(url.searchParams.get('limit'))
-    if (limit === null) {
+    const parsedLimit = parseLimit(url.searchParams.get('limit'))
+    if (parsedLimit === null) {
       writeError(res, 400, 'invalid_limit', `limit 必须是 1 到 ${MAX_LIMIT} 的整数`, true)
       return
     }
-    const view = options.chat.conversation(limit)
+    const beforeSequence = parseSequenceCursor(
+      url.searchParams.get('beforeSeq'),
+    )
+    if (beforeSequence === undefined) {
+      writeError(res, 400, 'invalid_cursor', 'beforeSeq 必须是正整数', true)
+      return
+    }
+    const view = options.chat.conversation(parsedLimit ?? 50, beforeSequence)
     writeJson(res, 200, view)
+    return
+  }
+
+  if (pathname === `${CHAT_BASE_PATH}/api/conversations`) {
+    if (req.method !== 'GET') {
+      writeMethodNotAllowed(res, ['GET'], true)
+      return
+    }
+    writeJson(res, 200, options.chat.conversationDirectory(MAX_LIMIT))
+    return
+  }
+
+  if (pathname === `${CHAT_BASE_PATH}/api/timeline`) {
+    if (req.method !== 'GET') {
+      writeMethodNotAllowed(res, ['GET'], true)
+      return
+    }
+    const parsedLimit = parseLimit(url.searchParams.get('limit'))
+    if (parsedLimit === null) {
+      writeError(res, 400, 'invalid_limit', `limit 必须是 1 到 ${MAX_LIMIT} 的整数`, true)
+      return
+    }
+    const beforeSequence = parseSequenceCursor(
+      url.searchParams.get('beforeSeq'),
+    )
+    if (beforeSequence === undefined) {
+      writeError(res, 400, 'invalid_cursor', 'beforeSeq 必须是正整数', true)
+      return
+    }
+    const rawConversationId = url.searchParams.get('conversationId')
+    if (
+      rawConversationId !== null &&
+      !CONVERSATION_ID_PATTERN.test(rawConversationId)
+    ) {
+      writeError(res, 400, 'invalid_conversation', '会话 ID 不合法', true)
+      return
+    }
+    writeJson(
+      res,
+      200,
+      options.chat.timeline(
+        parsedLimit ?? 50,
+        beforeSequence,
+        rawConversationId,
+      ),
+    )
     return
   }
 
@@ -1180,6 +1234,13 @@ function parseLimit(raw: string | null): number | undefined | null {
   if (!/^\d+$/.test(raw)) return null
   const value = Number(raw)
   return Number.isInteger(value) && value >= 1 && value <= MAX_LIMIT ? value : null
+}
+
+function parseSequenceCursor(raw: string | null): number | null | undefined {
+  if (raw === null) return null
+  if (!/^[1-9]\d{0,15}$/.test(raw)) return undefined
+  const value = Number(raw)
+  return Number.isSafeInteger(value) && value >= 1 ? value : undefined
 }
 
 function parseAuditLimit(raw: string | null): number | undefined | null {

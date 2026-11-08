@@ -88,6 +88,46 @@ test('channel settings save a local secret without echoing it', async () => {
   }
 })
 
+test('owner QQ must be explicit, whitelisted, and removable', async () => {
+  const root = createRoot()
+  try {
+    const configDir = join(root, 'config')
+    const service = new ChannelSettingsService({
+      configDir,
+      loaded: loadConfigFromDirectory(configDir),
+    })
+    assert.equal(service.view().qq.ownerQqId, null)
+
+    const draft = draftFromView(service.view())
+    draft.qq.ownerQqId = '10001'
+    await assert.rejects(
+      () => service.save(draft),
+      (error: unknown) =>
+        error instanceof ChannelSettingsError &&
+        error.code === 'invalid_channel_settings',
+    )
+
+    draft.qq.privateAllow = ['10001']
+    const saved = await service.save(draft)
+    assert.equal(saved.qq.ownerQqId, '10001')
+    assert.equal(
+      loadConfigFromDirectory(configDir).channels.qq.ownerQqId,
+      '10001',
+    )
+
+    const cleared = draftFromView(saved)
+    cleared.qq.ownerQqId = null
+    const restored = await service.save(cleared)
+    assert.equal(restored.qq.ownerQqId, null)
+    assert.equal(
+      loadConfigFromDirectory(configDir).channels.qq.ownerQqId,
+      null,
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('a failed save preserves the overlay and the previous local secret', async () => {
   const root = createRoot()
   try {
@@ -454,6 +494,7 @@ function draftFromView(view: ChannelSettingsView): ChannelSettingsDraft {
       wsUrl: qq.wsUrl,
       allowRemote: qq.allowRemote,
       credential: { mode: 'keep' },
+      ownerQqId: qq.ownerQqId,
       privateAllow: [...qq.privateAllow],
       groupAllow: [...qq.groupAllow],
       groupRequireMention: qq.groupRequireMention,

@@ -49,6 +49,7 @@ import {
 
 const SELF_ID = '99999'
 const OWNER_ID = '10001'
+const OTHER_ID = '40004'
 const GROUP_ID = '20002'
 const GROUP_MEMBER_ID = '30003'
 const FIXED_TIME = 1_791_000_000
@@ -112,6 +113,106 @@ test('accepts only whitelisted QQ messages and merges a mentioned group burst', 
     assert.equal(unsupported.status, 'not_delivered')
     assert.equal(unsupported.errorCode, 'unsupported_target')
     assert.equal(harness.gateway.sent.length, 1)
+  } finally {
+    await harness.close()
+  }
+})
+
+test('owner QQ shares main while other private chats stay isolated', async () => {
+  const harness = createHarness(test, {
+    ownerQqId: OWNER_ID,
+    privateAllow: [OWNER_ID, OTHER_ID],
+  })
+  try {
+    harness.gateway.emit(
+      privateEvent({
+        messageId: 20,
+        userId: Number(OTHER_ID),
+        text: '第三人私聊的虚构标记',
+      }),
+    )
+    harness.ws.clock.advanceByMs(30)
+    await waitUntil(
+      () => harness.store.chatMessageCount('qq-private-40004') === 2,
+    )
+
+    harness.gateway.emit(
+      privateEvent({
+        messageId: 21,
+        userId: Number(OWNER_ID),
+        text: '所有者私聊的虚构标记',
+      }),
+    )
+    harness.ws.clock.advanceByMs(30)
+    await waitUntil(() => harness.store.chatMessageCount('main') === 2)
+
+    const ownerRequest = harness.chatModel.requests.at(-1)
+    assert.equal(
+      JSON.stringify(ownerRequest?.messages ?? []).includes('第三人私聊'),
+      false,
+    )
+
+    harness.gateway.emit(
+      privateEvent({
+        messageId: 22,
+        userId: Number(OWNER_ID),
+        text: '所有者第二轮的虚构标记',
+      }),
+    )
+    harness.ws.clock.advanceByMs(30)
+    await waitUntil(() => harness.store.chatMessageCount('main') === 4)
+
+    const mainMessages = harness.store.listChatMessages('main', 10)
+    assert.deepEqual(
+      mainMessages.map(message => message.text),
+      [
+        '所有者私聊的虚构标记',
+        '这是 QQ 渠道的虚构测试回复。',
+        '所有者第二轮的虚构标记',
+        '这是 QQ 渠道的虚构测试回复。',
+      ],
+    )
+    assert.equal(harness.store.chatMessageCount('qq-private-40004'), 2)
+    assert.equal(
+      harness.store
+        .listChatMessages('qq-private-40004', 10)
+        .some(message => message.text.includes('所有者私聊')),
+      false,
+    )
+    const secondOwnerRequest = harness.chatModel.requests.at(-1)
+    const secondOwnerContext = JSON.stringify(
+      secondOwnerRequest?.messages ?? [],
+    )
+    assert.equal(
+      secondOwnerContext.includes('所有者私聊的虚构标记'),
+      true,
+    )
+    assert.equal(
+      secondOwnerContext.includes('这是 QQ 渠道的虚构测试回复。'),
+      true,
+    )
+    assert.equal(secondOwnerContext.includes('第三人私聊'), false)
+
+    harness.gateway.emit(
+      groupEvent({
+        messageId: 23,
+        text: '群聊的虚构标记',
+        mentioned: true,
+      }),
+    )
+    harness.ws.clock.advanceByMs(30)
+    await waitUntil(() => harness.store.chatMessageCount('qq-group-20002') === 2)
+    assert.equal(harness.store.chatMessageCount('main'), 4)
+    assert.equal(
+      harness.store
+        .listChatMessages('main', 10)
+        .some(message => message.text.includes('群聊的虚构标记')),
+      false,
+    )
+    assert.deepEqual(
+      [...harness.createdChatIds].sort(),
+      ['main', 'qq-group-20002', 'qq-private-40004'],
+    )
   } finally {
     await harness.close()
   }
@@ -485,6 +586,8 @@ interface HarnessOptions {
   withInitiative?: boolean
   chatModel?: ChatModel
   autonomousTarget?: { kind: 'private' | 'group'; id: string }
+  ownerQqId?: string | null
+  privateAllow?: string[]
 }
 
 interface Harness {
@@ -495,6 +598,7 @@ interface Harness {
   gateway: FakeQqGateway
   channels: QqChannel[]
   channel: QqChannel
+  createdChatIds: string[]
   emergency: KanobotEmergencyService
   newChannel(gateway: FakeQqGateway): QqChannel
   close(): Promise<void>
@@ -508,7 +612,8 @@ function createHarness(
   const store = ws.open()
   const qq = structuredClone(ws.loaded.channels.qq)
   qq.enabled = true
-  qq.privateAllow = [OWNER_ID]
+  qq.ownerQqId = options.ownerQqId ?? null
+  qq.privateAllow = options.privateAllow ?? [OWNER_ID]
   qq.groupAllow = [GROUP_ID]
   qq.groupRequireMention = true
   qq.coalesce.quietMs = 25
@@ -528,8 +633,10 @@ function createHarness(
     ws.clock,
   )
   const channels: QqChannel[] = []
-  const createChat = (conversationId: string): KanobotChatService =>
-    new KanobotChatService(store, chatModel, {
+  const createdChatIds: string[] = []
+  const createChat = (conversationId: string): KanobotChatService => {
+    createdChatIds.push(conversationId)
+    return new KanobotChatService(store, chatModel, {
       conversationId,
       initiative: options.withInitiative === true
         ? chatInitiativeOptions(emergency, ws.loaded)
@@ -543,6 +650,7 @@ function createHarness(
           }
         : undefined,
     })
+  }
 
   const newChannel = (gateway: FakeQqGateway): QqChannel => {
     const channel = new QqChannel({
@@ -571,6 +679,7 @@ function createHarness(
     gateway,
     channels,
     channel,
+    createdChatIds,
     emergency,
     newChannel(gateway: FakeQqGateway): QqChannel {
       const created = newChannel(gateway)

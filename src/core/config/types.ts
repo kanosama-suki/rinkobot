@@ -220,6 +220,11 @@ export interface QqChannelConfig {
   reconnectMaxMs: number
   pingIntervalMs: number
   dedupeRetentionHours: number
+  /**
+   * 所有者本人的 QQ 号。只有该账号的私聊会映射到网页主会话，并读写
+   * 所有者长期记忆；其他私聊和群聊保持隔离。null 表示未指定。
+   */
+  ownerQqId: string | null
   privateAllow: string[]
   groupAllow: string[]
   groupRequireMention: boolean

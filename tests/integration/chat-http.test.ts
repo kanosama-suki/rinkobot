@@ -58,16 +58,18 @@ test('authenticated page, SSE chat, and conversation restore work together', asy
     })
     assert.equal(page.status, 200)
     assert.match(page.headers.get('content-security-policy') ?? '', /script-src 'self'/)
-    assert.match(await page.text(), /M5\.1 聊天、记忆与渠道设置/)
+    assert.match(await page.text(), /M5\.2 聊天档案、QQ 会话与设置/)
 
     const script = await fetch(`${harness.baseUrl}/kanobot/app.js`, {
       headers: authHeaders(),
     })
     assert.equal(script.status, 200)
+    const scriptText = await script.text()
     assert.match(
-      await script.text(),
-      /\/kanobot\/api\/conversation\?limit=100/,
+      scriptText,
+      /\/kanobot\/api\/conversation\?\$\{params\}/,
     )
+    assert.match(scriptText, /const PAGE_SIZE = 50/)
 
     const response = await fetch(`${harness.baseUrl}/kanobot/api/chat`, {
       method: 'POST',
@@ -107,6 +109,152 @@ test('authenticated page, SSE chat, and conversation restore work together', asy
     assert.equal(body.state.messageCount, 2)
     assert.equal(body.modelUsage.lastCall?.status, 'succeeded')
     assert.equal(body.modelUsage.todayCallCount, 1)
+  } finally {
+    await harness.close()
+  }
+})
+
+test('conversation pages and the cross-conversation timeline use stable cursors', async () => {
+  const harness = await createHarness()
+  try {
+    for (let index = 1; index <= 60; index += 1) {
+      harness.store.appendChatMessage({
+        conversationId: 'main',
+        role: index % 2 === 1 ? 'user' : 'assistant',
+        text: `主会话虚构消息 ${index}`,
+        id: `main-message-${index}`,
+      })
+    }
+    for (let index = 1; index <= 5; index += 1) {
+      harness.store.appendChatMessage({
+        conversationId: 'qq-private-40004',
+        role: 'user',
+        text: `其他私聊虚构消息 ${index}`,
+        id: `other-message-${index}`,
+      })
+    }
+
+    const firstResponse = await fetch(
+      `${harness.baseUrl}/kanobot/api/conversation?limit=50`,
+      { headers: authHeaders() },
+    )
+    assert.equal(firstResponse.status, 200)
+    const first = await firstResponse.json() as {
+      messages: Array<{ id: string; sequence: number }>
+      hasMore: boolean
+      nextBeforeSequence: number | null
+    }
+    assert.equal(first.messages.length, 50)
+    assert.equal(first.messages[0]?.id, 'main-message-11')
+    assert.equal(first.messages.at(-1)?.id, 'main-message-60')
+    assert.equal(first.hasMore, true)
+    assert.equal(first.nextBeforeSequence, first.messages[0]?.sequence)
+
+    const secondResponse = await fetch(
+      `${harness.baseUrl}/kanobot/api/conversation` +
+        `?limit=50&beforeSeq=${first.nextBeforeSequence}`,
+      { headers: authHeaders() },
+    )
+    assert.equal(secondResponse.status, 200)
+    const second = await secondResponse.json() as {
+      messages: Array<{ id: string; sequence: number }>
+      hasMore: boolean
+      nextBeforeSequence: number | null
+    }
+    assert.equal(second.messages.length, 10)
+    assert.equal(second.hasMore, false)
+    assert.equal(second.nextBeforeSequence, null)
+    assert.equal(
+      second.messages.some(message => first.messages.some(
+        earlier => earlier.id === message.id,
+      )),
+      false,
+    )
+
+    const timelineResponse = await fetch(
+      `${harness.baseUrl}/kanobot/api/timeline?limit=50`,
+      { headers: authHeaders() },
+    )
+    assert.equal(timelineResponse.status, 200)
+    const timeline = await timelineResponse.json() as {
+      messages: Array<{
+        id: string
+        sequence: number
+        conversationKind: string
+        conversationLabel: string
+      }>
+      hasMore: boolean
+      nextBeforeSequence: number | null
+    }
+    assert.equal(timeline.messages.length, 50)
+    assert.equal(timeline.hasMore, true)
+    assert.equal(timeline.nextBeforeSequence, timeline.messages[0]?.sequence)
+    assert.deepEqual(
+      timeline.messages.map(message => message.sequence),
+      [...timeline.messages.map(message => message.sequence)].sort(
+        (left, right) => left - right,
+      ),
+    )
+    assert.equal(
+      timeline.messages.at(-1)?.conversationKind,
+      'qq-private',
+    )
+    assert.equal(
+      timeline.messages.at(-1)?.conversationLabel,
+      'QQ 私聊 · 40004',
+    )
+
+    const directoryResponse = await fetch(
+      `${harness.baseUrl}/kanobot/api/conversations`,
+      { headers: authHeaders() },
+    )
+    assert.equal(directoryResponse.status, 200)
+    const directory = await directoryResponse.json() as {
+      ownerConversationId: string
+      conversations: Array<{
+        conversationId: string
+        conversationKind: string
+        messageCount: number
+      }>
+    }
+    assert.equal(directory.ownerConversationId, 'main')
+    assert.equal(
+      directory.conversations.find(item => item.conversationId === 'main')
+        ?.messageCount,
+      60,
+    )
+    assert.equal(
+      directory.conversations.find(
+        item => item.conversationId === 'qq-private-40004',
+      )?.conversationKind,
+      'qq-private',
+    )
+  } finally {
+    await harness.close()
+  }
+})
+
+test('conversation APIs reject malformed limits, cursors, and conversation ids', async () => {
+  const harness = await createHarness()
+  try {
+    const cases = [
+      ['/kanobot/api/conversation?limit=0', 'invalid_limit'],
+      ['/kanobot/api/conversation?limit=abc', 'invalid_limit'],
+      ['/kanobot/api/conversation?beforeSeq=0', 'invalid_cursor'],
+      ['/kanobot/api/timeline?beforeSeq=abc', 'invalid_cursor'],
+      [
+        '/kanobot/api/timeline?conversationId=bad%2Fid',
+        'invalid_conversation',
+      ],
+    ] as const
+    for (const [path, code] of cases) {
+      const response = await fetch(`${harness.baseUrl}${path}`, {
+        headers: authHeaders(),
+      })
+      assert.equal(response.status, 400, path)
+      const body = await response.json() as { error: { code: string } }
+      assert.equal(body.error.code, code, path)
+    }
   } finally {
     await harness.close()
   }
