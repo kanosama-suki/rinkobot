@@ -7,7 +7,10 @@
 
 import { resolve } from 'node:path'
 
-import { createAppServer } from '../src/app/index.ts'
+import {
+  createAppServer,
+  type AppServer,
+} from '../src/app/index.ts'
 
 interface CliOptions {
   configDir: string
@@ -25,25 +28,16 @@ try {
   throw error
 }
 
-const server = await createAppServer({
-  ...options,
-  logger: {
-    info(message: string): void {
-      console.log(message)
-    },
-    error(message: string): void {
-      console.error(message)
-    },
-  },
-})
-
+let server: AppServer | undefined
 let shuttingDown = false
-async function shutdown(signal: string): Promise<void> {
-  if (shuttingDown) return
-  shuttingDown = true
-  console.log(`[kanobot-app] ${signal}; closing…`)
+let pendingSignal: string | null = null
+
+async function closeAndExit(): Promise<void> {
+  const activeServer = server
+  if (activeServer === undefined) return
   try {
-    await server.close()
+    await activeServer.close()
+    console.log('[kanobot-app] shutdown complete; runtime lock released')
     process.exitCode = 0
   } catch (error) {
     console.error(`[kanobot-app] close failed: ${formatError(error)}`)
@@ -51,12 +45,61 @@ async function shutdown(signal: string): Promise<void> {
   }
 }
 
-process.once('SIGINT', () => {
-  void shutdown('SIGINT')
-})
-process.once('SIGTERM', () => {
-  void shutdown('SIGTERM')
-})
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return
+  shuttingDown = true
+  console.log(`[kanobot-app] ${signal}; closing…`)
+  if (server === undefined) {
+    pendingSignal = signal
+    console.log(
+      '[kanobot-app] startup still in progress; shutdown queued until ' +
+        'initialization finishes.',
+    )
+    return
+  }
+  await closeAndExit()
+}
+
+let signalCount = 0
+function handleSignal(signal: 'SIGINT' | 'SIGTERM'): void {
+  signalCount += 1
+  if (signalCount > 1) {
+    console.error(
+      `[kanobot-app] second ${signal}; forcing immediate exit. ` +
+        'A stale lock will be recovered by the next startup.',
+    )
+    process.exit(1)
+  }
+  void shutdown(signal)
+}
+
+process.on('SIGINT', () => handleSignal('SIGINT'))
+process.on('SIGTERM', () => handleSignal('SIGTERM'))
+
+try {
+  server = await createAppServer({
+    ...options,
+    logger: {
+      info(message: string): void {
+        console.log(message)
+      },
+      error(message: string): void {
+        console.error(message)
+      },
+    },
+  })
+} catch (error) {
+  console.error(`[kanobot-app] startup failed: ${formatError(error)}`)
+  process.exit(1)
+}
+
+if (pendingSignal !== null) {
+  console.log(
+    `[kanobot-app] startup complete; continuing queued ${pendingSignal} ` +
+      'shutdown.',
+  )
+  await closeAndExit()
+}
 
 function parseArgs(args: string[]): CliOptions {
   let configDir =

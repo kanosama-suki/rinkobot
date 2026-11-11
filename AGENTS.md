@@ -2,7 +2,7 @@
 
 ## 0. 项目一句话
 
-以独立核心为主自研一个连续、可恢复、可审计的陪伴型机器人；M3 网页聊天闭环、M4 自动化、M4.5 发行基础、M4.6/M4.6.1 界面收口、M5 QQ/NapCat 渠道、M5.1 设置弹窗/QQ 配置/低摩擦提醒、M5.2 所有者会话/多会话档案和 M5.2.1 QQ 会话可见性/档案交互修复的代码与自动测试已完成，包括网页聊天、固定高度聊天/审计滚动区、长期记忆、提醒/记忆确定性仲裁、候选冷却、风格控制、单次对话信封、上下文预算、可配置视觉、统一审计、单一调度循环、软性生活计划、主动消息、outbox、提醒、每日整理、回收站清除、浏览器通知、QQ 白名单/群 @/连发聚合/多图/去重/限频/重连/STOP、设置弹窗、QQ 运行时覆盖和一次性连接测试、所有者 QQ 与网页 `main` 合并、既有所有者私聊历史启动回填、其他私聊/群聊隔离、跨会话只读档案和非 `main` 档案会话改名，以及同一核心的 DSH 插件/独立程序、DSH/Magpie/OpenAI-compatible/mock provider、只读模型发现、可点选模型卡片、密钥和端点治理。明确委托的提醒直接生效，模糊委托在聊天中确认。M4 的压缩真实使用验收已完成；真实小号 QQ + NapCat + Magpie 已完成私聊收发、图片/表情和 owner 合并的部分验收；完整 QQ 矩阵、一到两周日常观察、Linux 常驻、Windows 通知人工确认、真实第三方 API 试用和主模型选型待续。R0 已确认独立核心 + 可选执行器，下一步是 R1 独立核心服务与常驻部署硬化。
+以独立核心为主自研一个连续、可恢复、可审计的陪伴型机器人；M3 网页聊天闭环、M4 自动化、M4.5 发行基础、M4.6/M4.6.1 界面收口、M5 QQ/NapCat 渠道、M5.1 设置弹窗/QQ 配置/低摩擦提醒、M5.2 所有者会话/多会话档案、M5.2.1 QQ 会话可见性/档案交互修复，以及 R1 独立核心服务硬化的代码与自动测试已完成，包括网页聊天、固定高度聊天/审计滚动区、长期记忆、提醒/记忆确定性仲裁、候选冷却、风格控制、单次对话信封、上下文预算、可配置视觉、统一审计、单一调度循环、软性生活计划、主动消息、outbox、提醒、每日整理、回收站清除、浏览器通知、QQ 白名单/群 @/连发聚合/多图/去重/限频/重连/STOP、设置弹窗、QQ 运行时覆盖和一次性连接测试、所有者 QQ 与网页 `main` 合并、既有所有者私聊历史启动回填、其他私聊/群聊隔离、跨会话只读档案和非 `main` 档案会话改名，以及同一核心的 DSH 插件/独立程序、DSH/Magpie/OpenAI-compatible/mock provider、只读模型发现、可点选模型卡片、密钥和端点治理。R1 还增加了数据目录单进程锁、健康检查、结构化启动报告、固定关闭顺序、强杀恢复、备份管理 CLI 和 systemd 部署材料。明确委托的提醒直接生效，模糊委托在聊天中确认。M4 的压缩真实使用验收已完成；真实小号 QQ + NapCat + Magpie 已完成私聊收发、图片/表情和 owner 合并的部分验收；完整 QQ 矩阵、一到两周日常观察、Linux systemd 实机、Windows 通知人工确认、真实第三方 API 试用和主模型选型待续。R0/R1 已完成，下一步是 R2。
 
 ## 1. 必读顺序
 
@@ -39,6 +39,8 @@
 ## 3. 架构与接口
 
 - 独立程序是默认宿主；DSH 只作为可选执行器/连接器；陪伴核心、状态、记忆、主动性和进化治理自研。
+- 数据目录的 OS IPC 锁必须在打开主库、启动 scheduler 和启动 QQ 之前取得；`kanobot.lock` 只是元数据，不能靠 PID 或删除文件判断所有权。关闭顺序固定为停止接新请求 → scheduler → QQ → HTTP → DB → 释放锁。
+- `GET /kanobot/api/health` 只做只读最小状态检查；数据库或 scheduler 不可用时返回 503。不得在未鉴权 health 中暴露路径、模型、token、Cookie、QQ 号或聊天正文。
 - 配置按功能模块拆分：`system`、`identity`、`life-state`、`relationship`、`memory`、`initiative`、`channels`、`digital-life`、`evolution`、`policy`、`observability`、`ui`。群配置只在 `channels.toml`。
 - 配置加载器负责 schema、默认值、跨文件引用、版本迁移和 fail-closed；模块不能绕过加载器读取散落参数。
 - 单轮聊天预算只从 `system.toml` 的 `[context]` 读取，由纯函数上下文组装器执行；身份/规则和当前消息不能被预算静默裁剪。
@@ -73,18 +75,22 @@ npm run check:case
 npm run config:check
 npm run dev
 npm run app -- --config <配置目录> --data <数据目录>
+npm run login -- --data <数据目录>
+npm run backup -- --config <配置目录> --data <数据目录> list
+npm run backup -- --config <配置目录> --data <数据目录> create
+curl.exe --fail http://127.0.0.1:4200/kanobot/api/health
 node scripts/preflight-runtime.ts F:\kanobot\dsh\test-home\kanobot\config F:\kanobot\dsh\test-home\kanobot\data
 npm run test:lifecycle -- --output F:\kanobot\dsh\m1-plugin-lifecycle.json
 ```
 
-`npm test` 使用 `node --test`，当前 325 项通过。自动测试不会读取真实人格文件、调用真实模型接口、连接真实 NapCat/QQ 或操作正式数据库；真实 Magpie 验收使用隔离的 4100 测试 Profile，M3.1/M3.3/M3.4/M3.5/M3.6/M3.7 证据分别见 `docs/m3.1-acceptance.md`、`docs/m3.3-acceptance.md`、`docs/m3.4-acceptance.md`、`docs/m3.5-acceptance.md`、`docs/m3.6-acceptance.md` 和 `docs/m3.7-acceptance.md`。M3 收尾见 `docs/m3-completion-acceptance.md`；M4 第 0 步见 `docs/m4.0-memory-acceptance.md`；M4 见 `docs/m4-acceptance.md`；M4 真实使用见 `docs/m4-real-use-acceptance.md`；M4.5 双形态、provider 和设置页见 `docs/m4.5-acceptance.md`；M4.6 边界、模型发现、固定高度滚动区和模型卡片选择见 `docs/m4.6-acceptance.md`；M5 QQ/NapCat 见 `docs/m5-acceptance.md`；M5.1 设置弹窗、QQ 配置和低摩擦提醒见 `docs/m5.1-acceptance.md`；M5.2 所有者会话、渠道隔离和多会话档案见 `docs/m5.2-acceptance.md`；M5.2.1 所有者历史回填、顶部历史按钮、档案改名和 schema v12 见 `docs/m5.2.1-acceptance.md`。测试实例的启停、配置预检和工具审计脚本在 `F:\kanobot\dsh`，不在本仓库内；正式 `4096` 实例不属于测试命令。
+`npm test` 使用 `node --test`，当前 342 项通过。自动测试不会读取真实人格文件、调用真实模型接口、连接真实 NapCat/QQ 或操作正式数据库；QQ 使用本机 mock OneBot，服务硬化测试使用临时数据目录。真实 Magpie 验收使用隔离的 4100 测试 Profile，M3.1/M3.3/M3.4/M3.5/M3.6/M3.7 证据分别见 `docs/m3.1-acceptance.md`、`docs/m3.3-acceptance.md`、`docs/m3.4-acceptance.md`、`docs/m3.5-acceptance.md`、`docs/m3.6-acceptance.md` 和 `docs/m3.7-acceptance.md`。M3 收尾见 `docs/m3-completion-acceptance.md`；M4 第 0 步见 `docs/m4.0-memory-acceptance.md`；M4 见 `docs/m4-acceptance.md`；M4 真实使用见 `docs/m4-real-use-acceptance.md`；M4.5 双形态、provider 和设置页见 `docs/m4.5-acceptance.md`；M4.6 边界、模型发现、固定高度滚动区和模型卡片选择见 `docs/m4.6-acceptance.md`；M5 QQ/NapCat 见 `docs/m5-acceptance.md`；M5.1 设置弹窗、QQ 配置和低摩擦提醒见 `docs/m5.1-acceptance.md`；M5.2 所有者会话、渠道隔离和多会话档案见 `docs/m5.2-acceptance.md`；M5.2.1 所有者历史回填、顶部历史按钮、档案改名和 schema v12 见 `docs/m5.2.1-acceptance.md`；R1 锁、health、备份恢复、强杀恢复和 DSH 缺席验收见 `docs/r1-acceptance.md`，Linux 部署见 `docs/r1-deployment.md`。测试实例的启停、配置预检和工具审计脚本在 `F:\kanobot\dsh`，不在本仓库内；正式 `4096` 实例不属于测试命令。
 
 ## 5. 当前状态
 
-- 阶段：R0 决策冻结已完成（2026-11-10，基线 `973cd5d`，M5.2.1）。真实小号 QQ + NapCat + Magpie 已完成私聊收发、图片/表情和 `owner_qq` 合并的部分验收；完整 QQ 矩阵、一到两周日常观察、Linux 常驻、Windows 通知中心人工确认、真实第三方 API 试用和主模型选型仍待后续。下一步是 R1 独立核心服务与常驻部署硬化，不进入 M6 DSH Session 主线。
+- 阶段：R0 决策冻结与 R1 独立核心服务硬化已完成代码和 Windows 自动验收（2026-11-11，产品 `0.20.0`，schema v12）。R1 的 342 项测试、单进程锁、health、备份恢复、强杀恢复、DSH 缺席 mock 网页/QQ/记忆/提醒/scheduler 已通过；Linux systemd 与真实长期运行尚未实机验证。下一步是 R2 的网页/QQ 统一会话与渠道规则，不进入 M6 DSH Session 主线。
 - 命名约定：`M0`～`M5.2.1` 是已完成历史，`M6`/`M6.7`/`M6.8` 是归档探索；当前和以后的新计划、提示词、验收和提交统一使用 `R0`～`R7`，不再新增 M 编号。
-- 已存在：M1～M4 全部基线、M5 QQ 渠道、M5.1 设置弹窗和低摩擦提醒、M5.2 所有者 QQ 会话合并与跨会话只读档案、M5.2.1 启动历史回填/顶部历史按钮/档案会话改名/schema v12，以及提醒/记忆确定性仲裁、候选冷却和归档恢复、脱敏记忆决策审计、正式独立程序、可选 DSH 插件、provider 工厂（`mock`/`magpie`/`dsh`/`openai-compatible`）、只读模型发现、模型/QQ 设置弹窗、运行时 `model-settings.json` 和 `channel-settings.json`、环境变量/本地 AES-GCM secret store、第三方 URL/DNS 私网拦截、一次性 bootstrap 登录和 Cookie 鉴权、OneBot 11 WebSocket、白名单/群 @、连发聚合、多图、去重、限频、重连、STOP 和主动消息同步。
-- 尚未存在：完整真实 QQ 矩阵、一到两周真实日常试用、Linux 常驻部署、Windows 通知中心人工确认、真实第三方付费 API 验收、DSH provider 在 4100 的真实生成回归、DSH 内部产品 UI、浏览器 worker、VM、游戏、自进化和公开发送。当前软计划只保存计划，不实际执行读书/浏览/游戏；当前推断记忆仍进候选，自动证据累积和淡化待后续改进；浏览器通知不是 Web Push。
+- 已存在：M1～M4 全部基线、M5 QQ 渠道、M5.1 设置弹窗和低摩擦提醒、M5.2 所有者 QQ 会话合并与跨会话只读档案、M5.2.1 启动历史回填/顶部历史按钮/档案会话改名/schema v12，以及 R1 数据目录 IPC 单进程锁与 stale lock 恢复、`GET /kanobot/api/health`、结构化启动报告、受控关闭顺序、备份 `list/create/restore`、墓碑独立恢复、强杀 outbox 终态、提醒/记忆确定性仲裁、候选冷却和归档恢复、脱敏记忆决策审计、正式独立程序、可选 DSH 插件、provider 工厂（`mock`/`magpie`/`dsh`/`openai-compatible`）、只读模型发现、模型/QQ 设置弹窗、运行时 `model-settings.json` 和 `channel-settings.json`、环境变量/本地 AES-GCM secret store、第三方 URL/DNS 私网拦截、一次性 bootstrap 登录和 Cookie 鉴权、OneBot 11 WebSocket、白名单/群 @、连发聚合、多图、去重、限频、重连、STOP 和主动消息同步。
+- 尚未完成/尚未验证：完整真实 QQ 矩阵、一到两周真实日常试用、Linux systemd 实机常驻、Windows 通知中心人工确认、真实第三方付费 API、DSH provider 在 4100 的真实生成回归、DSH 内部产品 UI、浏览器 worker、VM、游戏、自进化和公开发送。Linux unit 和部署手册已存在，但不是实机通过记录。当前软计划只保存计划，不实际执行读书/浏览/游戏；当前推断记忆仍进候选，自动证据累积和淡化待后续改进；浏览器通知不是 Web Push。
 - 已知部署基线：Windows 10（10.0.19045），Node v24.19.0，DSH `0.2.1-rc.5`（npm `latest` 标签；当前没有非 RC 版本）。核心源码在本目录，DSH 测试实例使用独立 `DSH_HOME=F:\kanobot\dsh\test-home`。
 - 已知清理记录：旧插件、NapCat 和旧 VM 已从宿主清理；重新部署必须按新设计进行，不能复用旧配置假设。
 - 已确认的产品决定见 `docs/plan.md` 第 1 节。
@@ -108,9 +114,10 @@ npm run test:lifecycle -- --output F:\kanobot\dsh\m1-plugin-lifecycle.json
 - M5.1 的设置弹窗、QQ/NapCat 配置、运行时覆盖、本地 secret、低摩擦提醒、313 项测试和三尺寸 Edge 验收见 `docs/m5.1-acceptance.md`。
 - M5.2 的“我们的对话 / 全部对话”、所有者 QQ 显式合并、其他私聊/群聊隔离、50 条 `seq` 游标、三尺寸 Edge 滚动验收和 composer 修复见 `docs/m5.2-acceptance.md`。
 - M5.2.1 的缺失所有者警告、既有 `qq-private-<owner>` 历史幂等回填、运行时 owner 状态、顶部历史按钮、非 `main` 会话改名、schema v12、325 项测试和三尺寸 Edge 验收见 `docs/m5.2.1-acceptance.md`。
+- R1 的单进程所有权、health、启动报告、关闭顺序、强杀恢复、备份 CLI、墓碑独立 restore、DSH 缺席 mock 验收、342 项测试和 Linux 未实测边界见 `docs/r1-acceptance.md`；systemd 示例和操作步骤见 `docs/r1-deployment.md`。
 - 网页空正文最终修复使用 JSON 助手预填、空输出有限重试和显式 `model_empty_response`；`[model].reasoning_effort = "low"` 已在 4100 测试 Profile 和示例配置中启用。真实聊天 13/13 通过，详见 `docs/m3.1-acceptance.md` 第 6 节和 `docs/m4-real-use-acceptance.md`。
 - 测试 Profile 数据在 `F:\kanobot\dsh\test-home\kanobot\data`；主库备份不包含独立墓碑库，迁移和恢复时必须单独保留 `tombstones.sqlite`。
-- 最近更新时间：2026-11-08。
+- 最近更新时间：2026-11-11。
 
 ## 6. 代码规范（后续实现时适用）
 

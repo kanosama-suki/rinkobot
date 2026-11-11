@@ -49,9 +49,11 @@ import {
 import { KanobotEmergencyService } from '../core/policy/index.ts'
 import {
   KanobotStorage,
+  STORAGE_SCHEMA_VERSION,
   StorageError,
 } from '../core/storage/index.ts'
 import { systemClock, type Clock } from '../core/state/index.ts'
+import { KANOBOT_VERSION } from '../version.ts'
 import {
   CHAT_BASE_PATH,
   registerChatSurface,
@@ -65,6 +67,16 @@ import {
   ChannelSettingsService,
   ModelSettingsService,
 } from '../settings/index.ts'
+import {
+  APP_HEALTH_PATH,
+  buildHealthPayload,
+  healthStatusCode,
+  type HealthPayload,
+} from './health.ts'
+import {
+  acquireRuntimeLock,
+  type RuntimeLock,
+} from './runtime-lock.ts'
 
 const APP_COOKIE = 'kanobot_app_session'
 const DEFAULT_PORT = 4200
@@ -117,6 +129,7 @@ interface AppRequestContext {
   expectedHost: () => string
   auth: AppAuthState
   clock: Clock
+  health: () => HealthPayload
   routeHandler: (
     request: IncomingMessage,
     response: ServerResponse,
@@ -126,6 +139,7 @@ interface AppRequestContext {
 export async function createAppServer(
   options: AppServerOptions,
 ): Promise<AppServer> {
+  const startedAtMillis = Date.now()
   const logger = options.logger ?? console
   const clock = options.clock ?? systemClock
   const configDir = requireDirectoryOption(options.configDir, 'configDir')
@@ -159,13 +173,21 @@ export async function createAppServer(
   let disposeSurface: (() => void) | undefined
   let scheduler: InitiativeScheduler | undefined
   let qqChannel: QqChannel | undefined
-  let closed = false
+  let runtimeLock: RuntimeLock | undefined
+  let shuttingDown = false
+  let closing: Promise<void> | undefined
 
   try {
+    // IPC 所有权必须在打开主库、启动调度器和启动 QQ 之前获取。
+    // 配置加载和模型能力发现不写入运行时数据，可以放在锁之前。
+    runtimeLock = await acquireRuntimeLock(dataDir, {
+      version: KANOBOT_VERSION,
+    })
     storage = KanobotStorage.openFromConfig(loaded, dataDir, clock)
     // 先做当日备份，再做历史归属迁移；这样首次回填前仍保留一份可恢复
     // 的当日快照，备份失败也会在修改数据前阻止启动。
-    storage.maybeCreateDailyBackup()
+    const dailyBackup = storage.maybeCreateDailyBackup()
+    const backupCount = storage.listBackups().length
     // 所有者 QQ 的配置可能晚于首条私聊到达数据库。启动时做一次幂等
     // 归属迁移，把已有 qq-private-<owner> 历史并入唯一主会话；消息正文、
     // seq 和 model_calls 都不复制，只移动 conversation_id。
@@ -354,6 +376,27 @@ export async function createAppServer(
       },
     })
 
+    const health = (): HealthPayload => {
+      let databaseOk = false
+      if (storage !== undefined) {
+        try {
+          storage.healthCheck()
+          databaseOk = true
+        } catch {
+          databaseOk = false
+        }
+      }
+      return buildHealthPayload({
+        startedAtMillis,
+        nowMillis: clock.now().getTime(),
+        version: KANOBOT_VERSION,
+        databaseOk,
+        schedulerRunning: scheduler?.isRunning() ?? false,
+        qqEnabled: loaded.channels.qq.enabled,
+        shuttingDown,
+      })
+    }
+
     let expectedHost = ''
     server = createServer((request, response) => {
       void handleAppRequest({
@@ -362,6 +405,7 @@ export async function createAppServer(
         expectedHost: () => expectedHost,
         auth,
         clock,
+        health,
         routeHandler: (req, res) => routeHandler(req, res),
       }).catch(error => {
         logger.error?.(`[kanobot-app] request failed: ${formatError(error)}`)
@@ -386,6 +430,25 @@ export async function createAppServer(
     }
     expectedHost = `127.0.0.1:${address.port}`
     const baseUrl = `http://${expectedHost}`
+
+    runtimeLock.setControlHandler(request => {
+      if (shuttingDown) {
+        throw new Error('instance is shutting down')
+      }
+      if (request.command !== 'issue-login') {
+        throw new Error('unsupported control command')
+      }
+      const rawToken = randomBytes(32).toString('base64url')
+      auth.bootstrapTokenHash = hashSecret(rawToken)
+      auth.bootstrapExpiresAt = clock.now().getTime() + bootstrapTtlMs
+      auth.bootstrapUsed = false
+      return {
+        url:
+          `${baseUrl}${CHAT_BASE_PATH}/?token=` +
+          encodeURIComponent(rawToken),
+      }
+    })
+
     scheduler = new InitiativeScheduler({
       service: initiative,
       intervalMs: loaded.initiative.schedule.tickSeconds * 1_000,
@@ -395,15 +458,100 @@ export async function createAppServer(
     qqChannel?.start()
 
     logger.info(
-      `[kanobot-app] listening on ${baseUrl}${CHAT_BASE_PATH}/; ` +
-        `config=${configDir}; data=${storage.dataDir}; ` +
-        `provider=${model.provider}; model=${model.id}; ` +
+      `[kanobot-app] startup pid=${process.pid} ` +
+        `version=${KANOBOT_VERSION} schema=${STORAGE_SCHEMA_VERSION} ` +
+        `lockOwner=${runtimeLock.metadata.ownerToken.slice(0, 12)} ` +
+        `backups=${backupCount} ` +
+        `dailyBackup=${dailyBackup === null ? 'existing' : 'created'} ` +
+        `scheduler=${scheduler.isRunning() ? 'running' : 'stopped'} ` +
         `qq=${loaded.channels.qq.enabled ? 'enabled' : 'disabled'}`,
     )
     logger.info(
-      `[kanobot-app] one-time login: ${baseUrl}${CHAT_BASE_PATH}/` +
-        `?token=${rawBootstrapToken}`,
+      `[kanobot-app] listening on ${baseUrl}${CHAT_BASE_PATH}/`,
     )
+
+    // 一次性链接只用于操作员终端。systemd 的 stdout 会进入 journal，
+    // 因此非 TTY 时抑制链接，改由本地控制通道打印到操作员终端。
+    if (process.stdout.isTTY === true) {
+      process.stdout.write(
+        `[kanobot-app] one-time login: ${baseUrl}${CHAT_BASE_PATH}/` +
+          `?token=${rawBootstrapToken}\n`,
+      )
+    } else {
+      logger.info(
+        '[kanobot-app] one-time login link suppressed in non-TTY; ' +
+          'run `npm run login -- --data <数据目录>` in the operator terminal',
+      )
+    }
+
+    const closeApp = async (): Promise<void> => {
+      shuttingDown = true
+      const errors: string[] = []
+
+      // 1. 停止监听；已有 SSE 等连接在渠道停止后统一关闭。
+      const activeServer = server
+      server = undefined
+      let httpClose: Promise<void> | undefined
+      if (activeServer !== undefined) {
+        httpClose = new Promise<void>((resolveClose, rejectClose) => {
+          activeServer.close(error => {
+            if (error) rejectClose(error)
+            else resolveClose()
+          })
+        })
+      }
+      disposeSurface?.()
+      disposeSurface = undefined
+
+      // 2. 停止唯一调度循环，3. 停止 QQ 渠道。
+      if (scheduler !== undefined) {
+        try {
+          await scheduler.dispose()
+        } catch (error) {
+          errors.push(`scheduler: ${formatError(error)}`)
+        }
+        scheduler = undefined
+      }
+      if (qqChannel !== undefined) {
+        try {
+          await qqChannel.close()
+        } catch (error) {
+          errors.push(`qq: ${formatError(error)}`)
+        }
+        qqChannel = undefined
+      }
+
+      // 4. 关闭 HTTP，5. 关闭数据库，6. 释放锁。
+      if (activeServer !== undefined) {
+        activeServer.closeAllConnections()
+        try {
+          await httpClose
+        } catch (error) {
+          errors.push(`http: ${formatError(error)}`)
+        }
+      }
+      if (storage !== undefined) {
+        try {
+          storage.close()
+        } catch (error) {
+          errors.push(`storage: ${formatError(error)}`)
+        }
+        storage = undefined
+      }
+      if (runtimeLock !== undefined) {
+        try {
+          await runtimeLock.release()
+          logger.info('[kanobot-app] runtime lock released')
+        } catch (error) {
+          errors.push(`lock: ${formatError(error)}`)
+        }
+        runtimeLock = undefined
+      }
+
+      if (errors.length > 0) {
+        throw new Error(`app shutdown failed: ${errors.join('; ')}`)
+      }
+    }
 
     const appServer: AppServer = {
       baseUrl,
@@ -411,40 +559,48 @@ export async function createAppServer(
         `${baseUrl}${CHAT_BASE_PATH}/?token=` +
         encodeURIComponent(rawBootstrapToken),
       port: address.port,
-      async close(): Promise<void> {
-        if (closed) return
-        closed = true
-        disposeSurface?.()
-        disposeSurface = undefined
-        await scheduler?.dispose()
-        scheduler = undefined
-        await qqChannel?.close()
-        qqChannel = undefined
-        const activeServer = server
-        server = undefined
-        if (activeServer !== undefined) {
-          await closeHttpServer(activeServer)
-        }
-        storage?.close()
-        storage = undefined
+      close(): Promise<void> {
+        closing ??= closeApp()
+        return closing
       },
     }
     return appServer
   } catch (error) {
+    const cleanupErrors: string[] = []
     disposeSurface?.()
-    await scheduler?.dispose().catch(() => {})
-    await qqChannel?.close().catch(() => {})
+    disposeSurface = undefined
+    await scheduler?.dispose().catch(closeError => {
+      cleanupErrors.push(`scheduler: ${formatError(closeError)}`)
+    })
+    scheduler = undefined
+    await qqChannel?.close().catch(closeError => {
+      cleanupErrors.push(`qq: ${formatError(closeError)}`)
+    })
     qqChannel = undefined
     if (server !== undefined) {
-      await closeHttpServer(server).catch(() => {})
+      await closeHttpServer(server).catch(closeError => {
+        cleanupErrors.push(`http: ${formatError(closeError)}`)
+      })
+      server = undefined
     }
     try {
       storage?.close()
     } catch (closeError) {
+      cleanupErrors.push(`storage: ${formatError(closeError)}`)
+    }
+    storage = undefined
+    try {
+      await runtimeLock?.release()
+    } catch (closeError) {
+      cleanupErrors.push(`lock: ${formatError(closeError)}`)
+    }
+    runtimeLock = undefined
+
+    if (cleanupErrors.length > 0) {
       throw new StorageError(
         'IO',
-        `${formatError(error)}; additionally failed to close app storage: ` +
-          formatError(closeError),
+        `${formatError(error)}; additionally failed to clean up app: ` +
+          cleanupErrors.join('; '),
         { cause: error },
       )
     }
@@ -466,6 +622,16 @@ async function handleAppRequest(context: AppRequestContext): Promise<void> {
   }
 
   const url = new URL(request.url ?? '/', `http://${host}`)
+  if (url.pathname === APP_HEALTH_PATH) {
+    if (request.method !== 'GET') {
+      response.setHeader('allow', 'GET')
+      writeAppError(response, 405, '健康检查只允许 GET')
+      return
+    }
+    writeHealth(response, context.health())
+    return
+  }
+
   if (
     (url.pathname === CHAT_BASE_PATH ||
       url.pathname === `${CHAT_BASE_PATH}/`) &&
@@ -495,6 +661,20 @@ async function handleAppRequest(context: AppRequestContext): Promise<void> {
   }
 
   await context.routeHandler(request, response)
+}
+
+function writeHealth(
+  response: ServerResponse,
+  payload: HealthPayload,
+): void {
+  if (response.headersSent || response.destroyed) return
+  const body = Buffer.from(`${JSON.stringify(payload)}\n`, 'utf8')
+  response.writeHead(healthStatusCode(payload), {
+    ...APP_SECURITY_HEADERS,
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': String(body.byteLength),
+  })
+  response.end(body)
 }
 
 function exchangeBootstrapToken(

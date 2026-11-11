@@ -1,7 +1,7 @@
 # Kanobot 规划书
 
-> 版本：v0.26（2026-11-10）
-> 阶段：R0 决策冻结。M5.2.1 的代码与自动测试已完成；真实小号 QQ + NapCat + Magpie 已完成部分验收（私聊收发、图片/表情可见、`owner_qq` 私聊并入 `main`）。架构从“DSH 插件优先”调整为“独立核心优先，DSH/MCP/浏览器/VM 为可选执行器”；M6.7/M6.8 的 DSH-first 路线只作归档参考，不进入默认主线。完整 QQ 矩阵、长期观察、Linux 常驻部署和正式发布仍未完成。
+> 版本：v0.27（2026-11-11）
+> 阶段：R1 独立核心服务硬化的代码与 Windows 自动验收已完成。M5.2.1 的代码与自动测试仍在基线中；真实小号 QQ + NapCat + Magpie 只完成部分验收（私聊收发、图片/表情可见、`owner_qq` 私聊并入 `main`）。架构保持“独立核心优先，DSH/MCP/浏览器/VM 为可选执行器”；M6.7/M6.8 的 DSH-first 路线只作归档参考，不进入默认主线。完整 QQ 矩阵、长期观察、Linux systemd 实机验收和正式发布仍未完成。
 > 本文是执行计划的唯一来源；`need.md` 只写要什么和为什么。
 > 两份文档冲突时，以本文和 kano 最新明确的决定为准，并同步修正 `need.md`。
 
@@ -525,7 +525,7 @@ kano 睡着以后（00:10 起）运行。电脑晚上关机的话，下次开机
 | M5.2 | 所有者 QQ 会话合并、渠道隔离与网页多会话只读档案（代码与自动测试完成 2026-11-08；owner 合并真实部分通过） | M5.1 |
 | M5.2.1 | QQ 会话可见性、历史按钮位置、档案会话改名与 schema v12（代码与自动测试完成 2026-11-08） | M5.2 |
 | R0 | 决策冻结与文档基线（已完成 2026-11-10） | M5.2.1 |
-| R1 | 独立核心服务与常驻部署硬化 | R0 |
+| R1 | 独立核心服务与常驻部署硬化（代码与 Windows 自动验收完成 2026-11-11；Linux 实机待验证） | R0 |
 | R2 | 网页/QQ 统一会话与渠道规则 | R1 |
 | R3 | 主动性/记忆/关系/私人空间长期闭环 | R2 |
 | R4 | 可选工具执行层（ExecutorPort） | R3 |
@@ -813,6 +813,14 @@ M5.2.1 还收紧了运行时状态语义：`GET /api/settings/channels/status` �
 
 目标：让独立程序成为一等公民，不依赖 DSH 也能长期运行。
 
+> 状态（2026-11-11）：单进程所有权、健康检查、启动报告、优雅关闭、
+> 强杀恢复、备份管理 CLI、墓碑独立恢复、DSH 缺席时的 mock 核心/QQ
+> 验收，以及 systemd 部署示例和手册已完成。Windows 自动测试 342 项
+> 全部通过；产品版本为 `0.20.0`，schema 仍为 v12。Linux systemd、
+> 真实 NapCat/QQ、真实模型和正式数据尚未实机验证，因此不把 Linux
+> 常驻写成已验收。详见 [r1-acceptance.md](r1-acceptance.md) 和
+> [r1-deployment.md](r1-deployment.md)。
+
 要做：
 
 1. 显式 `--config`/`--data`，只监听回环地址，使用一次性 bootstrap 登录和短期 Cookie；健康检查和启动报告可读。
@@ -988,6 +996,21 @@ M5.2.1 还收紧了运行时状态语义：`GET /api/settings/channels/status` �
 
 ## 14. 变更记录
 
+- v0.27（2026-11-11）：完成 R1 独立核心服务硬化。数据目录新增
+  OS IPC 单进程所有权和 `kanobot.lock` 可读元数据，锁先于 SQLite、
+  scheduler 和 QQ 获取；SIGKILL 后的 stale metadata 在 IPC 自动释放后
+  安全恢复，PID 复用不参与所有权判断。新增未登录回环
+  `GET /kanobot/api/health`，只暴露最小状态，数据库或 scheduler 异常
+  时返回 503。启动报告改为 pid/版本/schema/锁 owner 短指纹/备份/
+  scheduler/QQ 状态，不再打印配置或数据路径、完整 token；非 TTY 不再
+  把一次性登录 URL 写入 journal，改用 `npm run login`。关闭顺序固定为
+  停止接新请求 → scheduler → QQ → HTTP → DB → 锁释放，并支持第二次
+  信号强制退出。新增 `list/create/restore` 备份 CLI；restore 拒绝存活
+  实例，只替换主库并保留独立墓碑库，损坏/旧 schema/校验失败保留原库
+  和失败副本。陈旧外部 outbox 改为 `unknown` 终态，避免强杀后重复发送。
+  新增 DSH 缺席时 mock 网页/记忆/提醒/主动消息/scheduler/QQ 验收、Linux
+  systemd 示例和部署手册。自动测试 342 项通过；产品版本升到 `0.20.0`，
+  schema 保持 v12。Linux systemd、真实 QQ/模型和正式数据未实测。
 - v0.26（2026-11-10）：R0 决策冻结。确认“独立核心 + 可选执行器”：Kanobot Core 拥有网页、QQ、调度、记忆、关系和主数据库；DSH/MCP/浏览器/VM 只作为可替换执行层，DSH 不存在时核心仍须工作。确认首版不需要 DSH 内部产品级 UI；`owner_qq` 私聊并入 `main` 的规则保留，其他私聊、群聊和新渠道首次出现时按规则创建独立会话，不预建、不合并；DSH 宿主模型不是启动前置条件。记录真实小号 QQ + NapCat + Magpie 的部分验收：私聊收发、图片/表情可见、owner 私聊已并入“我们的对话”；非 owner 隔离、群 `@`、连发聚合、多图、重启迁移、提醒/主动消息和长期稳定性仍未验证。旧 M6/M7/M8 冻结，分别并入 R5、R1/R5、R6；M6.7/M6.8 仅归档参考，不合并 WIP、不恢复 `paused_native`。新增 R0～R7 里程碑、`docs/r0-decision.md` 和 `docs/m5.2.1-real-acceptance.md`；R0 不修改源码、schema 或运行时数据。
 - v0.25（2026-11-08）：完成 M5.2.1 QQ 会话可见性与档案交互修复。未配置 `owner_qq` 时显示明确警告，不从白名单推断；启动时把既有 `qq-private-<owner>` 历史幂等并入 `main`，只移动消息和模型调用归属，不复制正文、不重排 `seq`。历史按钮改为消息区顶部覆盖层，只在滚动到顶部且有更早消息时显示。`conversations` 新增 nullable `display_name`，schema 升到 v12，非 `main` 会话可改名并恢复默认；改名不改变会话 ID、消息顺序或模型上下文。状态接口区分运行时 `owner_qq` 与已保存 overlay，避免保存后未重启时误报生效。自动测试从 319 项增加到 325 项并全部通过；隔离 Edge 三尺寸验收通过；插件版本升到 `0.19.0`。真实 NapCat/QQ 账号和真实数据库回填仍未验证。
 - v0.24（2026-11-08）：完成 M5.2 所有者会话与多会话档案。新增显式 `qq.owner_qq`：只有该账号私聊映射到网页 `main`，共享上下文和长期记忆；其他私聊/群聊保持独立会话，不读写所有者记忆、不提交所有者提醒。网页新增“我们的对话 / 全部对话”双视图，档案按 `messages.seq` 以 50 条游标分页、按日期分组并显示来源徽标；新增 `GET /api/conversations` 和 `GET /api/timeline`，扩展 `GET /api/conversation?beforeSeq=`。档案只读，网页普通回复不自动推送 QQ。修复档案视图 composer 被 CSS `display:grid` 覆盖而仍然可见的问题。自动测试从 313 项增加到 319 项并全部通过；隔离 Edge 三尺寸验收通过；插件版本升到 `0.18.0`，SQLite schema 保持 v11。真实 NapCat/QQ 账号和长期多会话观察仍未验证。

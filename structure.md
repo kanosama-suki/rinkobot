@@ -1,6 +1,6 @@
 # 项目文件结构
 
-以下路径相对于项目根目录 `a/`。当前仓库处于 R0 决策冻结完成、M5.2.1 作为代码基线的状态：已有 DSH Host 插件、正式独立程序、开发入口、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、网页聊天和 SSE、固定高度聊天/审计滚动区、长期记忆与中文检索、提醒/记忆确定性仲裁、候选冷却、单次 JSON 信封、所有者面板、风格检查、上下文预算、独立视觉模型、schema v12 的主动性与提醒闭环，以及聊天/视觉分开的 provider 设置弹窗、只读模型发现、可点选模型卡片、运行时覆盖、环境变量/本地加密 secret store 和第三方端点治理。M5 增加了外部 NapCat/OneBot 11 QQ 渠道、白名单、群 @、连发聚合、多图、去重、限频、重连、发送结果未知不重发和脱敏渠道审计。M5.1 把设置移入原生弹窗，增加 QQ 渠道配置与一次性连接测试，通过 `channel-settings.json` 覆盖 `channels.toml` 的 `qq` 段，并让明确委托的提醒直接生效、模糊委托在聊天里确认。M5.2 增加显式 `owner_qq`：只有所有者 QQ 私聊与网页 `main` 共享上下文和长期记忆，其他私聊、群聊独立存储；网页新增“我们的对话 / 全部对话”，档案按 `messages.seq` 以 50 条游标分页、按日期分组并显示来源徽标。M5.2.1 增加启动时所有者私聊历史幂等回填、缺失所有者警告、消息区顶部历史按钮和非 `main` 会话改名；`conversations.display_name` 使 schema 升到 v12。真实小号 QQ + NapCat + Magpie 已完成私聊收发、图片/表情和 owner 合并的部分验收；完整 QQ 矩阵、日常观察、Linux 常驻、浏览器 worker、VM、游戏、自进化和公开发送仍不存在。默认形态是“独立核心 + 可选执行器”；DSH 插件保留为可选连接器，独立程序是默认入口，两者共用数据库契约；`src/dev` 仍只是开发工具，不是产品。
+以下路径相对于项目根目录 `a/`。当前仓库处于 R1 独立核心服务硬化完成代码与 Windows 自动验收、M5.2.1 作为代码基线的状态：已有 DSH Host 插件、正式独立程序、开发入口、严格配置、版本化事件、纯 reducer、SQLite 主库与独立墓碑库、快照、删除、备份、网页聊天和 SSE、固定高度聊天/审计滚动区、长期记忆与中文检索、提醒/记忆确定性仲裁、候选冷却、单次 JSON 信封、所有者面板、风格检查、上下文预算、独立视觉模型、schema v12 的主动性与提醒闭环，以及聊天/视觉分开的 provider 设置弹窗、只读模型发现、可点选模型卡片、运行时覆盖、环境变量/本地加密 secret store 和第三方端点治理。M5 增加了外部 NapCat/OneBot 11 QQ 渠道、白名单、群 @、连发聚合、多图、去重、限频、重连、发送结果未知不重发和脱敏渠道审计。M5.1 把设置移入原生弹窗，增加 QQ 渠道配置与一次性连接测试，通过 `channel-settings.json` 覆盖 `channels.toml` 的 `qq` 段，并让明确委托的提醒直接生效、模糊委托在聊天里确认。M5.2 增加显式 `owner_qq`：只有所有者 QQ 私聊与网页 `main` 共享上下文和长期记忆，其他私聊、群聊独立存储；网页新增“我们的对话 / 全部对话”，档案按 `messages.seq` 以 50 条游标分页、按日期分组并显示来源徽标。M5.2.1 增加启动时所有者私聊历史幂等回填、缺失所有者警告、消息区顶部历史按钮和非 `main` 会话改名；`conversations.display_name` 使 schema 升到 v12。R1 增加数据目录 OS IPC 单进程锁和 `kanobot.lock` 元数据、stale lock 恢复、未登录最小 health、结构化启动报告、固定关闭顺序、备份 `list/create/restore`、强杀 outbox 终态、DSH 缺席 mock 网页/QQ/提醒/scheduler 验收，以及 Linux systemd 示例和部署手册。真实小号 QQ + NapCat + Magpie 仅完成私聊收发、图片/表情和 owner 合并的部分验收；完整 QQ 矩阵、日常观察、Linux systemd 实机、浏览器 worker、VM、游戏、自进化和公开发送仍未验收。默认形态是“独立核心 + 可选执行器”；DSH 插件保留为可选连接器，独立程序是默认入口，两者共用数据库契约；`src/dev` 仍只是开发工具，不是产品。
 
 ## 1. 当前结构
 
@@ -17,12 +17,16 @@ kanobot/a/
 │   └── zh.json                       插件中文元数据
 ├── package.json                      npm 包、DSH bundle 入口和开发命令
 ├── package-lock.json                 固定依赖版本
+├── deploy/
+│   └── kanobot.service.example       Linux 非 root systemd 示例（未实机验收）
 ├── config/
 │   └── examples/                     可提交的占位 system/identity/life-state/memory/initiative/policy TOML
 ├── scripts/
+│   ├── backup.ts                     主库备份 list/create/restore CLI
 │   ├── check-import-case.ts          相对 import 路径大小写检查
 │   ├── dev-server.ts                 不经过 DSH 的本地开发网页启动器
 │   ├── app-server.ts                 正式独立程序启动器和参数解析
+│   ├── login-url.ts                 向运行中实例申请一次性登录链接
 │   ├── validate-config.ts            配置目录预检 CLI
 │   ├── preflight-runtime.ts          配置、主库、墓碑库的启动前预检
 │   └── m1-lifecycle.ts               10 次 apply/dispose 生命周期报告
@@ -35,7 +39,10 @@ kanobot/a/
 │   │   └── cordis.patch.yml          bundle 默认插入的插件行
 │   ├── app/
 │   │   ├── index.ts                  正式独立程序公开入口
-│   │   └── server.ts                 显式目录、一次性登录、Cookie 和网页装配
+│   │   ├── backup-command.ts          备份 CLI 共享实现和 restore 互斥
+│   │   ├── health.ts                 最小健康响应和 200/503 判定
+│   │   ├── runtime-lock.ts            OS IPC 单进程锁、元数据和本地控制通道
+│   │   └── server.ts                 显式目录、锁、一次性登录、Cookie 和网页装配
 │   ├── model-providers/
 │   │   ├── index.ts                  provider 工厂、精确能力和凭据解析
 │   │   ├── dsh-chat.ts               DSH ctx.llm 窄适配器、有限重试和错误映射
@@ -126,6 +133,7 @@ kanobot/a/
 │   ├── dev/
 │   │   ├── index.ts                  本地开发入口公开导出
 │   │   └── server.ts                 回环监听、一次性 token、会话鉴权和网页装配
+│   ├── version.ts                    独立程序与插件共享的产品版本
 │   └── web/
 │       ├── index.ts                  Web 适配层公开导出
 │       ├── chat-http.ts              鉴权、聊天/Timeline/会话目录、SSE、记忆和静态资源路由
@@ -138,13 +146,15 @@ kanobot/a/
 │   ├── integration/                  插件、聊天/SSE、视觉、上下文预算、对话信封、记忆面板、存储、清除、备份、强杀和 fail-closed
 │   ├── scenarios/                    人格场景规格和脚本化管线验证
 │   ├── replay/                       同一事件流快照逐字节一致性
-│   ├── fixtures/                     崩溃写入子进程等测试夹具
+│   ├── fixtures/                     崩溃写入和正式应用生命周期子进程夹具
 │   └── helpers/                      临时目录和固定事件工厂
 └── docs/
     ├── need.md                       产品需求、状态模型和验收边界
     ├── plan.md                       总体规划书、模块边界和里程碑
     ├── review-brief.md               交给高级模型的外部审查简报和可复制提示
     ├── r0-decision.md                R0 独立核心、可选执行器、真实验收和 Linux 常驻决策
+    ├── r1-acceptance.md              R1 服务硬化、恢复、备份、DSH 缺席验收和未验证边界
+    ├── r1-deployment.md              R1 Linux systemd 部署步骤和未实机验证声明
     ├── m5.2.1-real-acceptance.md     M5.2.1 真实小号 QQ 部分验收和未验证矩阵
     ├── memory-research.md             记忆插件源码调研和取舍
     ├── m4.0-memory-acceptance.md      M4 第 0 步记忆质量门控验收
@@ -202,6 +212,8 @@ kanobot/a/
 - `docs/m5.2-acceptance.md` 记录 M5.2 的“我们的对话 / 全部对话”、所有者 QQ 显式合并、其他会话隔离、50 条 `seq` 游标、319 项自动测试和三尺寸 Edge 验收。
 - `docs/m5.2.1-acceptance.md` 记录 M5.2.1 的 QQ 缺失所有者提示、启动历史回填、顶部历史按钮、非 `main` 会话改名、schema v12、325 项自动测试和三尺寸 Edge 验收。
 - `docs/r0-decision.md` 记录 R0 的独立核心 + 可选执行器决定、Q1～Q4、真实 QQ 部分验收和 Linux 常驻边界。
+- `docs/r1-acceptance.md` 记录 R1 的锁、health、启动报告、关闭顺序、备份恢复、强杀恢复、DSH 缺席 mock 验收、342 项测试和未验证边界。
+- `docs/r1-deployment.md` 记录 R1 的 Linux systemd 示例、目录/凭据、启动/停止、health、升级/回滚和未实机验证声明；`deploy/kanobot.service.example` 只是待安装模板。
 - `docs/m5.2.1-real-acceptance.md` 记录真实小号 QQ + NapCat + Magpie 的已通过主路径和未验证矩阵。
 
 聊天档案的接口边界：
@@ -213,7 +225,7 @@ kanobot/a/
 
 ## 2. 目标结构
 
-M4.5 的 `src/app`、`src/model-providers`、M4.6 的记忆仲裁/模型发现和 M5 的 `src/channels` 已落地；其余目录仍按里程碑逐步出现。目录可以按实际工作量调整，但模块职责和配置归属不能混在一起。
+M4.5 的 `src/app`、`src/model-providers`、M4.6 的记忆仲裁/模型发现、M5 的 `src/channels` 和 R1 的锁/health/备份 CLI/systemd 材料已落地；其余目录仍按里程碑逐步出现。目录可以按实际工作量调整，但模块职责和配置归属不能混在一起。
 
 ```text
 kanobot/a/
@@ -228,6 +240,7 @@ kanobot/a/
 │   ├── plugin-catalog.zh.md
 │   ├── mods.md
 │   └── ...
+├── deploy/                           systemd 等部署模板；不含凭据
 ├── config/
 │   └── examples/                     可提交的脱敏 TOML 模板
 ├── src/
@@ -267,15 +280,21 @@ F:\kanobot\dsh\                       本地 DSH 安装、测试脚本和证据�
 DSH 数据目录                          M2 之后：数据库、快照、日志和备份
 ```
 
-M2 之后（当前到 M5.2.1）的实际数据布局：
+M2 之后（当前到 R1）的实际数据布局：
 
 ```text
 <dataDir>/
+├── kanobot.lock                      运行时锁元数据，不是互斥本体；进程退出后由下次启动安全恢复
 ├── kanobot.sqlite                    主库（schema v12）：事件、快照、正文、对话/消息（含 display_name）、模型调用审计、记忆、记忆边界决策、FTS5、风格检查、所有者审计、紧急状态、主动性状态/计划/提醒/关心/摘要/运行记录、outbox、渠道去重/审计、墓碑投影
+├── kanobot.sqlite-wal / -shm         主库运行时 sidecar，不得单独提交或当作备份
 ├── tombstones.sqlite                 独立墓碑库，不进入主库备份
 └── backups/
     └── kanobot-backup-*.sqlite       最近 7 份主库一致性备份
 ```
+
+restore 的临时/回滚文件使用 `kanobot.sqlite.restore-*`、
+`kanobot.sqlite.rollback-*` 和 `kanobot.sqlite.failed-restore-*` 前缀；
+它们属于运行时恢复证据，不进入 Git。锁与数据库不进入主库备份。
 
 ## 3. 文件放置规则
 
@@ -285,10 +304,13 @@ M2 之后（当前到 M5.2.1）的实际数据布局：
 - `core` 不导入 DSH 或独立程序专用模块。独立程序是默认宿主，DSH 插件是可选适配器，模型 provider 和渠道都只通过适配器调用 core；新增宿主不能复制人格、记忆或状态逻辑。
 - 模型 provider 放在宿主/适配层，不把 Magpie、DeepSeek、Gemini 或某个第三方 URL 写进聊天核心；每次调用的精确 provider、模型、能力和审计由适配器负责。
 - `src/dev` 只用于本地调试。正式独立程序已经另建在 `src/app`，补齐显式配置/数据目录、一次性登录、Cookie 鉴权、数据生命周期和发布入口；不能把开发入口换个名字就当产品。
+- 独立程序的运行时锁、health 和备份管理只在 `src/app`；锁必须在打开主库、启动 scheduler 和启动 QQ 之前取得，health 不得泄露路径、凭据或聊天正文。
 - 一个小型 FSM 只能放在具体流程模块内，例如 `src/channels/` 的投递状态或 `src/evolution/` 的候选生命周期；不得新增“角色总状态机”。
 - 单元测试放 `tests/unit/`，跨模块和 DSH 生命周期测试放 `tests/integration/`，回放与迁移测试放 `tests/replay/`。
 - 人格场景规格放 `tests/scenarios/`；当前样例使用脚本化占位回复，不能把通过结果当成真实模型行为。
 - 运行时数据库、快照、日志、截图和下载放在 DSH 数据目录，不放进仓库，并设置保留期、权限和清理策略。这样复制源码或生成进化候选副本时，私人数据不会被一起复制。`.gitignore` 里的 `data/` 规则保留，作为兜底。
+- `kanobot.lock`、PID、SQLite/WAL/SHM、备份和恢复临时文件都是运行时状态，不提交 Git；不能把锁文件当互斥本体，也不能用删除锁文件代替确认 IPC 所有权。
+- systemd/部署示例放 `deploy/`，操作手册放 `docs/`；示例只能使用占位用户、路径和 `EnvironmentFile` 变量，不得写入真实 token、QQ 号、SSH 私钥或 API key。
 - 临时诊断放 `tmp/`，不把一次性脚本或输出混入正式数据链。
 - 第三方调研记录写 `docs/plugin-research.md`；实际引入/替换插件时更新 `docs/mods.md`，说明版本、原因、许可证和回滚方式。
 

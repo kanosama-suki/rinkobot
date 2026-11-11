@@ -19,11 +19,12 @@ import {
 } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from 'node:sqlite'
 
 import {
   inspectDatabaseFile,
   quickCheckDatabase,
+  STORAGE_SCHEMA_VERSION,
 } from './database.ts'
 import {
   StorageError,
@@ -161,10 +162,15 @@ export function localDateKey(date: Date, timezone: string): string {
  *
  * 调用方必须先关闭正在使用的 KanobotStorage。墓碑库不在参数中，必须保留
  * 原文件并在下次打开时用于清理恢复出来的旧记录。
+ *
+ * requireCurrentSchema 为 true 时只接受与当前产品 schema 完全一致的备份；
+ * 旧 schema 不在这里现场迁移。备份校验、复制后校验或替换后校验失败时，
+ * 原主库（含 WAL/SHM）会放回原位，新产生的失败副本保留供排查。
  */
 export function restoreBackupToDatabase(
   backupPath: string,
   databasePath: string,
+  options: { requireCurrentSchema?: boolean } = {},
 ): void {
   if (!existsSync(backupPath)) {
     throw new StorageError('IO', 'backup file does not exist', { path: backupPath })
@@ -173,60 +179,170 @@ export function restoreBackupToDatabase(
     throw new StorageError('RESTORE_FAILED', 'backup and target database are the same file')
   }
   inspectDatabaseFile(backupPath, 'main')
+  if (options.requireCurrentSchema) {
+    assertCurrentSchema(backupPath)
+  }
 
   const parent = dirname(databasePath)
   mkdirSync(parent, { recursive: true })
   const suffix = randomUUID()
   const temporaryPath = `${databasePath}.restore-${suffix}.tmp`
   const rollbackPath = `${databasePath}.rollback-${suffix}`
+  const failedPath = `${databasePath}.failed-restore-${suffix}`
   let movedOldDatabase = false
+  let replacementInstalled = false
+  let keptFailedDatabase = false
+  let restoreVerified = false
 
   try {
     copyFileSync(backupPath, temporaryPath)
     inspectDatabaseFile(temporaryPath, 'main')
-    removeSidecars(databasePath)
-    if (existsSync(databasePath)) {
-      renameSync(databasePath, rollbackPath)
+    if (options.requireCurrentSchema) {
+      assertCurrentSchema(temporaryPath)
+    }
+    if (databaseFilesExist(databasePath)) {
+      // 在逐文件移动前标记，确保移动中途失败时仍能从 rollback 路径恢复。
       movedOldDatabase = true
+      moveDatabaseFiles(databasePath, rollbackPath)
     }
     renameSync(temporaryPath, databasePath)
+    replacementInstalled = true
     inspectDatabaseFile(databasePath, 'main')
+    if (options.requireCurrentSchema) {
+      assertCurrentSchema(databasePath)
+    }
+    restoreVerified = true
     if (movedOldDatabase) {
-      rmSync(rollbackPath, { force: true })
+      removeDatabaseFiles(rollbackPath)
     }
   } catch (error) {
-    // 替换失败时尽量把旧库放回原位；若回滚也失败，错误信息保留两个路径。
+    if (restoreVerified) {
+      throw new StorageError(
+        'RESTORE_FAILED',
+        `database was restored and verified, but rollback cleanup failed: ` +
+          `${errorMessage(error)}; rollback copy may remain at ${rollbackPath}`,
+        { cause: error, path: databasePath },
+      )
+    }
+    // 替换失败时把旧库（含 WAL/SHM）放回原位；替换后的坏库不删除，
+    // 移到 failed-restore 路径供排查。
+    let cleanupError: unknown
     try {
-      if (existsSync(temporaryPath)) rmSync(temporaryPath, { force: true })
-      if (movedOldDatabase && existsSync(rollbackPath) && !existsSync(databasePath)) {
-        renameSync(rollbackPath, databasePath)
+      removeDatabaseFiles(temporaryPath)
+    } catch (temporaryError) {
+      cleanupError = temporaryError
+    }
+    try {
+      if (
+        replacementInstalled &&
+        !movedOldDatabase &&
+        existsSync(databasePath)
+      ) {
+        moveDatabaseFiles(databasePath, failedPath)
+        keptFailedDatabase = true
+      }
+      if (movedOldDatabase && databaseFilesExist(rollbackPath)) {
+        if (existsSync(databasePath)) {
+          moveDatabaseFiles(databasePath, failedPath)
+          keptFailedDatabase = true
+        }
+        moveDatabaseFiles(rollbackPath, databasePath)
       }
     } catch (rollbackError) {
       throw new StorageError(
         'RESTORE_FAILED',
-        `restore failed and rollback failed: ${errorMessage(error)}; ${errorMessage(rollbackError)}`,
+        `restore failed and rollback failed: ${errorMessage(error)}; ` +
+          `${errorMessage(rollbackError)}; original=${rollbackPath}; ` +
+          `failed=${failedPath}` +
+          (cleanupError === undefined
+            ? ''
+            : `; temporary cleanup failed: ${errorMessage(cleanupError)}`),
         { cause: error, path: databasePath },
       )
     }
+    const failedCopy = keptFailedDatabase
+      ? `; failed copy kept at ${failedPath}`
+      : ''
+    const temporaryCopy = cleanupError === undefined
+      ? ''
+      : `; temporary copy cleanup failed at ${temporaryPath}: ` +
+        errorMessage(cleanupError)
     if (error instanceof StorageIntegrityError) {
       throw new StorageError(
         'RESTORE_FAILED',
-        `restored file failed verification: ${error.message}`,
+        `restored file failed verification: ${error.message}` +
+          `; original database restored or preserved${failedCopy}` +
+          temporaryCopy,
         { cause: error, path: databasePath },
       )
     }
-    if (error instanceof StorageError) throw error
+    if (error instanceof StorageError) {
+      throw new StorageError(
+        'RESTORE_FAILED',
+        `${error.message}; original database restored or preserved` +
+          `${failedCopy}${temporaryCopy}`,
+        { cause: error, path: databasePath },
+      )
+    }
     throw new StorageError(
       'RESTORE_FAILED',
-      `restore failed: ${errorMessage(error)}`,
+      `restore failed: ${errorMessage(error)}; ` +
+        `original database restored or preserved${failedCopy}` +
+        temporaryCopy,
       { cause: error, path: databasePath },
     )
   }
 }
 
-function removeSidecars(databasePath: string): void {
-  for (const suffix of ['-wal', '-shm']) {
-    rmSync(`${databasePath}${suffix}`, { force: true })
+function assertCurrentSchema(path: string): void {
+  let db: DatabaseSync | undefined
+  try {
+    db = new DatabaseSync(path, { readOnly: true })
+    const row = db.prepare('PRAGMA user_version').get() as
+      | Record<string, unknown>
+      | undefined
+    const version = Number(row?.user_version)
+    const migration = db.prepare(
+      'SELECT MAX(version) AS version FROM schema_migrations',
+    ).get() as
+      | Record<string, unknown>
+      | undefined
+    const migrationVersion = Number(migration?.version)
+    if (
+      version !== STORAGE_SCHEMA_VERSION ||
+      migrationVersion !== STORAGE_SCHEMA_VERSION
+    ) {
+      throw new StorageError(
+        'RESTORE_FAILED',
+        `backup schema version ${version} (migrations ${migrationVersion}) ` +
+          `does not match current ${STORAGE_SCHEMA_VERSION}; ` +
+          'refusing to restore',
+        { path },
+      )
+    }
+  } finally {
+    db?.close()
+  }
+}
+
+function moveDatabaseFiles(source: string, target: string): void {
+  for (const suffix of ['', '-wal', '-shm']) {
+    const sourcePath = `${source}${suffix}`
+    const targetPath = `${target}${suffix}`
+    rmSync(targetPath, { force: true })
+    if (existsSync(sourcePath)) {
+      renameSync(sourcePath, targetPath)
+    }
+  }
+}
+
+function databaseFilesExist(path: string): boolean {
+  return ['', '-wal', '-shm'].some(suffix => existsSync(`${path}${suffix}`))
+}
+
+function removeDatabaseFiles(path: string): void {
+  for (const suffix of ['', '-wal', '-shm']) {
+    rmSync(`${path}${suffix}`, { force: true })
   }
 }
 

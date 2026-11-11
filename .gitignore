@@ -1,5 +1,15 @@
 # 运行时数据与个人配置
 data/
+kanobot.lock
+kanobot.lock.*
+*.pid
+kanobot.sqlite
+kanobot.sqlite.*
+kanobot.sqlite-*
+tombstones.sqlite
+tombstones.sqlite.*
+tombstones.sqlite-*
+kanobot-backup-*.sqlite
 config/*
 !config/examples/
 !config/examples/**

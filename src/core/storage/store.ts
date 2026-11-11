@@ -36,6 +36,8 @@ import {
   openTombstoneDatabase,
   quickCheckDatabase,
   inspectDatabaseFile,
+  STORAGE_SCHEMA_VERSION,
+  TOMBSTONE_STORE_SCHEMA_VERSION,
 } from './database.ts'
 import {
   StorageError,
@@ -296,6 +298,40 @@ export class KanobotStorage {
   currentState(): LifeState {
     this.assertOpen()
     return structuredClone(this.state)
+  }
+
+  /**
+   * 健康检查只做轻量读取，不执行全库 quick_check。
+   *
+   * 连接已关闭、查询失败或运行时 schema 与当前版本不一致时必须抛出，
+   * 让 HTTP 健康检查返回 503，而不是把进程存活当成数据库可用。
+   */
+  healthCheck(): { schemaVersion: number; tombstoneSchemaVersion: number } {
+    this.assertOpen()
+    const main = this.db.prepare('PRAGMA user_version').get() as
+      | Record<string, unknown>
+      | undefined
+    const tombstones = this.tombstoneDb.prepare('PRAGMA user_version').get() as
+      | Record<string, unknown>
+      | undefined
+    const schemaVersion = Number(main?.user_version)
+    const tombstoneSchemaVersion = Number(tombstones?.user_version)
+    if (schemaVersion !== STORAGE_SCHEMA_VERSION) {
+      throw new StorageError(
+        'SCHEMA_INCOMPATIBLE',
+        `runtime main schema ${schemaVersion} does not match ${STORAGE_SCHEMA_VERSION}`,
+      )
+    }
+    if (tombstoneSchemaVersion !== TOMBSTONE_STORE_SCHEMA_VERSION) {
+      throw new StorageError(
+        'SCHEMA_INCOMPATIBLE',
+        `runtime tombstone schema ${tombstoneSchemaVersion} does not match ` +
+          `${TOMBSTONE_STORE_SCHEMA_VERSION}`,
+      )
+    }
+    this.db.prepare('SELECT 1 AS ok').get()
+    this.tombstoneDb.prepare('SELECT 1 AS ok').get()
+    return { schemaVersion, tombstoneSchemaVersion }
   }
 
   get lastSequence(): number {
@@ -3105,10 +3141,21 @@ export class KanobotStorage {
     this.assertOpen()
     const before = validateInstant(staleBefore, 'outbox.staleBefore')
     const updatedAt = validateInstant(at, 'outbox.updatedAt')
+    // 本地网页投递是在 SQLite 事务内完成的：若崩在提交前，没有消息；
+    // 若已提交，状态已是 delivered。外部渠道无法证明结果，陈旧 sending
+    // 必须进入终态 unknown，不能在重启后自动重发造成重复。
     const result = this.db.prepare(
       `UPDATE outbox
-       SET status = 'failed', last_error_code = 'stale_sending',
-           updated_at = ?, due_at = ?
+       SET status = CASE
+             WHEN target = 'web:owner' THEN 'failed'
+             ELSE 'unknown'
+           END,
+           last_error_code = 'stale_sending',
+           updated_at = ?,
+           due_at = CASE
+             WHEN target = 'web:owner' THEN ?
+             ELSE NULL
+           END
        WHERE status = 'sending' AND updated_at < ?`,
     ).run(updatedAt, updatedAt, before)
     return Number(result.changes)

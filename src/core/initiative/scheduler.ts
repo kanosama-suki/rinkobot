@@ -92,6 +92,14 @@ export class InitiativeScheduler {
     return this.ticks
   }
 
+  /**
+   * 健康检查读取的运行状态。start() 重复调用不会创建第二个 timer；
+   * dispose 或 stop 后必须报告 stopped。
+   */
+  isRunning(): boolean {
+    return !this.disposed && this.timer !== null
+  }
+
   private async runTick(signal: AbortSignal): Promise<void> {
     this.ticks += 1
     try {
