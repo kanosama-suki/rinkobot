@@ -39,3 +39,17 @@ Thumbs.db
 .idea/
 .vscode/
 tmp/
+
+# 公开文档白名单：只提交当前产品文档；历史验收、第三方目录和私人资料留在本地
+docs/*
+!docs/need.md
+!docs/plan.md
+!docs/memory-research.md
+!docs/review-brief.md
+!docs/r1-acceptance.md
+!docs/r1-deployment.md
+!docs/r1.5-decoupling.md
+!docs/archive/
+docs/archive/*
+!docs/archive/README.md
+docs/history/
