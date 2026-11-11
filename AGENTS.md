@@ -82,6 +82,7 @@ npm run test:lifecycle -- --output F:\kanobot\dsh\m1-plugin-lifecycle.json
 ## 5. 当前状态
 
 - 阶段：R0 决策冻结已完成（2026-11-10，基线 `973cd5d`，M5.2.1）。真实小号 QQ + NapCat + Magpie 已完成私聊收发、图片/表情和 `owner_qq` 合并的部分验收；完整 QQ 矩阵、一到两周日常观察、Linux 常驻、Windows 通知中心人工确认、真实第三方 API 试用和主模型选型仍待后续。下一步是 R1 独立核心服务与常驻部署硬化，不进入 M6 DSH Session 主线。
+- 命名约定：`M0`～`M5.2.1` 是已完成历史，`M6`/`M6.7`/`M6.8` 是归档探索；当前和以后的新计划、提示词、验收和提交统一使用 `R0`～`R7`，不再新增 M 编号。
 - 已存在：M1～M4 全部基线、M5 QQ 渠道、M5.1 设置弹窗和低摩擦提醒、M5.2 所有者 QQ 会话合并与跨会话只读档案、M5.2.1 启动历史回填/顶部历史按钮/档案会话改名/schema v12，以及提醒/记忆确定性仲裁、候选冷却和归档恢复、脱敏记忆决策审计、正式独立程序、可选 DSH 插件、provider 工厂（`mock`/`magpie`/`dsh`/`openai-compatible`）、只读模型发现、模型/QQ 设置弹窗、运行时 `model-settings.json` 和 `channel-settings.json`、环境变量/本地 AES-GCM secret store、第三方 URL/DNS 私网拦截、一次性 bootstrap 登录和 Cookie 鉴权、OneBot 11 WebSocket、白名单/群 @、连发聚合、多图、去重、限频、重连、STOP 和主动消息同步。
 - 尚未存在：完整真实 QQ 矩阵、一到两周真实日常试用、Linux 常驻部署、Windows 通知中心人工确认、真实第三方付费 API 验收、DSH provider 在 4100 的真实生成回归、DSH 内部产品 UI、浏览器 worker、VM、游戏、自进化和公开发送。当前软计划只保存计划，不实际执行读书/浏览/游戏；当前推断记忆仍进候选，自动证据累积和淡化待后续改进；浏览器通知不是 Web Push。
 - 已知部署基线：Windows 10（10.0.19045），Node v24.19.0，DSH `0.2.1-rc.5`（npm `latest` 标签；当前没有非 RC 版本）。核心源码在本目录，DSH 测试实例使用独立 `DSH_HOME=F:\kanobot\dsh\test-home`。
