@@ -2,8 +2,8 @@
  * 正式独立程序的回环 HTTP 集成测试。
  *
  * 使用临时配置和数据目录验证：显式目录要求、一次性登录、Cookie 鉴权、
- * 聊天持久化、宿主机能力、端口释放，以及与 DSH 插件共用的 schema 版本。
- * 不读取正式 DSH 数据、人格、凭据或聊天正文。
+ * 聊天持久化、模型设置视图、端口释放和存储 schema 版本。
+ * 不读取正式数据、人格、凭据或聊天正文。
  */
 
 import assert from 'node:assert/strict'
@@ -48,7 +48,7 @@ interface TestLayout {
 }
 test('the standalone app authenticates, persists, and releases its port', async t => {
   const layout = createLayout(t)
-  configureChatModel(layout.configDir, 'mock')
+  configureChatModel(layout.configDir)
 
   const first = await createAppServer({
     configDir: layout.configDir,
@@ -98,12 +98,7 @@ test('the standalone app authenticates, persists, and releases its port', async 
     )
     assert.equal(settings.status, 200)
     const view = await settings.json() as ModelSettingsView
-    assert.equal(view.hostCapabilities.dshChat.available, false)
-    assert.match(
-      view.hostCapabilities.dshChat.reason ?? '',
-      /ctx\.llm/,
-    )
-
+    assert.equal(view.chat.provider, 'mock')
     const channels = await fetch(
       `${first.baseUrl}/kanobot/api/settings/channels`,
       { headers: { cookie } },
@@ -201,9 +196,9 @@ test('the standalone app authenticates, persists, and releases its port', async 
   }
 })
 
-test('the standalone app rejects missing directories, shared directories, and unavailable DSH', async t => {
+test('the standalone app rejects missing and shared directories', async t => {
   const layout = createLayout(t)
-  configureChatModel(layout.configDir, 'mock')
+  configureChatModel(layout.configDir)
 
   await assert.rejects(
     () =>
@@ -233,23 +228,11 @@ test('the standalone app rejects missing directories, shared directories, and un
     /must be different directories/,
   )
 
-  configureChatModel(layout.configDir, 'dsh')
-  const unavailableDataDir = join(layout.root, 'dsh-data')
-  await assert.rejects(
-    () =>
-      createAppServer({
-        configDir: layout.configDir,
-        dataDir: unavailableDataDir,
-        port: 0,
-      }),
-    /host does not expose ctx\.llm/,
-  )
-  assert.equal(existsSync(unavailableDataDir), false)
 })
 
 test('the standalone app merges pre-existing owner QQ history on startup', async t => {
   const layout = createLayout(t)
-  configureChatModel(layout.configDir, 'mock')
+  configureChatModel(layout.configDir)
   disableInitiative(layout.configDir)
 
   const beforeOwner = loadConfigFromDirectory(layout.configDir)
@@ -327,7 +310,7 @@ test('the standalone app merges pre-existing owner QQ history on startup', async
 
 test('switching chat provider preserves identity, conversation, memory, and state', async t => {
   const layout = createLayout(t)
-  configureChatModel(layout.configDir, 'mock')
+  configureChatModel(layout.configDir)
   disableInitiative(layout.configDir)
   const identityPath = join(layout.configDir, 'identity.toml')
   const identityBefore = readFileSync(identityPath, 'utf8')
@@ -441,35 +424,21 @@ function createLayout(t: TestContext): TestLayout {
   }
 }
 
-function configureChatModel(
-  configDir: string,
-  provider: 'mock' | 'dsh',
-): void {
+function configureChatModel(configDir: string): void {
   const path = join(configDir, 'system.toml')
   const source = readFileSync(path, 'utf8')
   const start = source.indexOf('[model]')
   const end = source.indexOf('[vision]')
   assert.ok(start >= 0 && end > start)
-  const section = provider === 'mock'
-    ? [
-        '[model]',
-        'provider = "mock"',
-        'name = "kanobot-mock-v1"',
-        'timeout_ms = 5000',
-        'max_retries = 0',
-        'max_output_tokens = 4096',
-        '',
-      ].join('\n')
-    : [
-        '[model]',
-        'provider = "dsh"',
-        'route = "test-route"',
-        'name = "test/chat-model"',
-        'timeout_ms = 5000',
-        'max_retries = 0',
-        'max_output_tokens = 4096',
-        '',
-      ].join('\n')
+  const section = [
+    '[model]',
+    'provider = "mock"',
+    'name = "kanobot-mock-v1"',
+    'timeout_ms = 5000',
+    'max_retries = 0',
+    'max_output_tokens = 4096',
+    '',
+  ].join('\n')
   writeFileSync(
     path,
     `${source.slice(0, start)}${section}\n${source.slice(end)}`,

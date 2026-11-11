@@ -221,7 +221,7 @@ test('startup report includes operational state but no login token or paths', as
     const lockOwner = readRuntimeLock(layout.dataDir)?.ownerToken
     assert.ok(lockOwner !== undefined)
     assert.match(startup, /pid=\d+/)
-    assert.match(startup, /version=0\.20\.0/)
+    assert.match(startup, /version=0\.21\.0/)
     assert.match(startup, /schema=12/)
     assert.match(startup, new RegExp(`lockOwner=${lockOwner.slice(0, 12)}(?:\\s|$)`))
     assert.match(startup, /backups=\d+/)

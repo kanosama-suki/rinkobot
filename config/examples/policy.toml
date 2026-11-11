@@ -19,5 +19,5 @@ max_reply_chars = 2000
 max_steps_per_turn = 1
 
 [emergency]
-# 相对于 DSH 数据目录的普通文件名；出现该文件时自主活动必须停止。
+# 相对于运行时数据目录的普通文件名；出现该文件时自主活动必须停止。
 stop_file = "STOP"

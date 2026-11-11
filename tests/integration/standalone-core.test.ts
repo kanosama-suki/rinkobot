@@ -1,8 +1,8 @@
 /**
- * DSH 缺席时的独立核心验收。
+ * 独立核心验收。
  *
  * 使用 mock 聊天/主动性 provider、本机 mock OneBot、临时配置和临时主库，
- * 验证网页聊天、QQ、记忆、提醒、主动消息和 scheduler 都能在没有 DSH
+ * 验证网页聊天、QQ、记忆、提醒、主动消息和 scheduler 都能由同一进程
  * 的独立程序中工作。
  * 不连接真实 QQ、NapCat、模型或正式数据。
  */
@@ -37,15 +37,15 @@ const examplesDir = fileURLToPath(
   new URL('../../config/examples', import.meta.url),
 )
 
-test('standalone core chats, remembers, reminds, runs proactive, and handles mock QQ without DSH', async t => {
+test('standalone core chats, remembers, reminds, runs proactive, and handles mock QQ', async t => {
   const layout = createLayout(t)
   configureMockModel(layout.configDir)
   setTickSeconds(layout.configDir, 10)
   const qq = await startMockOneBot(t)
   configureMockQq(layout.configDir, qq.url)
   const clock = createManualClock('2026-11-11T02:00:00.000Z')
-  const reminderText = '独立程序在没有 DSH 时也要送达的虚构提醒。'
-  const qqUserText = 'DSH 不存在时通过 mock QQ 发送的虚构消息。'
+  const reminderText = '独立程序需要送达的虚构提醒。'
+  const qqUserText = '通过 mock QQ 发送的虚构消息。'
   const loaded = loadConfigFromDirectory(layout.configDir)
 
   const store = KanobotStorage.openFromConfig(loaded, layout.dataDir, clock)
@@ -122,7 +122,7 @@ test('standalone core chats, remembers, reminds, runs proactive, and handles moc
         accept: 'text/event-stream',
         'content-type': 'application/json',
       },
-      body: JSON.stringify({ text: '在 DSH 缺席时也能聊天的虚构消息。' }),
+      body: JSON.stringify({ text: '独立核心聊天使用的虚构消息。' }),
     })
     assert.equal(chat.status, 200)
     const events = parseSse(await chat.text())
@@ -136,7 +136,7 @@ test('standalone core chats, remembers, reminds, runs proactive, and handles moc
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        text: '独立程序在没有 DSH 时保存的虚构记忆。',
+        text: '独立程序保存的虚构记忆。',
         kind: 'preference',
         importance: 'normal',
       }),

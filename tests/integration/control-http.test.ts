@@ -57,7 +57,7 @@ test('emergency state persists and STOP file cannot auto-resume it', () => {
   }
 })
 
-test('control and audit endpoints fail closed without a DSH session', async () => {
+test('control and audit endpoints fail closed without an owner session', async () => {
   const harness = await createHarness()
   try {
     assert.equal((await fetch(`${harness.baseUrl}/kanobot/api/control`)).status, 401)

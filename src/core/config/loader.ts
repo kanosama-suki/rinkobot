@@ -66,7 +66,6 @@ const CONFIG_FILES = {
 
 const MODEL_KEYS = [
   'provider',
-  'route',
   'name',
   'base_url',
   'api_key_env',
@@ -81,7 +80,6 @@ const MODEL_KEYS = [
 const VISION_KEYS = [
   'enabled',
   'provider',
-  'route',
   'name',
   'base_url',
   'api_key_env',
@@ -407,12 +405,12 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
   }
 
   const model = requiredTable(table, 'model', 'model')
+  rejectRemovedRoute(model, 'model')
   knownKeys(model, MODEL_KEYS, 'model')
   const provider = parseChatProvider(
     requiredString(model, 'provider', 'model.provider', 1, 128),
     'model.provider',
   )
-  const route = optionalString(model, 'route', 'model.route', 1, 128)
   const name = requiredString(model, 'name', 'model.name', 1, 128)
   const rawBaseUrl = optionalString(model, 'base_url', 'model.base_url', 1, 512)
   const allowPrivateNetwork = optionalBoolean(
@@ -490,22 +488,6 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
         `required when provider is "${provider}"`,
       )
     }
-  }
-  if (provider === 'dsh') {
-    if (route === null) {
-      fail('model.route', 'required when provider is "dsh"')
-    }
-    if (baseUrl !== null) {
-      fail('model.base_url', 'must be omitted when provider is "dsh"')
-    }
-    if (apiKeyEnv !== null || apiKeySecret !== null) {
-      fail(
-        'model.api_key_env',
-        'DSH credentials are owned by the host and must not be configured here',
-      )
-    }
-  } else if (route !== null) {
-    fail('model.route', 'only the "dsh" provider accepts a route')
   }
   if (provider === 'mock') {
     if (baseUrl !== null || apiKeyEnv !== null || apiKeySecret !== null) {
@@ -630,7 +612,6 @@ function validateSystem(table: TomlTable, file: string): SystemConfig {
     },
     model: {
       provider,
-      route,
       name,
       baseUrl,
       apiKeyEnv,
@@ -679,7 +660,6 @@ function validateVision(table: TomlTable): VisionConfig {
   const defaults: VisionConfig = {
     enabled: false,
     provider: null,
-    route: null,
     name: null,
     baseUrl: null,
     apiKeyEnv: null,
@@ -694,6 +674,7 @@ function validateVision(table: TomlTable): VisionConfig {
   if (!('vision' in table)) return defaults
 
   const section = requiredTable(table, 'vision', 'vision')
+  rejectRemovedRoute(section, 'vision')
   knownKeys(section, VISION_KEYS, 'vision')
   const enabled = 'enabled' in section
     ? requiredBoolean(section, 'enabled', 'vision.enabled')
@@ -702,7 +683,6 @@ function validateVision(table: TomlTable): VisionConfig {
   const provider = rawProvider === null
     ? null
     : parseVisionProvider(rawProvider, 'vision.provider')
-  const route = optionalString(section, 'route', 'vision.route', 1, 128)
   const name = optionalString(section, 'name', 'vision.name', 1, 128)
   const rawBaseUrl = optionalString(section, 'base_url', 'vision.base_url', 1, 512)
   const allowPrivateNetwork = optionalBoolean(
@@ -786,13 +766,9 @@ function validateVision(table: TomlTable): VisionConfig {
       fail('vision.max_output_tokens', 'required when vision.enabled is true')
     }
   }
-  if (route !== null) {
-    fail('vision.route', 'vision providers do not accept a DSH route')
-  }
   return {
     enabled,
     provider,
-    route,
     name,
     baseUrl,
     apiKeyEnv,
@@ -838,15 +814,20 @@ function optionalBoolean(
 }
 
 function parseChatProvider(value: string, field: string): ChatProvider {
+  if (value === 'dsh') {
+    fail(
+      field,
+      'DSH provider support was removed in R1.5; use mock, magpie, or openai-compatible',
+    )
+  }
   if (
     value !== 'mock' &&
     value !== 'magpie' &&
-    value !== 'dsh' &&
     value !== 'openai-compatible'
   ) {
     fail(
       field,
-      'expected "mock", "magpie", "dsh" or "openai-compatible"',
+      'expected "mock", "magpie" or "openai-compatible"',
     )
   }
   return value
@@ -978,6 +959,7 @@ function applyRuntimeModelOverlay(
     if ('model' in overlay) {
       const base = isTable(parsed.system.model) ? parsed.system.model : {}
       const override = asTable(overlay.model, 'model')
+      rejectRemovedRoute(override, 'model')
       knownKeys(override, MODEL_KEYS, 'model')
       parsed.system.model = mergeRuntimeSection(base, override)
       for (const key of Object.keys(override)) fields.add(`model.${key}`)
@@ -985,6 +967,7 @@ function applyRuntimeModelOverlay(
     if ('vision' in overlay) {
       const base = isTable(parsed.system.vision) ? parsed.system.vision : {}
       const override = asTable(overlay.vision, 'vision')
+      rejectRemovedRoute(override, 'vision')
       knownKeys(override, VISION_KEYS, 'vision')
       parsed.system.vision = mergeRuntimeSection(base, override)
       for (const key of Object.keys(override)) fields.add(`vision.${key}`)
@@ -1046,6 +1029,15 @@ function mergeRuntimeSection(
     else merged[key] = value
   }
   return merged
+}
+
+function rejectRemovedRoute(table: TomlTable, prefix: string): void {
+  if ('route' in table) {
+    fail(
+      `${prefix}.route`,
+      'DSH provider support was removed in R1.5; remove route and use mock, magpie, or openai-compatible',
+    )
+  }
 }
 
 function validateLifeState(table: TomlTable, file: string): LifeStateConfig {

@@ -27,7 +27,7 @@ import { KanobotEmergencyService } from '../../src/core/policy/index.ts'
 import { CHAT_BASE_PATH, registerChatSurface } from '../../src/web/index.ts'
 import { createWorkspace } from '../helpers/storage-fixture.ts'
 
-test('initiative API fails closed without a DSH session', async () => {
+test('initiative API fails closed without an owner session', async () => {
   const harness = await createHarness()
   try {
     const response = await fetch(`${harness.baseUrl}/kanobot/api/initiative`)

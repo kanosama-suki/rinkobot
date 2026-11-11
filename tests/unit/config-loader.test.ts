@@ -352,7 +352,6 @@ test('maps snake_case TOML fields to typed runtime fields', () => {
     const config = loadConfigFromDirectory(dir)
     assert.deepEqual(config.system.model, {
       provider: 'magpie',
-      route: null,
       name: 'deepseek/deepseek-flash',
       baseUrl: 'http://127.0.0.1:3425/v1',
       apiKeyEnv: 'MAGPIE_API_KEY',
@@ -806,6 +805,37 @@ test('rejects an invalid API key environment variable name', () => {
   }
 })
 
+test('rejects removed DSH providers and routes in system.toml', () => {
+  const providerDir = writeConfigs({
+    system: validSystem.replace('provider = "magpie"', 'provider = "dsh"'),
+  })
+  const routeDir = writeConfigs({
+    system: validSystem.replace(
+      'reasoning_effort = "low"',
+      'reasoning_effort = "low"\nroute = "deepseek/deepseek-flash"',
+    ),
+  })
+  try {
+    assert.throws(() => loadConfigFromDirectory(providerDir), (error: unknown) => {
+      assert.ok(error instanceof ConfigError)
+      const issue = error.issues.find(candidate => candidate.field === 'model.provider')
+      assert.ok(issue !== undefined)
+      assert.match(issue.message, /removed in R1\.5/)
+      return true
+    })
+    assert.throws(() => loadConfigFromDirectory(routeDir), (error: unknown) => {
+      assert.ok(error instanceof ConfigError)
+      const issue = error.issues.find(candidate => candidate.field === 'model.route')
+      assert.ok(issue !== undefined)
+      assert.match(issue.message, /removed in R1\.5/)
+      return true
+    })
+  } finally {
+    rmSync(providerDir, { recursive: true, force: true })
+    rmSync(routeDir, { recursive: true, force: true })
+  }
+})
+
 test('maps a complete optional vision section and normalizes its base URL', () => {
   const visionSection = `
 
@@ -827,7 +857,6 @@ max_description_chars = 1500
     assert.deepEqual(config.system.vision, {
       enabled: true,
       provider: 'magpie',
-      route: null,
       name: 'test/vision-model',
       baseUrl: 'http://127.0.0.1:3425/v1',
       apiKeyEnv: 'MAGPIE_API_KEY',
@@ -1002,6 +1031,55 @@ test('runtime settings overlay uses null to delete inherited model fields', () =
     assert.equal(config.system.vision.name, null)
   } finally {
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('runtime settings overlay rejects removed DSH provider and route', () => {
+  const providerDir = writeConfigs()
+  const routeDir = writeConfigs()
+  try {
+    writeFileSync(
+      join(providerDir, 'model-settings.json'),
+      JSON.stringify({
+        schema_version: 1,
+        model: {
+          provider: 'dsh',
+          name: 'deepseek/deepseek-flash',
+          max_output_tokens: 4096,
+        },
+      }),
+      'utf8',
+    )
+    assert.throws(() => loadConfigFromDirectory(providerDir), (error: unknown) => {
+      assert.ok(error instanceof ConfigError)
+      const issue = error.issues.find(candidate => candidate.field === 'model.provider')
+      assert.ok(issue !== undefined)
+      assert.ok(issue.file.endsWith('model-settings.json'))
+      assert.match(issue.message, /removed in R1\.5/)
+      return true
+    })
+
+    writeFileSync(
+      join(routeDir, 'model-settings.json'),
+      JSON.stringify({
+        schema_version: 1,
+        model: {
+          route: 'deepseek/deepseek-flash',
+        },
+      }),
+      'utf8',
+    )
+    assert.throws(() => loadConfigFromDirectory(routeDir), (error: unknown) => {
+      assert.ok(error instanceof ConfigError)
+      const issue = error.issues.find(candidate => candidate.field === 'model.route')
+      assert.ok(issue !== undefined)
+      assert.ok(issue.file.endsWith('model-settings.json'))
+      assert.match(issue.message, /removed in R1\.5/)
+      return true
+    })
+  } finally {
+    rmSync(providerDir, { recursive: true, force: true })
+    rmSync(routeDir, { recursive: true, force: true })
   }
 })
 

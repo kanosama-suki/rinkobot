@@ -1,5 +1,5 @@
 /**
- * 不经过 DSH 的本地开发入口测试。
+ * 独立本地开发入口测试。
  *
  * 使用真实回环 HTTP、默认 mock 模型和临时数据目录；验证一次性 token、
  * Cookie 鉴权、过期、Origin 拒绝、页面/API fail-closed 和聊天闭环。
@@ -54,7 +54,7 @@ test('the local dev entry authenticates the whole surface with a one-time token'
       headers: { cookie },
     })
     assert.equal(page.status, 200)
-    assert.match(await page.text(), /M5\.2 聊天档案、QQ 会话与设置/)
+    assert.match(await page.text(), /Kanobot · 独立陪伴核心/)
 
     const channelView = await fetch(
       `${server.baseUrl}/kanobot/api/settings/channels`,

@@ -25,10 +25,8 @@ max_message_chars = 4000
 [model]
 # 示例默认使用电脑上的 Magpie 本地模型路由。provider = "magpie" 时地址
 # 只能是回环 /v1 端点；精确模型名不会自动替换成 auto/* 路由组。
-# 也可改为 "mock"、"dsh"（仅 DSH 插件）或 "openai-compatible"。
+# 也可改为 "mock" 或 "openai-compatible"。
 provider = "magpie"
-# 只有 provider = "dsh" 时才使用宿主里精确的 provider 路由名。
-# route = "deepseek-official"
 # 当前本机路由可用的精确模型示例，不代表最终主模型选型。
 name = "dsdsdsds/deepseek-flash"
 base_url = "http://127.0.0.1:3425/v1"
@@ -69,7 +67,7 @@ max_concurrent_model_calls = 2
 daily_model_call_limit = 2000
 
 [storage]
-# 所有路径都相对于插件的数据目录，不能使用绝对路径或 ..
+# 所有路径都相对于运行时数据目录，不能使用绝对路径或 ..
 # 墓碑库必须与主库分开，避免恢复旧主库备份时把删除记录一起回滚。
 database = "kanobot.sqlite"
 tombstones = "tombstones.sqlite"

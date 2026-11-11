@@ -1,23 +1,22 @@
 {
-  "name": "@kanobot/dsh-plugin",
-  "version": "0.20.0",
+  "name": "kanobot",
+  "version": "0.21.0",
   "private": true,
-  "description": "Kanobot companion runtime for DSH and standalone hosting",
+  "description": "A self-hosted companion robot runtime with persistent memory, reminders, and QQ channels",
   "type": "module",
-  "exports": {
-    ".": "./src/plugin/index.ts",
-    "./config": "./src/core/config/index.ts"
-  },
   "files": [
     "src",
     "scripts",
-    "config",
-    "docs/*.md",
-    "locale",
+    "config/examples",
+    "deploy",
+    "docs",
     "icon.svg",
     "README.md",
     "AGENTS.md",
-    "structure.md"
+    "structure.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CONTRIBUTING.md"
   ],
   "scripts": {
     "app": "node scripts/app-server.ts",
@@ -29,20 +28,14 @@
     "check:case": "node scripts/check-import-case.ts",
     "check": "npm run check:case && npm test",
     "config:check": "node scripts/validate-config.ts config/examples",
-    "preflight": "node scripts/preflight-runtime.ts",
-    "test:lifecycle": "node scripts/m1-lifecycle.ts"
+    "preflight": "node scripts/preflight-runtime.ts"
   },
   "dependencies": {
     "smol-toml": "1.9.1",
     "ws": "8.22.1"
   },
-  "dsh": {
-    "bundle": {
-      "patch": "./src/plugin/cordis.patch.yml"
-    }
-  },
   "engines": {
     "node": ">=24.0.0"
   },
-  "license": "UNLICENSED"
+  "license": "MIT"
 }

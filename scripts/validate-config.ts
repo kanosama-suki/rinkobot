@@ -2,7 +2,7 @@
  * 配置预检 CLI。
  *
  * 退出码约定：0 表示合法，1 表示配置错误，2 表示用法错误。
- * DSH 测试启动脚本依赖非零退出码实现 fail-closed。
+ * 启动脚本依赖非零退出码实现 fail-closed。
  */
 
 import { formatConfigIssues, loadConfigFromDirectory, ConfigError } from '../src/core/config/index.ts'

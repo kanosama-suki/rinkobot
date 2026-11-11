@@ -25,10 +25,7 @@ import {
   loadConfigFromDirectory,
   RUNTIME_MODEL_SETTINGS_FILENAME,
 } from '../../src/core/config/index.ts'
-import {
-  LocalSecretStore,
-  type DshLlmBridge,
-} from '../../src/model-providers/index.ts'
+import { LocalSecretStore } from '../../src/model-providers/index.ts'
 import {
   ModelSettingsError,
   ModelSettingsService,
@@ -52,7 +49,6 @@ function draftFromView(view: ModelSettingsView): ModelSettingsDraft {
   return {
     chat: {
       provider: view.chat.provider,
-      route: view.chat.route,
       name: view.chat.name,
       baseUrl: view.chat.baseUrl,
       timeoutMs: view.chat.timeoutMs,
@@ -79,9 +75,8 @@ function draftFromView(view: ModelSettingsView): ModelSettingsDraft {
 }
 
 function discoveryDraft(input: {
-  chatProvider?: 'mock' | 'magpie' | 'dsh' | 'openai-compatible'
+  chatProvider?: 'mock' | 'magpie' | 'openai-compatible'
   chatBaseUrl?: string | null
-  chatRoute?: string | null
   chatCredential?: ModelDiscoveryDraft['chat']['credential']
   chatPrivate?: boolean
   visionEnabled?: boolean
@@ -92,7 +87,6 @@ function discoveryDraft(input: {
   return {
     chat: {
       provider: input.chatProvider ?? 'openai-compatible',
-      route: input.chatRoute ?? null,
       baseUrl: input.chatBaseUrl ?? null,
       timeoutMs: 2_000,
       allowPrivateNetwork: input.chatPrivate ?? true,
@@ -139,31 +133,6 @@ test('settings view exposes credential status but never the value or reference',
   }
 })
 
-test('settings view reports whether the host exposes ctx.llm', () => {
-  const configDir = copyExampleConfig()
-  try {
-    const loaded = loadConfigFromDirectory(configDir)
-    const standalone = new ModelSettingsService({ configDir, loaded })
-    assert.deepEqual(standalone.view().hostCapabilities.dshChat, {
-      available: false,
-      reason:
-        '当前宿主没有提供 ctx.llm；DSH 路由只在具备该服务的 DSH 插件中使用。',
-    })
-
-    const plugin = new ModelSettingsService({
-      configDir,
-      loaded,
-      llm: {} as DshLlmBridge,
-    })
-    assert.deepEqual(plugin.view().hostCapabilities.dshChat, {
-      available: true,
-      reason: null,
-    })
-  } finally {
-    rmSync(configDir, { recursive: true, force: true })
-  }
-})
-
 test('saving mock explicitly clears inherited endpoint and reasoning fields', async () => {
   const configDir = copyExampleConfig()
   try {
@@ -174,7 +143,6 @@ test('saving mock explicitly clears inherited endpoint and reasoning fields', as
     const draft = draftFromView(service.view())
     draft.chat = {
       provider: 'mock',
-      route: null,
       name: 'kanobot-mock-v1',
       baseUrl: null,
       timeoutMs: 5_000,
@@ -223,7 +191,6 @@ test('a failed connection test does not write runtime settings', async () => {
     const draft = draftFromView(service.view())
     draft.chat = {
       provider: 'openai-compatible',
-      route: null,
       name: 'acme/chat',
       baseUrl: 'http://127.0.0.1:1/v1',
       timeoutMs: 1_000,
@@ -326,7 +293,6 @@ test('saving a new credential encrypts it and exposes only a local label', async
     const draft = draftFromView(service.view())
     draft.chat = {
       provider: 'openai-compatible',
-      route: null,
       name: 'acme/chat',
       baseUrl,
       timeoutMs: 2_000,
@@ -531,69 +497,6 @@ test('model discovery rejects malformed responses', async () => {
   }
 })
 
-test('DSH discovery lists providers and exact models through the narrow host bridge', async () => {
-  const configDir = copyExampleConfig()
-  const llm: DshLlmBridge = {
-    listProviders: () => [
-      { id: 'mock', name: 'Mock Provider' },
-      { id: 'openai', name: 'OpenAI' },
-    ],
-    listModels: async route => {
-      assert.equal(route, 'openai')
-      return [{
-        provider: 'openai',
-        id: 'host/model-exact',
-        name: 'Host Model',
-        inputModalities: ['text', 'image'],
-        defaultMaxTokens: 4096,
-        reasoning: {
-          efforts: [{ id: 'low', name: 'Low' }],
-        },
-      }]
-    },
-    resolveModelInfo: async () => {
-      throw new Error('not used')
-    },
-    prepareCall: async () => {
-      throw new Error('not used')
-    },
-    stream: async function* () {
-      throw new Error('not used')
-    },
-  }
-  try {
-    const service = new ModelSettingsService({
-      configDir,
-      loaded: loadConfigFromDirectory(configDir),
-      llm,
-    })
-    const providers = await service.discover(discoveryDraft({
-      chatProvider: 'dsh',
-      chatRoute: null,
-      chatCredential: { mode: 'none' },
-    }))
-    assert.deepEqual(
-      providers.chat.providers.map(provider => provider.id),
-      ['mock', 'openai'],
-    )
-    assert.deepEqual(providers.chat.models, [])
-
-    const models = await service.discover(discoveryDraft({
-      chatProvider: 'dsh',
-      chatRoute: 'openai',
-      chatCredential: { mode: 'none' },
-    }))
-    assert.deepEqual(models.chat.models.map(model => model.id), [
-      'host/model-exact',
-    ])
-    assert.equal(models.chat.models[0]?.imageInput, 'supported')
-    assert.equal(models.chat.models[0]?.maxOutputTokens, 4096)
-    assert.deepEqual(models.chat.models[0]?.reasoningEfforts, ['low'])
-  } finally {
-    rmSync(configDir, { recursive: true, force: true })
-  }
-})
-
 test('a discovered vision model with unknown image capability still fails save', async () => {
   const configDir = copyExampleConfig()
   const server = await startServer((_request, response) => {
@@ -610,7 +513,6 @@ test('a discovered vision model with unknown image capability still fails save',
     const draft = draftFromView(service.view())
     draft.chat = {
       provider: 'mock',
-      route: null,
       name: 'kanobot-mock-v1',
       baseUrl: null,
       timeoutMs: 5_000,

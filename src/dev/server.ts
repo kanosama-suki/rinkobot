@@ -1,11 +1,11 @@
 /**
- * 不经过 DSH 的本地开发入口。
+ * 本地开发入口。
  *
  * 边界：
  * - 只监听 127.0.0.1；拒绝非预期 Host 和跨源请求；
  * - 页面和 API 共用短期会话 Cookie，首次访问必须使用一次性 token 换取；
  * - 默认 mock 模型和仓库内 `tmp/dev-data`，避免误连真实模型或正式数据；
- * - 这是开发调试入口，不替代 DSH 的正式鉴权和产品形态。
+ * - 这是开发调试入口，不替代正式程序的鉴权和产品形态。
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'

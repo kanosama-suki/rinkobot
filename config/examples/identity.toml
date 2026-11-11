@@ -1,4 +1,4 @@
-# 仓库和测试只使用占位身份；正式人格文件放在 Git 外的 DSH 数据目录。
+# 仓库和测试只使用占位身份；正式人格文件放在 Git 外的运行时数据目录。
 # placeholder 模式不能同时提供 persona_file，生产环境必须改成 private。
 schema_version = 1
 mode = "placeholder"

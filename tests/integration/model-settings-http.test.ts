@@ -55,7 +55,6 @@ function draftFromView(view: ModelSettingsView): ModelSettingsDraft {
   return {
     chat: {
       provider: view.chat.provider,
-      route: view.chat.route,
       name: view.chat.name,
       baseUrl: view.chat.baseUrl,
       timeoutMs: view.chat.timeoutMs,
@@ -178,7 +177,6 @@ test('settings HTTP requires owner auth and never returns the credential value',
         body: JSON.stringify({
           chat: {
             provider: 'mock',
-            route: null,
             baseUrl: null,
             timeoutMs: 5_000,
             allowPrivateNetwork: false,
@@ -208,7 +206,6 @@ test('settings HTTP requires owner auth and never returns the credential value',
     const draft = draftFromView(view)
     draft.chat = {
       provider: 'mock',
-      route: null,
       name: 'kanobot-mock-v1',
       baseUrl: null,
       timeoutMs: 5_000,

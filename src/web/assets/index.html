@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>Kanobot · M5.2 聊天档案、QQ 会话与设置</title>
+    <title>Kanobot · 独立陪伴核心</title>
     <link rel="stylesheet" href="/kanobot/app.css">
   </head>
   <body>
@@ -13,7 +13,7 @@
         <div class="brand-block">
           <span class="brand-mark" aria-hidden="true">K</span>
           <div>
-            <p class="eyebrow">Kanobot / M5.2</p>
+            <p class="eyebrow">Kanobot / R1.5</p>
             <h1>聊天、完整档案与渠道设置</h1>
           </div>
         </div>
@@ -28,7 +28,7 @@
           <button id="settings-open" class="small-button" type="button">
             设置
           </button>
-          <a class="quiet-link" href="/">宿主首页</a>
+          <a class="quiet-link" href="/">首页</a>
         </div>
       </header>
 
@@ -246,9 +246,9 @@
 
             <section class="panel-card subtle-card">
               <p class="eyebrow">当前边界</p>
-              <h2>M5.2 会话与渠道边界</h2>
+              <h2>R1.5 独立运行边界</h2>
               <ul class="boundary-list">
-                <li>复用 DSH 浏览器登录态</li>
+                <li>一次性登录地址换取短期 HttpOnly 会话</li>
                 <li>单次模型调用返回一个 JSON 信封</li>
                 <li>正文仍然逐字流式显示</li>
                 <li>所有者 QQ 私聊与网页共用同一会话</li>
@@ -535,12 +535,11 @@
               </div>
               <p class="settings-note">
                 聊天模型和视觉模型分开配置。保存前会实际检查端点、精确模型、
-                输出上限和视觉能力；保存后需要重启当前宿主才会切换。
+                输出上限和视觉能力；保存后需要重启 Kanobot 才会切换。
               </p>
               <p id="settings-readonly" class="settings-warning" hidden>
                 当前是仓库示例配置，只能测试，不能保存。请使用独立运行配置目录。
               </p>
-              <p id="settings-host-note" class="settings-warning" hidden></p>
               <p id="settings-error" class="inline-error" role="alert" hidden></p>
               <p id="settings-status" class="settings-status" role="status" hidden></p>
             </section>
@@ -556,17 +555,12 @@
                     <select id="settings-chat-provider">
                       <option value="mock">mock（本地测试）</option>
                       <option value="magpie">Magpie</option>
-                      <option value="dsh">DSH 宿主路由</option>
                       <option value="openai-compatible">OpenAI-compatible</option>
                     </select>
                   </label>
                   <label class="field">
                     <span>精确模型名（也可手动输入）</span>
                     <input id="settings-chat-name" type="text" maxlength="128" required>
-                  </label>
-                  <label id="settings-chat-route-field" class="field" hidden>
-                    <span>DSH provider route</span>
-                    <input id="settings-chat-route" type="text" maxlength="128">
                   </label>
                 </div>
 
@@ -590,24 +584,6 @@
                       </button>
                     </div>
                   </div>
-
-                  <section
-                    id="settings-chat-provider-section"
-                    class="model-discovery-section"
-                    hidden
-                  >
-                    <div class="model-discovery-section-head">
-                      <p class="model-discovery-section-title">DSH provider</p>
-                      <span
-                        id="settings-chat-provider-count"
-                        class="model-discovery-count"
-                      ></span>
-                    </div>
-                    <div
-                      id="settings-chat-provider-chips"
-                      class="model-choice-list"
-                    ></div>
-                  </section>
 
                   <section
                     id="settings-chat-model-section"
@@ -1148,7 +1124,7 @@
                 </div>
                 <p class="channel-restart-note">
                   保存只写入运行时覆盖文件；连接测试使用当前草稿且不会保存。
-                  保存成功后需要重启 DSH 才会应用新的 QQ 连接。
+                  保存成功后需要重启 Kanobot 才会应用新的 QQ 连接。
                 </p>
               </form>
             </section>

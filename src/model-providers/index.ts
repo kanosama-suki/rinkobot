@@ -1,9 +1,9 @@
 /**
  * 模型 provider 工厂。
  *
- * 这里是唯一把配置转换成 ChatModel / VisionModel 的地方。DSH 对象以窄接口
- * 注入，核心不导入宿主；所有真实 provider 在返回前完成精确模型与能力检查，
- * 失败时直接阻止启动，不自动降级到 mock 或另一个模型。
+ * 这里是唯一把配置转换成 ChatModel / VisionModel 的地方。所有真实 provider
+ * 在返回前完成精确模型与能力检查，失败时直接阻止启动，不自动降级到 mock
+ * 或另一个模型。
  */
 
 import {
@@ -20,21 +20,17 @@ import {
   MagpieVisionModel,
   type VisionModel,
 } from '../core/vision/index.ts'
-import { DshChatModel } from './dsh-chat.ts'
-import type { DshLlmBridge } from './dsh-types.ts'
 import { LocalSecretStore } from './secret-store.ts'
 import { createEndpointPreflight } from './url-security.ts'
 
 export type ModelProviderMode =
   | 'mock'
   | 'magpie'
-  | 'dsh'
   | 'openai-compatible'
 
 export interface ModelRuntimeOptions {
   configDir: string
-  llm?: DshLlmBridge
-  /** 仅兼容旧的 DSH Profile / 开发参数；设置页正常使用配置中的 provider。 */
+  /** 开发或测试显式覆盖 provider；正常运行使用配置文件。 */
   mode?: ModelProviderMode
   secretStore?: LocalSecretStore
   /** 设置页一次性连接测试使用；不会写入任何文件。 */
@@ -76,30 +72,6 @@ export async function createChatModelFromConfig(
   const provider = options.mode ?? config.provider
   if (provider === 'mock') {
     return new MockChatModel()
-  }
-  if (provider === 'dsh') {
-    if (config.route === null) {
-      throw new Error('DSH provider requires an exact provider route')
-    }
-    if (options.llm === undefined) {
-      throw new Error(
-        'DSH provider is selected but the host does not expose ctx.llm',
-      )
-    }
-    if (config.maxOutputTokens === null) {
-      throw new Error('DSH provider requires model.max_output_tokens')
-    }
-    const model = new DshChatModel({
-      llm: options.llm,
-      route: config.route,
-      model: config.name,
-      maxOutputTokens: config.maxOutputTokens,
-      timeoutMs: config.timeoutMs,
-      maxRetries: config.maxRetries,
-      reasoningEffort: config.reasoningEffort,
-    })
-    await model.checkAvailable()
-    return model
   }
   if (config.baseUrl === null || config.maxOutputTokens === null) {
     throw new Error(`${provider} provider configuration is incomplete`)
@@ -220,8 +192,6 @@ function normalizeOverrideCredential(value: string | null): string | null {
   return normalized
 }
 
-export type { DshLlmBridge } from './dsh-types.ts'
-export { DshChatModel } from './dsh-chat.ts'
 export { LocalSecretStore, SecretStoreError } from './secret-store.ts'
 export {
   ModelEndpointError,

@@ -2,7 +2,7 @@
  * 模型 provider 工厂集成测试。
  *
  * 用本机临时 OpenAI-compatible 服务验证第三方路由不依赖 Magpie；同时覆盖
- * 缺凭据、缺 DSH 宿主接口、精确模型与视觉图片能力的 fail-closed 行为。
+ * 缺凭据、精确模型与视觉图片能力的 fail-closed 行为。
  */
 
 import assert from 'node:assert/strict'
@@ -62,7 +62,6 @@ function chatConfig(
 ): SystemConfig['model'] {
   return {
     provider: 'openai-compatible',
-    route: null,
     name: MODEL_ID,
     baseUrl,
     apiKeyEnv: null,
@@ -83,7 +82,6 @@ function visionConfig(
   return {
     enabled: true,
     provider: 'openai-compatible',
-    route: null,
     name: MODEL_ID,
     baseUrl,
     apiKeyEnv: null,
@@ -159,7 +157,7 @@ test('openai-compatible chat works without Magpie and does not send its session 
   }
 })
 
-test('provider factories fail closed for missing credentials and host capabilities', async () => {
+test('provider factories fail closed for missing credentials', async () => {
   const configDir = mkdtempSync(join(tmpdir(), 'kanobot-provider-fail-'))
   try {
     await assert.rejects(
@@ -173,29 +171,6 @@ test('provider factories fail closed for missing credentials and host capabiliti
       /environment variable is empty or missing/,
     )
 
-    await assert.rejects(
-      () =>
-        createChatModelFromConfig(
-          chatConfig(null, {
-            provider: 'dsh',
-            route: 'route-a',
-          }),
-          { configDir },
-        ),
-      /host does not expose ctx\.llm/,
-    )
-
-    await assert.rejects(
-      () =>
-        createChatModelFromConfig(
-          chatConfig(null, {
-            provider: 'dsh',
-            route: null,
-          }),
-          { configDir },
-        ),
-      /requires an exact provider route/,
-    )
   } finally {
     rmSync(configDir, { recursive: true, force: true })
   }

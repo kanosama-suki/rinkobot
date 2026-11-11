@@ -1,8 +1,8 @@
 /**
- * Kanobot M3.0 的网页和聊天 HTTP 适配层。
+ * Kanobot 的网页和聊天 HTTP 适配层。
  *
  * 边界：
- * - 页面与接口复用 DSH 已认证的浏览器 Cookie；没有会话时一律 401；
+ * - 页面与接口复用运行时提供的所有者会话；没有会话时一律 401；
  * - 非流式响应使用有限 JSON 请求体，聊天回复使用 SSE 长连接；
  * - 静态资源、路径和响应头固定，不把用户输入拼进 HTML。
  */
@@ -111,8 +111,8 @@ export interface ChatSurfaceOptions {
 }
 
 /**
- * 宿主可以替换未认证提示文案；正式 DSH 默认引导去根页面登录，
- * 本地开发入口则提示使用启动时打印的短期链接。
+ * 宿主可以替换未认证提示文案；生产入口默认不暴露额外登录链接，
+ * 本地开发入口则提示使用启动时打印的短期地址。
  */
 export interface ChatAuthMessages {
   unauthenticatedMessage?: string
@@ -1218,10 +1218,10 @@ function writeAuthRejection(
   api: boolean,
   messages: ChatAuthMessages | undefined,
 ): void {
-  const showLoginLink = messages?.showLoginLink !== false
+  const showLoginLink = messages?.showLoginLink === true
   const unauthenticatedMessage =
     messages?.unauthenticatedMessage ??
-    '需要先登录 DSH。请先打开 DSH 根页面完成登录'
+    '需要有效的所有者会话。请使用启动时打印的一次性登录地址重新打开'
   const forbiddenMessage =
     messages?.forbiddenMessage ?? '请求来源不被允许'
   if (api) {
@@ -1244,7 +1244,7 @@ function writeAuthRejection(
     `<h1>${rejection === 401 ? '需要先登录' : forbiddenMessage}</h1>` +
     `<p>${pageMessage}。` +
     (rejection === 401 && showLoginLink
-      ? '请先打开 <a href="/">DSH 根页面</a> 完成浏览器登录，然后重新访问'
+      ? '请打开实例提供的登录页面完成验证，然后重新访问'
       : '请重新打开带有效凭据的页面地址，然后访问') +
     ' <code>/kanobot/</code>。</p></body></html>'
   res.writeHead(rejection, {

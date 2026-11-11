@@ -1,5 +1,5 @@
 /**
- * 启动不经过 DSH 的本地开发网页。
+ * 启动本地开发网页。
  *
  * 默认只使用 mock 模型、config/examples 和 tmp/dev-data。真实路由必须
  * 显式 `--model-mode magpie`，且仍只监听 127.0.0.1。
@@ -8,12 +8,12 @@
 import { resolve } from 'node:path'
 
 import { createDevServer } from '../src/dev/index.ts'
-import type { KanobotModelMode } from '../src/plugin/models.ts'
+import type { ModelProviderMode } from '../src/model-providers/index.ts'
 
 interface CliOptions {
   configDir?: string
   dataDir?: string
-  modelMode: KanobotModelMode
+  modelMode: ModelProviderMode
   port: number
 }
 
@@ -54,7 +54,7 @@ process.once('SIGTERM', () => {
 function parseArgs(args: string[]): CliOptions {
   let configDir: string | undefined
   let dataDir: string | undefined
-  let modelMode: KanobotModelMode = 'mock'
+  let modelMode: ModelProviderMode = 'mock'
   let port = 4101
 
   for (let index = 0; index < args.length; index += 1) {

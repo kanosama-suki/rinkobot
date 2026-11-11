@@ -1,9 +1,9 @@
-# 插件与改动记录
+# 依赖与改动记录
 
 ## 当前状态
 
-- 当前没有直接安装或引入第三方 DSH 插件作为生产依赖。
-- `docs/plugin-catalog.zh.md` 只是第三方索引；`docs/plugin-research.md` 是源码调研，不是依赖清单。
+- 当前没有安装或引入第三方 DSH 插件；主分支也不提供 DSH provider。
+- `docs/archive/plugin-catalog.zh.md` 只是历史第三方索引；`docs/plugin-research.md` 是源码调研，不是依赖清单。
 - 任何后续引入、替换或迁移，都必须记录版本、来源、许可证、用途、验证方式和回滚方案。
 
 ## 已记录依赖
@@ -25,7 +25,17 @@
 - 许可证：随 Node/SQLite 分发
 - 用途：M2 主库、独立墓碑库、事务、快照、备份和完整性检查。
 - 验证：50 项测试覆盖 WAL、FULL、`secure_delete`、`VACUUM INTO`、`quick_check`、强杀恢复、文件级清除和 fail-closed。
-- 回滚：数据层通过公开接口隔离；若未来必须换驱动，保持表结构和规范 JSON 不变，先做导出/导入与全量回放测试。不要在同一迁移里同时替换 DSH、Node 和数据库版本。
+- 回滚：数据层通过公开接口隔离；若未来必须换驱动，保持表结构和规范 JSON 不变，先做导出/导入与全量回放测试。不要在同一迁移里同时替换 Node、SQLite 和渠道依赖版本。
+
+### ws
+
+- 名称：`ws`
+- 版本：`8.22.1`
+- 来源：npm，仓库 `github:websockets/ws`
+- 许可证：MIT
+- 用途：NapCat/OneBot 11 的正向 WebSocket 客户端。
+- 验证：OneBot 客户端测试覆盖鉴权、消息去重、发送结果未知、连接关闭和重连；QQ 渠道测试使用本机 mock gateway。
+- 回滚：QQ 渠道通过最小 `gateway` 接口隔离；若替换 WebSocket 实现，先保持 OneBot 事件和动作契约不变，并重跑渠道与连接测试。
 
 ## 记录模板
 

@@ -1,176 +1,164 @@
 # Kanobot
 
-一个以独立陪伴核心为主、可选接入 DSH 执行器的陪伴型自进化机器人。她同时是家人、恋人和生活协助者，目标不是做一个套着人格外壳的通用任务代理，而是建立连续、可恢复、可审计的长期关系。
+一个自托管、具有连续记忆和主动性的陪伴型机器人。她既是家人，也是恋人，
+同时可以承担日常小事。项目重点是长期关系的连续性、可恢复性和可审计性，
+不是给通用任务代理套一层人格。
 
-> 当前状态：M4 的真实验收、M4.5 发行基础、M4.6 边界收口、M5 个人 QQ + NapCat 渠道、M5.1 设置与低摩擦提醒、M5.2/M5.2.1 多会话档案与交互修复均已完成；R0 于 2026-11-10 冻结“独立核心 + 可选执行器”方向，R1 于 2026-11-11 完成独立核心服务硬化（版本 `0.20.0`，schema v12）。默认入口是独立程序；DSH Host 插件保留为可选连接器/执行器，DSH 不存在时网页、QQ、记忆、提醒和主动消息仍由核心工作。R1 新增数据目录单进程所有权、stale lock 安全恢复、未登录回环健康检查、结构化启动报告、固定关闭顺序、强杀 outbox 恢复、`backup list/create/restore`、墓碑独立的 fail-closed restore，以及 Linux systemd 示例和部署手册。网页聊天、所有者 QQ 合并、其他会话隔离、连续消息聚合、图片边界、提醒和主动消息保持原行为。自动测试 342 项通过；Windows 自动验收和 mock QQ 回环收发通过。真实小号 QQ + NapCat + Magpie 只有私聊主路径部分验收；Linux systemd 实机、完整 QQ 矩阵、一到两周日常观察、Windows 通知中心、真实第三方 API 和主模型选型仍待续。边界见 [R1 验收](docs/r1-acceptance.md)、[R1 部署](docs/r1-deployment.md)、[R0 决策](docs/r0-decision.md) 和 [真实 QQ 部分验收](docs/m5.2.1-real-acceptance.md)。
->
-> 命名约定：`M0`～`M5.2.1` 是已完成的旧主线，只作历史保留；`M6`/`M6.7`/`M6.8` 是已归档的 DSH-first 探索；当前主线统一使用 `R0`～`R7`，新增计划、提示词、验收和提交都只用 R 编号。
+> 当前状态：R1.5 独立化完成，版本 `0.21.0`，SQLite schema v12，MIT 许可证。
+> 主分支已经是独立程序，不再导出 DSH 插件，也不依赖 DSH 提供模型或登录。
+> R1 的单进程所有权、健康检查、备份恢复和 Linux 部署材料保留。自动测试在
+> Windows 上通过；Windows 自动验收和 mock QQ 回环已覆盖，真实 QQ 完整矩阵、
+> 真实第三方模型选型、Linux `systemd` 实机和一到两周日常观察仍未验收。
 
-## 运行形态
+## 能做什么
 
-默认交付是独立核心；DSH 只作为可选连接器/执行器。不维护两套人格或数据库。
+- 网页聊天、流式回复、所有者会话和跨渠道只读档案；
+- 版本化状态、纯 reducer、事件日志和确定性快照；
+- 长期记忆、候选转正、相关性召回、回收站和彻底清除；
+- 提醒、主动消息、安静时段、outbox 和防刷屏熔断；
+- 个人 QQ + NapCat/OneBot 11，支持白名单、群 `@`、连发聚合、多图和去重；
+- 独立视觉模型、统一审计、紧急停止和回复风格检查；
+- 本地或第三方模型接入，支持 `mock`、Magpie 和 OpenAI-compatible；
+- 数据目录单进程锁、健康检查、备份恢复和 Linux `systemd` 示例。
 
-### DSH 插件（可选，不是运行前置条件）
+人格使用私有配置，正式设定不进入 Git。仓库和测试只使用占位身份。
 
-本包当前是私有本地包，不是已公开发布的 npm 包。可在隔离的 DSH Profile 中用 `link:` 或本地 tarball 安装，并把它加入 Profile bundle：
+## 快速开始
 
-```json
-{
-  "dependencies": {
-    "@kanobot/dsh-plugin": "link:F:/kanobot/a"
-  },
-  "dsh": {
-    "profile": {
-      "bundles": [
-        "@deepseek-ai/dsh-base",
-        "@deepseek-ai/dsh-web-app",
-        "@kanobot/dsh-plugin"
-      ]
-    }
-  }
-}
-```
+要求 Node.js 24 或更新版本。
 
-实际配置放在 DSH Home 的 Kanobot 配置目录，默认是 `$DSH_HOME/kanobot/config`，数据默认在 `$DSH_HOME/kanobot/data`。完成 DSH 登录后访问 `/kanobot/`。不要把真实人格、个人配置或凭据提交到本仓库。
-
-### 独立程序（默认入口）
+Windows PowerShell：
 
 ```powershell
-npm install
-npm run app -- --config <配置目录> --data <数据目录>
+npm ci
+Copy-Item -Recurse config/examples config/local
+npm run app -- --config config/local --data data
 ```
 
-默认只监听 `127.0.0.1:4200`；`--port` 可改端口。配置目录和数据目录必须显式提供且不能相同。启动前先取得数据目录的 OS 级单进程锁；同一数据目录已有存活实例时，第二个进程明确失败并以非零状态退出。终端会打印一次性登录地址，打开后换取短期 HttpOnly Cookie；同一登录地址只能使用一次。非 TTY（例如 systemd）不会把登录链接写进 journal，改用 `npm run login -- --data <数据目录>` 在操作员终端申请新链接。独立程序不提供 DSH provider，设置页会明确标出宿主能力缺失。
+Linux：
 
-健康检查：`GET /kanobot/api/health`。未登录回环请求只返回 `ok/status/uptime/version/database/scheduler/qq`；数据库或 scheduler 不可用时返回 503。Host/Origin 校验仍然生效，不把健康检查做成公网探测入口。
-
-备份管理使用现有主库备份格式：`npm run backup -- --config <配置目录> --data <数据目录> list` 或 `create`；恢复使用 `restore --backup <文件>`。restore 必须先停服务并取得同一数据目录锁；只替换主库，不覆盖独立 `tombstones.sqlite`，下次启动重放墓碑。损坏、校验失败或 schema 不匹配的备份 fail-closed，原库保留。
-
-升级或跨宿主迁移前先停止进程，备份整个数据目录，包括主库、独立 `tombstones.sqlite` 和备份目录。主库日备份不包含独立墓碑库。
-
-若要在 Linux 服务器上常驻运行、随时收 QQ/提醒/主动消息，使用 `systemd` 或等价进程监管，以非 root 用户运行，只监听回环地址，并配置日志轮转、数据权限、备份和崩溃重启。示例 unit 和完整步骤见 [R1 Linux 常驻部署](docs/r1-deployment.md)。Windows 开机自启暂缓。
-
-### 个人 QQ / NapCat
-
-M5.1/M5.2 使用外部 NapCat 提供的 OneBot 11 WebSocket 接口，不内嵌或管理 NapCat 登录。QQ 默认关闭；只有配置目录中存在并启用 `channels.toml` 或设置页写出的 `channel-settings.json` 才会连接。日常配置建议打开 `/kanobot/` 顶部的“设置 → QQ 渠道”，不要直接手改 TOML。
-
-QQ 设置页可以配置开关、WebSocket URL、白名单、群 @、主动目标、连接/重连/聚合/图片/拆条/限频等参数，并提供一次性连接测试。测试只做 WebSocket 握手和 `get_login_info`，不发送 QQ 消息；测试使用当前表单草稿，不保存配置。保存后必须重启 DSH/独立程序才会应用，页面不会假装已经重连。
-
-`channels.toml` 是可提交示例和手写基础配置；设置页保存时写入同目录的运行时文件 `channel-settings.json`，整体覆盖 `qq` 段。覆盖文件也存在同一套 schema 校验，损坏时 fail-closed，不会回退到旧 TOML。设置页不会返回 token；选择本地密钥时，覆盖文件只保存 `access_token_secret = "secret_..."` 引用，真实 token 加密保存在复用的本地 secret store 中。
-
-```toml
-[qq]
-enabled = true
-ws_url = "ws://127.0.0.1:3001"
-access_token_env = "NAPCAT_ACCESS_TOKEN"
-owner_qq = "10001"
-private_allow = ["10001"]
-group_allow = ["20002"]
-group_require_mention = true
-autonomous_target = "private:10001"
+```bash
+npm ci
+cp -R config/examples config/local
+npm run app -- --config config/local --data data
 ```
 
-`owner_qq` 必须显式填写并同时出现在 `private_allow`；只有该账号的私聊会映射到网页 `main`，共享上下文、长期记忆、提醒和关心候选。未填写时所有 QQ 私聊都与网页隔离，不会把白名单里的第一个账号自动当成所有者。其他私聊保持 `qq-private-<id>`，群聊保持 `qq-group-<id>`，它们共享模型预算，但不读写所有者记忆，也不提交面向所有者的提醒/关心候选。
+默认只监听 `127.0.0.1:4200`，可用 `--port` 修改。启动后终端会打印一次性
+登录地址；打开后换取短期 HttpOnly Cookie。非交互式常驻服务不会把登录链接
+写入 journal，可在管理员终端执行：
 
-本机回环地址可以继续使用 `ws://`；远程地址必须同时设置 `allow_remote = true`、使用 `wss://`，并通过 `access_token_env` 指向进程环境变量中的 token，或由设置页写入本地 secret 引用。两种来源互斥。token 不写入 TOML、`channel-settings.json`、SQLite、审计、日志或仓库。空白名单表示谁都不处理，不能显示成“谁都可以”；群聊默认必须 @ 机器人；主动消息只能发往白名单中明确配置的 `autonomous_target`。
+```bash
+npm run login -- --data data
+```
 
-网页里的“我们的对话”是所有者共享会话 `main`，可以发送消息；“全部对话”是所有来源的只读档案，可按会话筛选、按日期分组并加载更早消息，但不能发送，也不会改变任何会话的模型上下文。QQ 回复只回到对应 QQ 目标，网页普通回复不会自动推送到 QQ。表情包/原生多模态解析尚未扩展；图片仍走现有视觉边界。
+只用于本地开发的入口：
 
-提醒不依赖网页按钮。kano 当前消息明确说“提醒我/叫我/通知我/别忘了”，模型给出合法未来时间且事项清楚时，系统直接创建 active 提醒并在回复里说明时间；时间或内容模糊时才保留待确认候选。下一轮说“可以/好/确认/取消/不用”会确定性处理最近一条同会话候选，超过约 30 分钟的旧候选不会被一句无关的“可以”误确认；多条 pending 时要求指定，不批量确认。STOP 仍能阻止自动激活和聊天确认。
+```bash
+npm run dev
+```
 
-同一会话的连续文字和图片先按静默窗口聚合，再只调用一次核心；最多 4 张图片，有单图/总字节上限和下载超时。图片优先读取 NapCat 本机缓存，再尝试 `get_file`，最后用 `get_msg` 获取新链接；任何图片失败都会拒绝整轮，不会假装看过。回复可以拆成多条发送，但只生成一次。发送结果未知时标记为 `unknown` 并停止自动重试；`STOP` 文件在每次发送前检查。当前不实现 QQ 空间、动态、评论或公开群发。
+开发入口默认使用 `config/examples`、`tmp/dev-data` 和 mock 模型，只监听回环。
 
 ## 模型接入
 
-设置页把聊天模型和视觉模型分开管理：
+设置页分别管理聊天模型和视觉模型：
 
 | provider | 用途 | 边界 |
 | --- | --- | --- |
 | `mock` | 测试和离线开发 | 不联网 |
 | `magpie` | 本机 Magpie | 只允许回环 `/v1` |
-| `dsh` | DSH 插件使用宿主 `ctx.llm` | 精确 route/model；独立程序不可用 |
 | `openai-compatible` | 第三方或自建兼容 API | 默认 HTTPS 和公开地址；私网需显式允许 |
 
-设置页可以从当前 provider 只读获取模型列表；发现不会保存配置，也不会把“列表里存在”当成视觉、工具或 reasoning 能力声明。视觉发现会区分明确支持图片和能力未知，能力未知的模型仍需在保存前通过真实测试。
+设置页可以只读获取模型列表并点选模型。发现结果不等于能力认证；视觉模型
+仍必须在保存前通过真实图片能力检查。缺少凭据、模型或必要能力时启动失败，
+不会自动降级到 mock 或另一个模型。
 
-真实模型在启动前检查精确模型、输出上限和必要能力；缺失或错误时拒绝启动，不自动降级。密钥可以使用环境变量或配置目录下的本地 AES-256-GCM secret store。页面不返回密钥值或 secret 引用；日志、审计、快照和数据库也不保存密钥。
+密钥可以使用环境变量或配置目录下的本地 AES-256-GCM secret store。页面、
+日志、审计、快照和数据库不保存明文密钥。本地 secret store 不是系统凭据
+管理器，不能抵御已经取得同一操作系统账号文件访问权的攻击者。
 
-本地 secret store 的主密钥与密文在同一配置目录，Windows ACL 也只能尽力设置。它不防御已经取得同一 Windows 账号文件访问权的攻击者，不是 DPAPI 或系统凭据管理器。
+## 个人 QQ / NapCat
 
-## 本地开发
+QQ 默认关闭，使用外部 NapCat 提供的 OneBot 11 WebSocket。配置入口在网页
+“设置 → QQ 渠道”，也可以手写 `channels.toml`。设置页保存到
+`channel-settings.json`，整体覆盖 `qq` 段；保存后需要重启才生效。
 
-```powershell
-npm install
-npm run dev
+主要安全边界：
+
+- `owner_qq` 必须显式配置，并同时出现在 `private_allow`；
+- 只有所有者 QQ 私聊并入网页 `main`，其他私聊和群聊独立存储；
+- 空白名单不会变成“允许所有人”；
+- 远程 WebSocket 必须使用 `wss://`，并显式允许远程地址；
+- 群聊默认必须 `@` 机器人；
+- token 不写入 TOML、SQLite、审计、日志或仓库。
+
+个人 QQ + NapCat 存在平台风控和账号受限风险。本项目的白名单、限频、去重、
+重连和 STOP 只能降低工程风险，不能提供平台合规或账号安全保证。
+
+## 运维
+
+健康检查：
+
+```bash
+curl --fail http://127.0.0.1:4200/kanobot/api/health
 ```
 
-默认只监听 `127.0.0.1:4101`，使用 `config/examples`、`tmp/dev-data` 和 mock 模型。终端会打印一次性登录地址；页面和 API 都需要这次登录换取的短期会话。确认配置在 Git 外后，可用 `npm run dev -- --config <配置目录> --data <数据目录> --model-mode magpie` 连接本机 Magpie。
+备份：
 
-## 先读什么
+```bash
+npm run backup -- --config config/local --data data list
+npm run backup -- --config config/local --data data create
+npm run backup -- --config config/local --data data restore --backup <备份文件>
+```
 
-1. [规划书](docs/plan.md)：执行计划的唯一来源，包括已确认决定、架构、M1～M5.2.1 的历史步骤和 R0～R7 的当前路线。
-2. [需求定义](docs/need.md)：产品关系、功能边界和设计理由。
-3. [第三方插件源码调研](docs/plugin-research.md)：哪些机制可借鉴，哪些不能直接依赖。
-4. [记忆插件源码调研](docs/memory-research.md)：哪些记忆机制值得借鉴、哪些暂不采用。
-5. [插件汇总表](docs/plugin-catalog.zh.md)：第三方 DSH 插件索引，只读参考，不是依赖清单。
-6. [文件结构](structure.md)：当前结构、目标结构和文件放置规则。
-7. [工程规范](AGENTS.md)：后续开发必须遵守的操作边界。
-8. [外部审查简报](docs/review-brief.md)：交给高级模型检查跑偏、架构和发布阻塞项的可复制提示。
-9. [M1 验收记录](docs/m1-acceptance.md)：DSH 加载、工具隔离、错误配置和实际测试结果。
-10. [M2 验收记录](docs/m2-acceptance.md)：事件、reducer、快照、SQLite、删除、墓碑、备份和 fail-closed 结果。
-11. [M3.0 验收记录](docs/m3-acceptance.md)：网页聊天、DSH 鉴权、SSE、mock 模型、schema v2 迁移和重启恢复边界。
-12. [M3.1 验收记录](docs/m3.1-acceptance.md)：Magpie 精确模型、流式解析、重试/超时、调用审计、资源熔断和真实路由验收结果。
-13. [M3.2 验收记录](docs/m3.2-acceptance.md)：长期记忆候选规则、纠正、FTS5 双列中文检索、迁移和清除边界。
-14. [M3.3 验收记录](docs/m3.3-acceptance.md)：记忆召回注入、结构化抽取、独立调用审计、所有者面板和真实路由结果。
-15. [M3.4 验收记录](docs/m3.4-acceptance.md)：风格检查、场景规格、所有者审计、紧急停止、schema v6 和真实 4100 结果。
-16. [M3.5 验收记录](docs/m3.5-acceptance.md)：单次 JSON 信封、正文流式显示、记忆/appraisal/commitments 闭环和真实 4100 结果。
-17. [M3.6 验收记录](docs/m3.6-acceptance.md)：上下文分块预算、当前时间/星期、沉默时长、定性状态、相对时间 `dueAt` 和真实 4100 结果。
-18. [M3.7 验收记录](docs/m3.7-acceptance.md)：独立视觉模型、图片输入边界、视觉调用审计、失败闭环和真实 4100 结果。
-19. [M3 收尾验收](docs/m3-completion-acceptance.md)：本地开发入口、一次性会话鉴权、统一审计时间线、风格自动重写和 schema v8。
-20. [M4.0 记忆验收](docs/m4.0-memory-acceptance.md)：问题意图、相关性门槛、普通小事候选化、显式记忆兜底和回归结果。
-21. [M4 验收](docs/m4-acceptance.md)：主动消息、提醒、outbox、软计划、每日整理、浏览器通知、schema v9 和 201 项测试。
-22. [M4.5 发行基础验收](docs/m4.5-acceptance.md)：双形态、provider、设置页、密钥和端点治理、4100 回归与未验证边界。
-23. [M4.6 / M4.6.1 边界收口验收](docs/m4.6-acceptance.md)：提醒/记忆仲裁、候选冷却、模型发现、固定高度滚动区、模型卡片选择、schema v10 和 256 项测试。
-24. [M5 QQ 渠道验收](docs/m5-acceptance.md)：OneBot 11、NapCat 白名单、连发聚合、多图、去重、限频、STOP、主动消息同步、schema v11 和 278 项测试。
-25. [M5.1 设置与提醒验收](docs/m5.1-acceptance.md)：设置弹窗、QQ/NapCat 配置、运行时覆盖、本地 secret、低摩擦提醒、313 项测试和三尺寸 Edge 验收。
-26. [M5.2 多会话档案验收](docs/m5.2-acceptance.md)：所有者 QQ 合并、其他会话隔离、“我们的对话 / 全部对话”、`seq` 游标分页、319 项测试和三尺寸 Edge 滚动验收。
-27. [M5.2.1 交互修复验收](docs/m5.2.1-acceptance.md)：缺失所有者提示、启动历史回填、顶部历史按钮、档案会话改名、schema v12 和 325 项测试。
-28. [R0 决策冻结](docs/r0-decision.md)：独立核心 + 可选执行器、真实 QQ 部分验收和 Linux 常驻边界。
-29. [真实 QQ 部分验收](docs/m5.2.1-real-acceptance.md)：已通过的真实私聊主路径、未验证矩阵和模型配置参考。
-30. [R1 服务硬化验收](docs/r1-acceptance.md)：单进程锁、健康检查、备份恢复、强杀恢复、DSH 缺席 mock 验收和未验证边界。
-31. [R1 Linux 常驻部署](docs/r1-deployment.md)：systemd 示例、目录/凭据、健康检查、升级回滚和未实机验证声明。
+恢复前必须停止服务并取得同一数据目录锁。主库备份不包含独立的
+`tombstones.sqlite`；迁移或恢复时要把主库、墓碑库和备份目录作为一个整体
+保留。损坏、校验失败或 schema 不匹配的备份会 fail-closed，原库保留。
 
-`docs/astra/` 和 `docs/gemini/` 是两份未跟踪的草稿，取舍记录在规划书第 13 节，不作为执行依据。
+Linux 常驻请使用非 root 用户和 `systemd` 或等价进程监管，只监听回环或经过
+鉴权的入口，并配置日志轮转、数据权限、备份和崩溃重启。示例见
+[R1 Linux 部署](docs/r1-deployment.md)。
 
-## 当前确定的方向
+## 安全边界
 
-- 独立核心优先：Kanobot Core 拥有网页、QQ、调度、记忆、关系和主数据库；DSH/MCP/浏览器/VM 只是可选执行器。一个核心、一个主数据库、一个调度器、一个主写入者；DSH 不存在时核心仍能工作。R1 已补单进程所有权、健康检查、启动报告、固定关闭顺序、备份恢复和 Linux 部署材料。
-- 不使用巨型 FSM；采用事件驱动状态、纯 reducer、策略层、事件日志和快照。
-- 人格是燐子（rinko），设定放在 Git 外；仓库里的示例和测试只用占位身份。
-- 先在本地 Windows 上开发和使用，之后迁移到 Linux 服务器；主模型选型后置到项目完工后，视觉模型独立配置且不写死厂商或模型名；M3 基线通过本机 Magpie 路由，M4.5 起可选 DSH 宿主模型和受控第三方 OpenAI-compatible API，但 DSH 不是启动前置条件。
-- M4 已有日常使用的自动化代码基线：网页聊天、长期记忆、每日整理、约 1～2 小时评估一次的主动联系、提醒和浏览器通知；真实模型试用后才能判断表达质量。M4.5 已补双形态和发行基础。
-- M5/M5.1/M5.2 的个人 QQ + NapCat 渠道、设置页和多会话边界已实现，用户已接受风控/封号风险；工程上仍做白名单、限频、去重、重连和熔断，真实账号仍待隔离验收。
-- 公开发送和每轮 LLM 审查整体后置；发布前会用真实模型跑人格场景评测，平台违禁词另做渠道策略。
-- 记忆按“相关性优先”召回；显式“记住这个”必须有确定性兜底，普通寒暄不自动永久化；重要度不能压过当前问题主题。
-- 一次性提醒不写入长期记忆；混合内容只保留稳定事实。普通候选超过冷却期限后归档、不参与召回，但所有者仍可见并可恢复。
-- 她可以偶尔主动提起自然相关的旧事；长时间未回复的关心不能按固定小时数写死；软性日常安排由她自己调整。
-- 配置按模块拆分，一个功能模块一个 TOML 文件；个人配置和凭据不进入 Git。
-- Linux 桌面 VM、浏览器阅读、单机游戏和受控自进化按里程碑逐步验证。
-- 状态由版本化事件和纯 reducer 驱动；快照可重复回放，数据库损坏或 schema 不兼容时拒绝启动。
-- 主库备份不包含独立墓碑库；恢复旧主库后先重放墓碑，旧删除内容不会复活。
+- 当前面向单一可信所有者的本地或受控部署，不是多租户公网服务。
+- 网页、聊天、文件和未来的工具结果都是不可信输入。
+- 不把 VM、浏览器 worker、worktree 或外部执行器描述成绝对安全沙箱。
+- 不伪造模型调用、平台验收、测试结果或“已完成”状态。
+- 漏洞和凭据泄露的报送方式见 [SECURITY.md](SECURITY.md)。
 
-## 不承诺的事情
+## 文档
 
-- 当前是 `0.20.0` 私有本地包，`UNLICENSED`，没有公开发布或授予开源许可证；DSH 插件包和独立程序共用核心，但都还不是面向任意多用户或公网部署的服务。
-- M3 的网页视觉能力覆盖“独立模型读取图片并转述，再交给主聊天模型”的当轮闭环；网页基线仍是一张图，M5 的 QQ 逻辑回合可逐张转述最多 4 张图。图片不落库，视觉失败不会伪造描述或静默降级。自动测试不调用真实模型，场景测试仍使用脚本化占位回复；真实模型比较、主模型选型和生产部署尚未完成。
-- `src/dev` 的本地开发入口只用于调试，默认 mock、临时数据、回环监听和一次性短期会话；正式独立程序使用单独入口，两者不能混用。独立程序的一次性登录和回环监听也不等于公网鉴权、TLS 终止或多用户隔离。
-- 本地 secret store 的加密主密钥与密文位于同一配置目录，不能抵御同一 Windows 账号的文件访问；第三方端点 DNS 预检与实际连接之间仍有 rebinding 时间窗。
-- 不保证个人 QQ/NapCat 长期稳定，不保证不被平台风控。M5/M5.1/M5.2 只用本地 fake gateway 和本机回环 WebSocket 验证协议、设置和多会话行为，未连接真实 NapCat 或真实 QQ 账号，也未完成重连、图片获取、封号风控和平台协议变化的真实账号验收。QQ 设置保存后的重启生效和一次性连接测试已由自动测试覆盖；真实 NapCat 的握手/鉴权差异仍需实测。
-- 不把第三方插件的 README、测试数量或收录状态当作安全审计。
-- 不把虚拟身体状态当成真实生理状态，也不把关系数值当成用户价值评分。
-- 数据库文件扫描不等于 SSD、文件系统快照、云备份或模型服务商侧的物理擦除。
-- Linux `systemd` 示例、非 root 用户、`ProtectSystem`/`ProtectHome`、journald 和抽象 Unix 套接字锁尚未在真实 Linux 主机验收；不能把文档或 Windows 自动测试当成 Linux 常驻已通过。
+1. [规划书](docs/plan.md)：当前执行计划、决策和 R 系列里程碑。
+2. [需求定义](docs/need.md)：关系、记忆、主动性和自进化的产品需求。
+3. [R0 决策](docs/r0-decision.md)：独立核心 + 可选执行器。
+4. [R1 验收](docs/r1-acceptance.md)：锁、健康检查、备份和崩溃恢复。
+5. [R1.5 解耦记录](docs/r1.5-decoupling.md)：DSH 插件/provider 删除和迁移契约。
+6. [R1 Linux 部署](docs/r1-deployment.md)：`systemd` 示例和操作步骤。
+7. [文件结构](structure.md)：目录、模块和文件放置规则。
+8. [工程规范](AGENTS.md)：agent 和贡献者的操作边界。
+9. [第三方源码调研](docs/plugin-research.md)：可借鉴机制和限制。
+10. [记忆调研](docs/memory-research.md)：记忆插件研究，不是运行依赖。
+11. [外部审查简报](docs/review-brief.md)：审查跑偏、架构和发布阻塞项。
 
-## 下一步
+旧的 M1～M5.2.1 验收文档仍在 `docs/`，只作历史证据，不是当前安装或架构
+说明。R1.5 删除的完整 DSH 插件代码可通过 Git 标签
+`archive/dsh-plugin-0.20.0` 恢复。
 
-R0/R1 代码与 Windows 自动验收已完成，下一步进入 R2 的网页/QQ 统一会话与渠道规则。真实 QQ 测试继续缓慢进行，完整矩阵、群聊/陌生人和长期稳定性放在 R2；R1 的 Linux systemd 实机验收仍需单独安排在真实主机执行。M4 的一到两周日常观察、浏览器通知人工确认、真实模型质量比较和主模型选型仍可并行继续。R1 证据见 [验收记录](docs/r1-acceptance.md)，后续步骤见[规划书](docs/plan.md)第 11 节。
+## 测试
+
+```bash
+npm test
+npm run check:case
+npm run config:check
+npm pack --dry-run
+```
+
+CI 在 Windows 和 Ubuntu、Node 24 上运行同一组检查。自动测试不读取真实人格，
+不调用真实模型，不连接真实 NapCat/QQ，也不操作正式数据库。
+
+## 许可证
+
+本项目使用 [MIT License](LICENSE)。许可证以后可以更换，但已经按 MIT 发布的
+版本不能撤回；如果已经有外部贡献者，通常还需要取得他们的同意。当前没有
+发布到 npm，仓库包仍是 `private: true`。

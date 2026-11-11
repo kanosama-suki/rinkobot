@@ -14,7 +14,7 @@ import { KanobotMemoryService } from '../../src/core/memory/index.ts'
 import { CHAT_BASE_PATH, registerChatSurface } from '../../src/web/index.ts'
 import { createWorkspace } from '../helpers/storage-fixture.ts'
 
-test('memory API fails closed without a DSH session', async () => {
+test('memory API fails closed without an owner session', async () => {
   const harness = await createHarness()
   try {
     const response = await fetch(`${harness.baseUrl}/kanobot/api/memories`)

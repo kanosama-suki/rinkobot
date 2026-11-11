@@ -21,6 +21,11 @@ model-settings.json
 channel-settings.json
 model-secrets.key
 model-secrets.json
+private/
+*.pem
+*.key
+id_rsa*
+id_ed25519*
 
 # 依赖、构建和测试产物
 node_modules/

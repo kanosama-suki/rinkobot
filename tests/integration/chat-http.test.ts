@@ -1,7 +1,7 @@
 /**
  * M3.0 Web/SSE 适配测试。
  *
- * 用真实 node:http 监听临时端口，模拟 DSH 的认证结果；不接触测试 Profile。
+ * 用真实 node:http 监听临时端口，模拟所有者认证结果；不接触正式实例。
  */
 
 import assert from 'node:assert/strict'
@@ -31,12 +31,12 @@ import { chatEnvelopeText } from '../helpers/chat-envelope.ts'
 import { createWorkspace } from '../helpers/storage-fixture.ts'
 import { imagePayload } from '../helpers/vision-fixtures.ts'
 
-test('chat page and API fail closed without a DSH session', async () => {
+test('chat page and API fail closed without an owner session', async () => {
   const harness = await createHarness()
   try {
     const page = await fetch(`${harness.baseUrl}/kanobot/`)
     assert.equal(page.status, 401)
-    assert.match(await page.text(), /需要先登录 DSH/)
+    assert.match(await page.text(), /需要有效的所有者会话/)
 
     const chat = await fetch(`${harness.baseUrl}/kanobot/api/chat`, {
       method: 'POST',
@@ -58,7 +58,7 @@ test('authenticated page, SSE chat, and conversation restore work together', asy
     })
     assert.equal(page.status, 200)
     assert.match(page.headers.get('content-security-policy') ?? '', /script-src 'self'/)
-    assert.match(await page.text(), /M5\.2 聊天档案、QQ 会话与设置/)
+    assert.match(await page.text(), /Kanobot · 独立陪伴核心/)
 
     const script = await fetch(`${harness.baseUrl}/kanobot/app.js`, {
       headers: authHeaders(),

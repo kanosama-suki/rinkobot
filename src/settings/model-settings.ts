@@ -39,9 +39,6 @@ import {
   createVisionModelFromConfig,
   createEndpointPreflight,
   LocalSecretStore,
-  type DshLlmBridge,
-  type DshProviderInfo,
-  type DshResolvedModelInfo,
   resolveCredential,
 } from '../model-providers/index.ts'
 
@@ -59,7 +56,6 @@ export interface CredentialDraft {
 
 export interface ChatModelDraft {
   provider: ChatProvider
-  route: string | null
   name: string
   baseUrl: string | null
   timeoutMs: number
@@ -110,13 +106,6 @@ export interface ModelSettingsView {
   configFile: string
   restartRequiredOnSave: true
   readOnly: boolean
-  /** 宿主能力决定页面能提供哪些 provider；保存端仍会再次 fail-closed。 */
-  hostCapabilities: {
-    dshChat: {
-      available: boolean
-      reason: string | null
-    }
-  }
   chat: ChatModelSettingsView
   vision: VisionModelSettingsView
 }
@@ -139,7 +128,6 @@ export interface ModelSettingsTestResult {
 export interface ModelDiscoveryDraft {
   chat: {
     provider: ChatProvider
-    route: string | null
     baseUrl: string | null
     timeoutMs: number
     allowPrivateNetwork: boolean
@@ -165,8 +153,6 @@ export interface DiscoveredModel {
 export interface ModelDiscoveryResult {
   chat: {
     provider: ChatProvider
-    route: string | null
-    providers: DshProviderInfo[]
     models: DiscoveredModel[]
   }
   vision: {
@@ -192,7 +178,6 @@ export class ModelSettingsError extends Error {
 export interface ModelSettingsServiceOptions {
   configDir: string
   loaded: LoadedConfig
-  llm?: DshLlmBridge
   secretStore?: LocalSecretStore
   readOnly?: boolean
   /** 模型发现请求的总超时；默认 10 秒，测试可缩短。 */
@@ -238,7 +223,6 @@ interface ParsedDiscoveryDraft {
 interface ResolvedDiscoveryDraft {
   chat: {
     provider: ChatProvider
-    route: string | null
     baseUrl: string | null
     timeoutMs: number
     allowPrivateNetwork: boolean
@@ -257,7 +241,6 @@ interface ResolvedDiscoveryDraft {
 export class ModelSettingsService {
   private readonly configDir: string
   private readonly secretStore: LocalSecretStore
-  private readonly llm: DshLlmBridge | undefined
   private readonly readOnly: boolean
   private readonly discoveryTimeoutMs: number
   private loaded: LoadedConfig
@@ -265,7 +248,6 @@ export class ModelSettingsService {
   constructor(options: ModelSettingsServiceOptions) {
     this.configDir = options.configDir
     this.loaded = options.loaded
-    this.llm = options.llm
     this.readOnly = options.readOnly ?? false
     this.discoveryTimeoutMs = validateDiscoveryTimeout(
       options.discoveryTimeoutMs ?? 10_000,
@@ -281,18 +263,8 @@ export class ModelSettingsService {
       configFile: RUNTIME_MODEL_SETTINGS_FILENAME,
       restartRequiredOnSave: true,
       readOnly: this.readOnly,
-      hostCapabilities: {
-        dshChat: {
-          available: this.llm !== undefined,
-          reason:
-            this.llm === undefined
-              ? '当前宿主没有提供 ctx.llm；DSH 路由只在具备该服务的 DSH 插件中使用。'
-              : null,
-        },
-      },
       chat: {
         provider: model.provider,
-        route: model.route,
         name: model.name,
         baseUrl: model.baseUrl,
         timeoutMs: model.timeoutMs,
@@ -431,24 +403,20 @@ export class ModelSettingsService {
     validateCredentialReuse(
       draft.chat.credential,
       currentModel.provider,
-      currentModel.route,
       currentModel.baseUrl,
       currentModel.apiKeyEnv,
       currentModel.apiKeySecret,
       draft.chat.provider,
-      draft.chat.route,
       draft.chat.baseUrl,
       'chat',
     )
     validateCredentialReuse(
       draft.vision.credential,
       currentVision.provider ?? 'magpie',
-      currentVision.route,
       currentVision.baseUrl,
       currentVision.apiKeyEnv,
       currentVision.apiKeySecret,
       draft.vision.provider ?? 'magpie',
-      null,
       draft.vision.baseUrl,
       'vision',
       !draft.vision.enabled,
@@ -482,7 +450,6 @@ export class ModelSettingsService {
     )
     const chat: SystemConfig['model'] = {
       provider: draft.chat.provider,
-      route: draft.chat.provider === 'dsh' ? draft.chat.route : null,
       name: draft.chat.name,
       baseUrl: chatBaseUrl,
       apiKeyEnv: chatCredential.env,
@@ -496,7 +463,6 @@ export class ModelSettingsService {
     const vision: VisionConfig = {
       enabled: draft.vision.enabled,
       provider: draft.vision.provider,
-      route: null,
       name: draft.vision.name,
       baseUrl: visionBaseUrl,
       apiKeyEnv: visionCredential.env,
@@ -521,7 +487,6 @@ export class ModelSettingsService {
     try {
       return await createChatModelFromConfig(resolved.chat, {
         configDir: this.configDir,
-        llm: this.llm,
         secretStore: this.secretStore,
         apiKeyOverride: resolved.chatApiKeyOverride,
       })
@@ -539,49 +504,7 @@ export class ModelSettingsService {
     if (draft.provider === 'mock') {
       return {
         provider: draft.provider,
-        route: null,
-        providers: [],
         models: [],
-      }
-    }
-    if (draft.provider === 'dsh') {
-      const llm = this.llm
-      if (llm === undefined) {
-        throw new ModelSettingsError(
-          'model_discovery_host_unavailable',
-          '当前宿主没有提供 ctx.llm，无法发现 DSH 模型。',
-        )
-      }
-      try {
-        const providers = llm.listProviders().map(provider => ({
-          id: provider.id,
-          name: provider.name,
-        }))
-        const route = draft.route
-        if (route === null) {
-          return {
-            provider: draft.provider,
-            route: null,
-            providers,
-            models: [],
-          }
-        }
-        const models = await withDiscoveryTimeout(
-          llm.listModels(route),
-          this.discoveryTimeoutMs,
-        )
-        return {
-          provider: draft.provider,
-          route,
-          providers,
-          models: models.map(dshModelToDiscoveredModel),
-        }
-      } catch (error) {
-        if (error instanceof ModelSettingsError) throw error
-        throw new ModelSettingsError(
-          'model_discovery_dsh_failed',
-          safeDiscoveryMessage(error, 'DSH 模型列表读取失败'),
-        )
       }
     }
 
@@ -600,8 +523,6 @@ export class ModelSettingsService {
     })
     return {
       provider: draft.provider,
-      route: null,
-      providers: [],
       models: entries.map(toDiscoveredModel),
     }
   }
@@ -653,24 +574,20 @@ export class ModelSettingsService {
     validateCredentialReuse(
       draft.chat.credential,
       currentModel.provider,
-      currentModel.route,
       currentModel.baseUrl,
       currentModel.apiKeyEnv,
       currentModel.apiKeySecret,
       draft.chat.provider,
-      draft.chat.route,
       draft.chat.baseUrl,
       'chat',
     )
     validateCredentialReuse(
       draft.vision.credential,
       currentVision.provider ?? 'magpie',
-      currentVision.route,
       currentVision.baseUrl,
       currentVision.apiKeyEnv,
       currentVision.apiKeySecret,
       draft.vision.provider ?? 'magpie',
-      null,
       draft.vision.baseUrl,
       'vision',
       !draft.vision.enabled,
@@ -703,7 +620,6 @@ export class ModelSettingsService {
     return {
       chat: {
         provider: draft.chat.provider,
-        route: draft.chat.provider === 'dsh' ? draft.chat.route : null,
         baseUrl: chatBaseUrl,
         timeoutMs: draft.chat.timeoutMs,
         allowPrivateNetwork: draft.chat.allowPrivateNetwork,
@@ -825,7 +741,6 @@ function parseDiscoveryChatDraft(value: unknown): ParsedDiscoveryChatDraft {
     input,
     [
       'provider',
-      'route',
       'baseUrl',
       'timeoutMs',
       'allowPrivateNetwork',
@@ -835,7 +750,6 @@ function parseDiscoveryChatDraft(value: unknown): ParsedDiscoveryChatDraft {
   )
   return {
     provider: parseChatProvider(input.provider),
-    route: nullableString(input.route, 'chat.route', 128),
     baseUrl: nullableString(input.baseUrl, 'chat.baseUrl', 512),
     timeoutMs: integerIn(input.timeoutMs, 'chat.timeoutMs', 1_000, 600_000),
     allowPrivateNetwork: booleanValue(
@@ -879,28 +793,6 @@ function validateDiscoveryProviderFields(
   chat: ParsedDiscoveryChatDraft,
   vision: ParsedDiscoveryVisionDraft,
 ): void {
-  if (chat.provider === 'dsh') {
-    if (chat.baseUrl !== null) {
-      throw new ModelSettingsError(
-        'model_discovery_invalid_config',
-        'DSH provider 不能填写 Base URL。',
-      )
-    }
-    if (
-      chat.credential.mode === 'environment' ||
-      chat.credential.mode === 'new'
-    ) {
-      throw new ModelSettingsError(
-        'model_discovery_invalid_config',
-        'DSH provider 的凭据由宿主管理，不能提交 API key。',
-      )
-    }
-  } else if (chat.route !== null) {
-    throw new ModelSettingsError(
-      'model_discovery_invalid_config',
-      '只有 DSH provider 接受 route。',
-    )
-  }
   if (chat.provider === 'mock') {
     if (
       chat.baseUrl !== null ||
@@ -1113,51 +1005,6 @@ function toDiscoveredModel(entry: ModelCatalogEntry): DiscoveredModel {
   }
 }
 
-function dshModelToDiscoveredModel(
-  model: DshResolvedModelInfo,
-): DiscoveredModel {
-  return {
-    id: model.id,
-    maxOutputTokens:
-      Number.isSafeInteger(model.defaultMaxTokens) &&
-      (model.defaultMaxTokens ?? 0) > 0
-        ? model.defaultMaxTokens as number
-        : null,
-    reasoningEfforts:
-      model.reasoning === undefined
-        ? null
-        : model.reasoning.efforts.map(effort => effort.id),
-    imageInput:
-      model.inputModalities === undefined
-        ? 'unknown'
-        : model.inputModalities.includes('image')
-          ? 'supported'
-          : 'unsupported',
-  }
-}
-
-async function withDiscoveryTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => {
-          reject(new ModelSettingsError(
-            'model_discovery_timeout',
-            `DSH 模型发现超过 ${timeoutMs} ms。`,
-          ))
-        }, timeoutMs)
-      }),
-    ])
-  } finally {
-    if (timer !== undefined) clearTimeout(timer)
-  }
-}
-
 function safeDiscoveryMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message !== '') {
     // 适配器和 fetch 的错误消息不含请求头或密钥值。
@@ -1188,7 +1035,6 @@ function parseChatDraft(value: unknown): ParsedChatDraft {
     input,
     [
       'provider',
-      'route',
       'name',
       'baseUrl',
       'timeoutMs',
@@ -1203,7 +1049,6 @@ function parseChatDraft(value: unknown): ParsedChatDraft {
   const provider = parseChatProvider(input.provider)
   return {
     provider,
-    route: nullableString(input.route, 'chat.route', 128),
     name: requiredDraftString(input.name, 'chat.name', 128),
     baseUrl: nullableString(input.baseUrl, 'chat.baseUrl', 512),
     timeoutMs: integerIn(input.timeoutMs, 'chat.timeoutMs', 1_000, 600_000),
@@ -1279,37 +1124,6 @@ function validateProviderFields(
   chat: ParsedChatDraft,
   vision: ParsedVisionDraft,
 ): void {
-  if (chat.provider === 'dsh') {
-    if (chat.route === null) {
-      throw new ModelSettingsError(
-        'invalid_settings',
-        'DSH provider 必须填写精确 route',
-      )
-    }
-    if (chat.baseUrl !== null) {
-      throw new ModelSettingsError(
-        'invalid_settings',
-        'DSH provider 不能填写 baseUrl；端点由宿主管理',
-      )
-    }
-    if (chat.maxOutputTokens === null) {
-      throw new ModelSettingsError(
-        'invalid_settings',
-        'DSH provider 必须填写输出上限',
-      )
-    }
-    if (chat.credential.mode === 'environment' || chat.credential.mode === 'new') {
-      throw new ModelSettingsError(
-        'invalid_settings',
-        'DSH provider 的凭据由宿主管理，不能在设置页填写 API key',
-      )
-    }
-  } else if (chat.route !== null) {
-    throw new ModelSettingsError(
-      'invalid_settings',
-      '只有 DSH provider 接受 route',
-    )
-  }
   if (
     chat.provider === 'magpie' ||
     chat.provider === 'openai-compatible'
@@ -1417,7 +1231,7 @@ function resolveDraftCredential(
   existingSecret: string | null,
   provider: ChatProvider | VisionProvider,
 ): { env: string | null; secret: string | null; newValue: string | null } {
-  if (provider === 'dsh' || provider === 'mock') {
+  if (provider === 'mock') {
     if (credential.mode === 'new' || credential.mode === 'environment') {
       throw new ModelSettingsError(
         'credential_not_allowed',
@@ -1453,12 +1267,10 @@ function resolveDraftCredential(
 function validateCredentialReuse(
   credential: ParsedCredential,
   currentProvider: ChatProvider | VisionProvider,
-  currentRoute: string | null,
   currentBaseUrl: string | null,
   currentEnv: string | null,
   currentSecret: string | null,
   nextProvider: ChatProvider | VisionProvider,
-  nextRoute: string | null,
   nextBaseUrl: string | null,
   field: string,
   disabled = false,
@@ -1472,7 +1284,6 @@ function validateCredentialReuse(
   }
   const changed =
     currentProvider !== nextProvider ||
-    currentRoute !== nextRoute ||
     currentBaseUrl !== nextBaseUrl
   if (changed) {
     throw new ModelSettingsError(
@@ -1490,7 +1301,6 @@ function buildOverlay(
     schema_version: CONFIG_SCHEMA_VERSION,
     model: {
       provider: model.provider,
-      route: model.route,
       name: model.name,
       base_url: model.baseUrl,
       api_key_env: model.apiKeyEnv,
@@ -1504,7 +1314,6 @@ function buildOverlay(
     vision: {
       enabled: vision.enabled,
       provider: vision.provider,
-      route: vision.route,
       name: vision.name,
       base_url: vision.baseUrl,
       api_key_env: vision.apiKeyEnv,
@@ -1583,12 +1392,11 @@ function parseChatProvider(value: unknown): ChatProvider {
   if (
     value !== 'mock' &&
     value !== 'magpie' &&
-    value !== 'dsh' &&
     value !== 'openai-compatible'
   ) {
     throw new ModelSettingsError(
       'invalid_provider',
-      'chat.provider 只能是 mock、magpie、dsh 或 openai-compatible',
+      'chat.provider 只能是 mock、magpie 或 openai-compatible',
     )
   }
   return value

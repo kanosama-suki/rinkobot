@@ -1,9 +1,9 @@
 /**
- * M5.2 聊天、完整对话档案、记忆、主动性、状态、视觉、审计、设置弹窗
+ * 独立陪伴核心的聊天、完整对话档案、记忆、主动性、状态、视觉、审计、设置弹窗
  * 与紧急停止面板。
  *
  * 所有来自服务器和模型的文本都通过 textContent 渲染；SSE 只接受本页面
- * 固定的聊天流格式。记忆操作必须经过 DSH 登录态，页面不保存任何凭据。
+ * 固定的聊天流格式。记忆操作必须经过所有者会话，页面不保存任何凭据。
  */
 
 const elements = {
@@ -125,7 +125,6 @@ const elements = {
   settingsDiscover: document.querySelector('#settings-discover'),
   settingsRefresh: document.querySelector('#settings-refresh'),
   settingsReadOnly: document.querySelector('#settings-readonly'),
-  settingsHostNote: document.querySelector('#settings-host-note'),
   settingsError: document.querySelector('#settings-error'),
   settingsStatus: document.querySelector('#settings-status'),
   settingsTest: document.querySelector('#settings-test'),
@@ -134,17 +133,12 @@ const elements = {
   settingsChatDiscovery: document.querySelector('#settings-chat-discovery'),
   settingsChatDiscoverySummary: document.querySelector('#settings-chat-discovery-summary'),
   settingsChatRediscover: document.querySelector('#settings-chat-rediscover'),
-  settingsChatProviderSection: document.querySelector('#settings-chat-provider-section'),
-  settingsChatProviderCount: document.querySelector('#settings-chat-provider-count'),
-  settingsChatProviderChips: document.querySelector('#settings-chat-provider-chips'),
   settingsChatModelSection: document.querySelector('#settings-chat-model-section'),
   settingsChatModelCount: document.querySelector('#settings-chat-model-count'),
   settingsChatModelChips: document.querySelector('#settings-chat-model-chips'),
   settingsChatModelMore: document.querySelector('#settings-chat-model-more'),
   settingsChatModelNote: document.querySelector('#settings-chat-model-note'),
   settingsChatName: document.querySelector('#settings-chat-name'),
-  settingsChatRouteField: document.querySelector('#settings-chat-route-field'),
-  settingsChatRoute: document.querySelector('#settings-chat-route'),
   settingsChatBaseField: document.querySelector('#settings-chat-base-field'),
   settingsChatBaseUrl: document.querySelector('#settings-chat-base-url'),
   settingsChatTimeout: document.querySelector('#settings-chat-timeout'),
@@ -1500,15 +1494,7 @@ function updateEmptyState() {
 
 function showNotice(message) {
   elements.notice.replaceChildren()
-  if (message.includes('登录') || message.includes('认证')) {
-    const prefix = document.createTextNode(`${message} `)
-    const link = document.createElement('a')
-    link.href = '/'
-    link.textContent = '打开 DSH 根页面'
-    elements.notice.append(prefix, link)
-  } else {
-    elements.notice.textContent = message
-  }
+  elements.notice.textContent = message
   elements.notice.hidden = false
 }
 
@@ -2383,7 +2369,7 @@ async function loadModelSettings() {
   if (response.status === 404) {
     state.modelSettings = null
     updateSettingsButtons()
-    showSettingsError('当前宿主没有启用模型设置接口。')
+    showSettingsError('当前安装没有启用模型设置接口。')
     return null
   }
   if (!response.ok) {
@@ -2403,23 +2389,9 @@ function applyModelSettings(view) {
   clearDiscovery()
   const chat = view.chat ?? {}
   const vision = view.vision ?? {}
-  const dshChatAvailable =
-    view.hostCapabilities?.dshChat?.available === true
 
   setSelectValue(elements.settingsChatProvider, chat.provider ?? 'mock')
-  const dshOption = elements.settingsChatProvider.querySelector(
-    'option[value="dsh"]',
-  )
-  if (dshOption instanceof HTMLOptionElement) {
-    dshOption.disabled = !dshChatAvailable
-  }
-  elements.settingsHostNote.hidden = dshChatAvailable
-  elements.settingsHostNote.textContent = dshChatAvailable
-    ? ''
-    : view.hostCapabilities?.dshChat?.reason ??
-      '当前宿主不支持 DSH provider。'
   elements.settingsChatName.value = chat.name ?? ''
-  elements.settingsChatRoute.value = chat.route ?? ''
   elements.settingsChatBaseUrl.value = chat.baseUrl ?? ''
   elements.settingsChatTimeout.value = String(chat.timeoutMs ?? 120_000)
   elements.settingsChatRetries.value = String(chat.maxRetries ?? 2)
@@ -2470,14 +2442,10 @@ function applyModelSettings(view) {
 
 function syncSettingsForm() {
   const chatProvider = elements.settingsChatProvider.value
-  const chatIsDsh = chatProvider === 'dsh'
   const chatIsMock = chatProvider === 'mock'
-  const chatNeedsEndpoint = !chatIsDsh && !chatIsMock
-  const chatUsesProjectCredential = !chatIsDsh && !chatIsMock
+  const chatNeedsEndpoint = !chatIsMock
+  const chatUsesProjectCredential = !chatIsMock
 
-  elements.settingsChatRouteField.hidden = !chatIsDsh
-  elements.settingsChatRoute.disabled = !chatIsDsh
-  elements.settingsChatRoute.required = chatIsDsh
   elements.settingsChatBaseField.hidden = !chatNeedsEndpoint
   elements.settingsChatBaseUrl.disabled = !chatNeedsEndpoint
   elements.settingsChatBaseUrl.required = chatNeedsEndpoint
@@ -2574,9 +2542,6 @@ async function discoverModels() {
     const chatCount = Array.isArray(result.chat?.models)
       ? result.chat.models.length
       : 0
-    const providerCount = Array.isArray(result.chat?.providers)
-      ? result.chat.providers.length
-      : 0
     const visionCount =
       (Array.isArray(result.vision?.supported)
         ? result.vision.supported.length
@@ -2584,10 +2549,6 @@ async function discoverModels() {
       (Array.isArray(result.vision?.unknown)
         ? result.vision.unknown.length
         : 0)
-    const routeHint =
-      result.chat?.provider === 'dsh' && chatCount === 0 && providerCount > 0
-        ? `；已发现 ${providerCount} 个 DSH provider，点选后会自动获取模型`
-        : ''
     const mockHint =
       result.chat?.provider === 'mock'
         ? '；mock 是本地测试模型，不使用远程模型列表'
@@ -2595,7 +2556,7 @@ async function discoverModels() {
     showSettingsStatus(
       `模型发现完成：聊天 ${chatCount} 个` +
       `${result.vision?.enabled === true ? `，视觉 ${visionCount} 个` : ''}` +
-      `${routeHint}${mockHint}。发现结果不会保存配置。`,
+      `${mockHint}。发现结果不会保存配置。`,
     )
   } catch (error) {
     showSettingsError(errorMessage(error))
@@ -2609,10 +2570,6 @@ function renderDiscoveryOptions() {
   const chatProvider = elements.settingsChatProvider.value
   const chatDiscovery =
     discovery?.chat?.provider === chatProvider ? discovery.chat : null
-  const providers =
-    chatProvider === 'dsh' && Array.isArray(chatDiscovery?.providers)
-      ? chatDiscovery.providers
-      : []
   const chatModels = Array.isArray(chatDiscovery?.models)
     ? chatDiscovery.models
     : []
@@ -2632,60 +2589,40 @@ function renderDiscoveryOptions() {
 
   elements.settingsChatDiscovery.hidden = chatDiscovery === null
   if (chatDiscovery === null) {
-    elements.settingsChatProviderSection.hidden = true
     elements.settingsChatModelSection.hidden = true
-    elements.settingsChatProviderChips.replaceChildren()
     elements.settingsChatModelChips.replaceChildren()
   } else {
-    const route =
-      chatDiscovery.route ?? elements.settingsChatRoute.value.trim()
     elements.settingsChatDiscoverySummary.textContent = [
       `Provider：${chatProvider}`,
-      route === '' ? null : `route：${route}`,
-      providers.length > 0 ? `${providers.length} 个 provider` : null,
       chatModels.length > 0 ? `${chatModels.length} 个模型` : null,
     ].filter(Boolean).join(' · ')
 
-    elements.settingsChatProviderSection.hidden = providers.length === 0
-    elements.settingsChatProviderCount.textContent =
-      providers.length === 0 ? '' : `${providers.length} 个`
-    renderProviderChoices(providers, route)
-
-    const showChatModels =
-      chatProvider !== 'dsh' || route !== ''
-    elements.settingsChatModelSection.hidden = !showChatModels
-    if (showChatModels) {
-      const visible = renderModelChoices(
-        elements.settingsChatModelChips,
-        chatModels,
-        {
-          selectedId: elements.settingsChatName.value.trim(),
-          includeImage: false,
-          group: 'chat',
-          expanded: state.chatModelsExpanded,
-        },
-      )
-      elements.settingsChatModelCount.textContent =
-        `${chatModels.length} 个`
-      updateMoreButton(
-        elements.settingsChatModelMore,
-        chatModels.length,
-        visible,
-        state.chatModelsExpanded,
-        '个模型',
-      )
-      elements.settingsChatModelNote.hidden = false
-      elements.settingsChatModelNote.textContent =
-        chatModels.length > 0
-          ? '点选模型会填入上方“精确模型名”；也可以手动修改。'
-          : chatProvider === 'mock'
-            ? 'mock 是本地测试模型，不需要获取远程模型列表。'
-            : '没有发现模型；请检查 Base URL、凭据，或手动输入精确模型名。'
-    } else {
-      elements.settingsChatModelChips.replaceChildren()
-      elements.settingsChatModelMore.hidden = true
-      elements.settingsChatModelNote.hidden = true
-    }
+    elements.settingsChatModelSection.hidden = false
+    const visible = renderModelChoices(
+      elements.settingsChatModelChips,
+      chatModels,
+      {
+        selectedId: elements.settingsChatName.value.trim(),
+        includeImage: false,
+        group: 'chat',
+        expanded: state.chatModelsExpanded,
+      },
+    )
+    elements.settingsChatModelCount.textContent = `${chatModels.length} 个`
+    updateMoreButton(
+      elements.settingsChatModelMore,
+      chatModels.length,
+      visible,
+      state.chatModelsExpanded,
+      '个模型',
+    )
+    elements.settingsChatModelNote.hidden = false
+    elements.settingsChatModelNote.textContent =
+      chatModels.length > 0
+        ? '点选模型会填入上方“精确模型名”；也可以手动修改。'
+        : chatProvider === 'mock'
+          ? 'mock 是本地测试模型，不需要获取远程模型列表。'
+          : '没有发现模型；请检查 Base URL、凭据，或手动输入精确模型名。'
   }
 
   elements.settingsVisionDiscovery.hidden = visionDiscovery === null
@@ -2752,24 +2689,6 @@ function renderDiscoveryOptions() {
       visionTotal === 0
         ? '没有发现可用的视觉模型；可以手动输入精确模型名，保存前仍会测试图片能力。'
         : ''
-  }
-}
-
-function renderProviderChoices(providers, selectedRoute) {
-  const container = elements.settingsChatProviderChips
-  container.replaceChildren()
-  for (const provider of providers) {
-    const id = String(provider.id ?? '')
-    if (id === '') continue
-    const name = String(provider.name ?? id)
-    const button = createModelChoiceButton({
-      label: name === id ? id : name,
-      meta: name === id ? 'DSH provider' : `DSH provider · ${id}`,
-      selected: id === selectedRoute,
-      dataName: 'providerId',
-      value: id,
-    })
-    container.append(button)
   }
 }
 
@@ -2856,9 +2775,7 @@ function clearDiscovery() {
   state.visionUnknownExpanded = false
   elements.settingsChatDiscovery.hidden = true
   elements.settingsChatDiscoverySummary.textContent = ''
-  elements.settingsChatProviderSection.hidden = true
   elements.settingsChatModelSection.hidden = true
-  elements.settingsChatProviderChips.replaceChildren()
   elements.settingsChatModelChips.replaceChildren()
   elements.settingsChatModelMore.hidden = true
   elements.settingsChatModelNote.hidden = true
@@ -2871,18 +2788,6 @@ function clearDiscovery() {
   elements.settingsVisionSupportedMore.hidden = true
   elements.settingsVisionUnknownMore.hidden = true
   elements.settingsVisionEmptyNote.hidden = true
-}
-
-function refreshProviderChoiceSelection() {
-  const route = elements.settingsChatRoute.value.trim()
-  for (const button of elements.settingsChatProviderChips.querySelectorAll(
-    'button[data-provider-id]',
-  )) {
-    button.setAttribute(
-      'aria-pressed',
-      button.dataset.providerId === route ? 'true' : 'false',
-    )
-  }
 }
 
 function refreshModelChoiceSelection() {
@@ -2979,9 +2884,6 @@ function buildModelDiscoveryDraft() {
   return {
     chat: {
       provider: chatProvider,
-      route: chatProvider === 'dsh'
-        ? nullableSettingText(elements.settingsChatRoute)
-        : null,
       baseUrl: chatNeedsEndpoint
         ? requiredSettingText(elements.settingsChatBaseUrl, '聊天 Base URL')
         : null,
@@ -3047,7 +2949,7 @@ async function saveModelSettings() {
     elements.settingsChatSecret.value = ''
     elements.settingsVisionSecret.value = ''
     showSettingsStatus(
-      '模型设置已保存。请重启当前宿主；运行中的对话不会热切换模型。',
+      '模型设置已保存。请重启 Kanobot；运行中的对话不会热切换模型。',
     )
   } catch (error) {
     showSettingsError(errorMessage(error))
@@ -3064,9 +2966,6 @@ function buildModelSettingsDraft() {
   return {
     chat: {
       provider: chatProvider,
-      route: chatProvider === 'dsh'
-        ? requiredSettingText(elements.settingsChatRoute, 'DSH route')
-        : null,
       name: requiredSettingText(elements.settingsChatName, '聊天模型名'),
       baseUrl: chatNeedsEndpoint
         ? requiredSettingText(elements.settingsChatBaseUrl, '聊天 Base URL')
@@ -3238,7 +3137,7 @@ async function responseMessage(response, fallback) {
   try {
     const payload = await response.json()
     if (response.status === 401) {
-      return payload?.error?.message || '需要先登录 DSH。'
+      return payload?.error?.message || '需要重新登录 Kanobot。'
     }
     return payload?.error?.message || fallback
   } catch {
@@ -3350,7 +3249,7 @@ async function loadChannelSettings() {
   if (response.status === 404) {
     state.channelSettings = null
     updateChannelButtons()
-    showChannelSettingsError('当前宿主没有启用 QQ 设置接口。')
+    showChannelSettingsError('当前安装没有启用 QQ 设置接口。')
     return null
   }
   if (!response.ok) {
@@ -3581,7 +3480,7 @@ async function saveChannelSettings() {
     applyChannelSettings(view)
     elements.channelCredentialSecret.value = ''
     showChannelSettingsStatus(
-      '配置已保存；重启 DSH 后 QQ 渠道生效。',
+      '配置已保存；重启 Kanobot 后 QQ 渠道生效。',
     )
     await loadChannelStatus().catch(() => {
       elements.channelConnectionState.textContent =
@@ -3934,28 +3833,6 @@ for (const element of [
   })
 }
 
-elements.settingsChatProvider.addEventListener('change', () => {
-  if (elements.settingsChatProvider.value === 'dsh') {
-    void discoverModels()
-  }
-})
-
-elements.settingsChatProviderChips.addEventListener('click', event => {
-  const button = event.target.closest('button[data-provider-id]')
-  if (!(button instanceof HTMLButtonElement)) return
-  const providerId = button.dataset.providerId
-  if (providerId === undefined || providerId === '') return
-  elements.settingsChatRoute.value = providerId
-  if (state.discovery?.chat) {
-    state.discovery.chat.route = providerId
-    state.discovery.chat.models = []
-  }
-  state.chatModelsExpanded = false
-  renderDiscoveryOptions()
-  showSettingsStatus(`已选择 DSH provider ${providerId}，正在获取模型…`)
-  void discoverModels()
-})
-
 elements.settingsChatModelChips.addEventListener('click', event => {
   const button = event.target.closest('button[data-model-id]')
   if (!(button instanceof HTMLButtonElement)) return
@@ -3997,10 +3874,8 @@ elements.settingsVisionUnknownMore.addEventListener('click', () => {
 for (const element of [
   elements.settingsChatName,
   elements.settingsVisionName,
-  elements.settingsChatRoute,
 ]) {
   element.addEventListener('input', () => {
-    refreshProviderChoiceSelection()
     refreshModelChoiceSelection()
   })
 }

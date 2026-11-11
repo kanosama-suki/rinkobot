@@ -7,7 +7,8 @@
 ## 1. 目标与边界
 
 Kanobot Core 是唯一业务进程，拥有网页、QQ、记忆、提醒、主动消息、
-Scheduler 和主数据库。DSH 不是启动前置条件，systemd 只监管核心进程。
+Scheduler 和主数据库。R1.5 起主分支已完全移除 DSH 依赖，systemd 只监管
+核心进程。
 
 - 只监听 `127.0.0.1:4200`；默认不暴露公网。
 - 以非 root 用户 `kanobot` 运行。
@@ -130,7 +131,7 @@ curl --fail --silent --show-error \
 正常结果为 HTTP 200，字段只有：
 
 ```json
-{"ok":true,"status":"ready","uptime":123,"version":"0.20.0","database":"ok","scheduler":"running","qq":"disabled"}
+{"ok":true,"status":"ready","uptime":123,"version":"0.21.0","database":"ok","scheduler":"running","qq":"disabled"}
 ```
 
 数据库不可用、scheduler 未运行或正在关闭时返回 HTTP 503 和

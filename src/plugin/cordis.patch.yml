@@ -1,5 +1,0 @@
-# Bundle patch：安装本包时只向 DSH 配置树插入一个 Host 插件条目。
-# 配置目录、启动报告等运行参数由 Profile 的 cordis.patch.yml 提供。
-- insert:
-    - id: kanobot
-      name: '@kanobot/dsh-plugin'
