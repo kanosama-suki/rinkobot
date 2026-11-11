@@ -6,13 +6,13 @@
 
 ## 1. 目标与边界
 
-Kanobot Core 是唯一业务进程，拥有网页、QQ、记忆、提醒、主动消息、
+Rinkobot Core 是唯一业务进程，拥有网页、QQ、记忆、提醒、主动消息、
 Scheduler 和主数据库。R1.5 起主分支已完全移除 DSH 依赖，systemd 只监管
 核心进程。
 
 - 只监听 `127.0.0.1:4200`；默认不暴露公网。
-- 以非 root 用户 `kanobot` 运行。
-- 配置和数据默认放在 `/var/lib/kanobot`，权限 `0700`。
+- 以非 root 用户 `rinkobot` 运行。
+- 配置和数据默认放在 `/var/lib/rinkobot`，权限 `0700`。
 - 凭据只通过 `EnvironmentFile` 或本地 secret store 提供。
 - `kanobot.lock` 是运行时元数据；真正的互斥由操作系统命名管道/
   抽象套接字承担，SIGKILL 后由内核释放。
@@ -21,34 +21,38 @@ Scheduler 和主数据库。R1.5 起主分支已完全移除 DSH 依赖，system
 ## 2. 目录与用户
 
 ```bash
-sudo useradd --system --home-dir /var/lib/kanobot --shell /usr/sbin/nologin kanobot
-sudo install -d -m 0700 -o kanobot -g kanobot /var/lib/kanobot
-sudo install -d -m 0700 -o kanobot -g kanobot /var/lib/kanobot/config
-sudo install -d -m 0700 -o kanobot -g kanobot /var/lib/kanobot/data
-sudo install -d -m 0700 -o root -g root /etc/kanobot
-sudo install -m 0600 -o root -g root /dev/null /etc/kanobot/kanobot.env
+sudo useradd --system --home-dir /var/lib/rinkobot --shell /usr/sbin/nologin rinkobot
+sudo install -d -m 0700 -o rinkobot -g rinkobot /var/lib/rinkobot
+sudo install -d -m 0700 -o rinkobot -g rinkobot /var/lib/rinkobot/config
+sudo install -d -m 0700 -o rinkobot -g rinkobot /var/lib/rinkobot/data
+sudo install -d -m 0700 -o root -g root /etc/rinkobot
+sudo install -m 0600 -o root -g root /dev/null /etc/rinkobot/rinkobot.env
 ```
 
 建议布局：
 
 ```text
-/opt/kanobot/a/                 代码（root 拥有，普通用户只读）
-/var/lib/kanobot/config/        system.toml、identity.toml 等配置和设置覆盖
-/var/lib/kanobot/data/          kanobot.sqlite、tombstones.sqlite、backups/
-/var/lib/kanobot/data/kanobot.lock  运行时锁元数据（不提交 Git）
-/etc/kanobot/kanobot.env        EnvironmentFile（0600，不进入 Git）
+/opt/rinkobot/a/                 代码（root 拥有，普通用户只读）
+/var/lib/rinkobot/config/        system.toml、identity.toml 等配置和设置覆盖
+/var/lib/rinkobot/data/          kanobot.sqlite、tombstones.sqlite、backups/
+/var/lib/rinkobot/data/kanobot.lock  运行时锁元数据（不提交 Git）
+/etc/rinkobot/rinkobot.env        EnvironmentFile（0600，不进入 Git）
 ```
+
+`/kanobot/` 路由、`kanobot.sqlite`、`kanobot.lock` 和 `kanobot-backup-*`
+是当前保留的兼容标识；服务名、系统用户、目录和环境文件名已统一为
+`rinkobot`。
 
 如果配置目录与数据目录分开，必须同时修改 unit 的 `ExecStart` 和
 `ReadWritePaths`；配置目录中的 `model-settings.json`、`channel-settings.json`
-和 `secrets/` 也需要写入权限。R1 默认把两者都放在 `/var/lib/kanobot`。
+和 `secrets/` 也需要写入权限。R1 默认把两者都放在 `/var/lib/rinkobot`。
 
 安装依赖并准备代码：
 
 ```bash
-sudo install -d -m 0755 -o root -g root /opt/kanobot
-sudo cp -a /path/to/kanobot/a /opt/kanobot/a
-cd /opt/kanobot/a
+sudo install -d -m 0755 -o root -g root /opt/rinkobot
+sudo cp -a /path/to/rinkobot/a /opt/rinkobot/a
+cd /opt/rinkobot/a
 sudo npm ci --omit=dev
 ```
 
@@ -57,7 +61,7 @@ Node.js 需要 24 或更高版本。示例 unit 假设 Node 在 `/usr/bin/node`�
 
 ## 3. 凭据与 EnvironmentFile
 
-`/etc/kanobot/kanobot.env` 只放环境变量形式的凭据，例如：
+`/etc/rinkobot/rinkobot.env` 只放环境变量形式的凭据，例如：
 
 ```text
 # 仅示例名称；值由操作员在服务器上填写，不提交仓库。
@@ -65,8 +69,8 @@ NAPCAT_ACCESS_TOKEN=replace-with-local-secret
 ```
 
 ```bash
-sudo chmod 0600 /etc/kanobot/kanobot.env
-sudo chown root:root /etc/kanobot/kanobot.env
+sudo chmod 0600 /etc/rinkobot/rinkobot.env
+sudo chown root:root /etc/rinkobot/rinkobot.env
 ```
 
 不要写入或提交：
@@ -78,23 +82,23 @@ sudo chown root:root /etc/kanobot/kanobot.env
 - 真实人格文件、聊天正文、QQ 号或群号。
 
 优先使用设置页写出的本地 secret store；它位于
-`/var/lib/kanobot/config/secrets/`，权限随数据目录。`EnvironmentFile`
+`/var/lib/rinkobot/config/secrets/`，权限随数据目录。`EnvironmentFile`
 适合容器化或运维集中注入；两种来源互斥，不要同时配置同一个 token。
 
 ## 4. 安装与启动
 
 ```bash
-sudo cp deploy/kanobot.service.example /etc/systemd/system/kanobot.service
-sudo editor /etc/systemd/system/kanobot.service
+sudo cp deploy/rinkobot.service.example /etc/systemd/system/rinkobot.service
+sudo editor /etc/systemd/system/rinkobot.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now kanobot
-sudo systemctl status kanobot --no-pager
+sudo systemctl enable --now rinkobot
+sudo systemctl status rinkobot --no-pager
 ```
 
 查看启动报告：
 
 ```bash
-sudo journalctl -u kanobot -n 100 --no-pager
+sudo journalctl -u rinkobot -n 100 --no-pager
 ```
 
 启动报告应包含 `pid`、`version`、`schema`、`lockOwner` 短指纹、
@@ -108,14 +112,14 @@ Cookie、聊天正文或完整私密配置。
 journal。使用本地控制通道把链接打印到操作员终端：
 
 ```bash
-sudo -u kanobot -H /usr/bin/node /opt/kanobot/a/scripts/login-url.ts \
-  --data /var/lib/kanobot/data
+sudo -u rinkobot -H /usr/bin/node /opt/rinkobot/a/scripts/login-url.ts \
+  --data /var/lib/rinkobot/data
 ```
 
 或在代码目录中：
 
 ```bash
-sudo -u kanobot -H npm run login -- --data /var/lib/kanobot/data
+sudo -u rinkobot -H npm run login -- --data /var/lib/rinkobot/data
 ```
 
 链接只输出到当前终端，使用一次即失效。不要把它粘贴到聊天、工单、
@@ -141,10 +145,10 @@ curl --fail --silent --show-error \
 ## 5. 停止、重启与日志
 
 ```bash
-sudo systemctl stop kanobot
-sudo systemctl status kanobot --no-pager
-sudo systemctl restart kanobot
-sudo journalctl -u kanobot -f
+sudo systemctl stop rinkobot
+sudo systemctl status rinkobot --no-pager
+sudo systemctl restart rinkobot
+sudo journalctl -u rinkobot -f
 ```
 
 `systemctl stop` 发送 `SIGTERM`，核心按以下顺序关闭：
@@ -178,17 +182,17 @@ SystemMaxFileSize=50M
 在线创建主库一致性备份（只读 `VACUUM INTO`，不会启动第二个核心）：
 
 ```bash
-cd /opt/kanobot/a
-sudo -u kanobot -H npm run backup -- \
-  --config /var/lib/kanobot/config \
-  --data /var/lib/kanobot/data create
-sudo -u kanobot -H npm run backup -- \
-  --config /var/lib/kanobot/config \
-  --data /var/lib/kanobot/data list
+cd /opt/rinkobot/a
+sudo -u rinkobot -H npm run backup -- \
+  --config /var/lib/rinkobot/config \
+  --data /var/lib/rinkobot/data create
+sudo -u rinkobot -H npm run backup -- \
+  --config /var/lib/rinkobot/config \
+  --data /var/lib/rinkobot/data list
 ```
 
 主库日备份只包含 `kanobot.sqlite`，**不包含** `tombstones.sqlite`。
-迁移整机或做灾难恢复时，应另存整个 `/var/lib/kanobot/data`，包括
+迁移整机或做灾难恢复时，应另存整个 `/var/lib/rinkobot/data`，包括
 独立墓碑库和 `backups/`。
 
 ### 恢复
@@ -197,13 +201,13 @@ sudo -u kanobot -H npm run backup -- \
 实例存在时直接失败：
 
 ```bash
-sudo systemctl stop kanobot
-cd /opt/kanobot/a
-sudo -u kanobot -H npm run backup -- \
-  --config /var/lib/kanobot/config \
-  --data /var/lib/kanobot/data \
+sudo systemctl stop rinkobot
+cd /opt/rinkobot/a
+sudo -u rinkobot -H npm run backup -- \
+  --config /var/lib/rinkobot/config \
+  --data /var/lib/rinkobot/data \
   restore --backup kanobot-backup-20261111T000000000Z-abcdef12.sqlite
-sudo systemctl start kanobot
+sudo systemctl start rinkobot
 curl --fail http://127.0.0.1:4200/kanobot/api/health
 ```
 
@@ -215,16 +219,16 @@ restore 只替换主库，不覆盖 `tombstones.sqlite`；下次启动会重放�
 ### 升级
 
 ```bash
-sudo systemctl stop kanobot
-sudo -u kanobot -H npm run backup -- \
-  --config /var/lib/kanobot/config \
-  --data /var/lib/kanobot/data create
-sudo cp -a /path/to/new/a/. /opt/kanobot/a/
-cd /opt/kanobot/a
+sudo systemctl stop rinkobot
+sudo -u rinkobot -H npm run backup -- \
+  --config /var/lib/rinkobot/config \
+  --data /var/lib/rinkobot/data create
+sudo cp -a /path/to/new/a/. /opt/rinkobot/a/
+cd /opt/rinkobot/a
 sudo npm ci --omit=dev
-sudo -u kanobot -H npm run config:check
-sudo systemctl start kanobot
-sudo journalctl -u kanobot -n 80 --no-pager
+sudo -u rinkobot -H npm run config:check
+sudo systemctl start rinkobot
+sudo journalctl -u rinkobot -n 80 --no-pager
 curl --fail http://127.0.0.1:4200/kanobot/api/health
 ```
 
@@ -234,20 +238,20 @@ curl --fail http://127.0.0.1:4200/kanobot/api/health
 ### 回滚
 
 ```bash
-sudo systemctl stop kanobot
-cd /opt/kanobot/a
-sudo -u kanobot -H npm run backup -- \
-  --config /var/lib/kanobot/config \
-  --data /var/lib/kanobot/data list
-sudo -u kanobot -H npm run backup -- \
-  --config /var/lib/kanobot/config \
-  --data /var/lib/kanobot/data restore --backup <回滚备份文件名>
-sudo systemctl start kanobot
+sudo systemctl stop rinkobot
+cd /opt/rinkobot/a
+sudo -u rinkobot -H npm run backup -- \
+  --config /var/lib/rinkobot/config \
+  --data /var/lib/rinkobot/data list
+sudo -u rinkobot -H npm run backup -- \
+  --config /var/lib/rinkobot/config \
+  --data /var/lib/rinkobot/data restore --backup <回滚备份文件名>
+sudo systemctl start rinkobot
 ```
 
 ## 7. 故障排查
 
-- `数据目录已被另一个 Kanobot 实例占用`：先确认旧进程是否仍在运行。
+- `数据目录已被另一个 Rinkobot 实例占用`：先确认旧进程是否仍在运行。
   不要用 `rm kanobot.lock` 掩盖问题；IPC 所有者才是权威。
 - `LOCK_INVALID`：锁元数据损坏或来自不支持的版本。停止服务后人工
   检查 `kanobot.lock`，确认没有活进程再处理。
@@ -255,8 +259,8 @@ sudo systemctl start kanobot
   支持跨主机共享同一个数据目录。
 - 健康检查 503：查看 journal 中的数据库/scheduler 错误；不要只重启
   掩盖数据库损坏或 schema 不兼容。
-- restore 被拒绝：先 `systemctl stop kanobot`，确认
-  `systemctl status kanobot` 不再是 active，再执行 restore。
+- restore 被拒绝：先 `systemctl stop rinkobot`，确认
+  `systemctl status rinkobot` 不再是 active，再执行 restore。
 
 ## 8. 未验证项
 

@@ -72,7 +72,7 @@ backup_retention = 7
 
 const validIdentity = `schema_version = 1
 mode = "placeholder"
-display_name = "Kanobot Test"
+display_name = "Rinkobot Test"
 owner_name = "kano"
 `
 
@@ -372,7 +372,7 @@ test('maps snake_case TOML fields to typed runtime fields', () => {
       maxHistoryChars: 8_000,
       maxMessageChars: 4_000,
     })
-    assert.equal(config.identity.displayName, 'Kanobot Test')
+    assert.equal(config.identity.displayName, 'Rinkobot Test')
     assert.equal(config.policy.emergency.stopFile, 'STOP')
   } finally {
     rmSync(dir, { recursive: true, force: true })

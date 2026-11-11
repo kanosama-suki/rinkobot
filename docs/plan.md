@@ -1,7 +1,7 @@
-# Kanobot 规划书
+# Rinkobot 规划书
 
-> 版本：v0.28（2026-11-11）
-> 阶段：R1.5 独立化已完成。主线产品是独立 Kanobot，版本 `0.21.0`，MIT
+> 版本：v0.29（2026-11-11）
+> 阶段：R1.5 独立化已完成。主线产品是独立 Rinkobot，版本 `0.21.0`，MIT
 > 许可证；DSH 插件入口、DSH model provider、DSH route、DSH 登录复用和
 > DSH 专用 UI 已从主分支删除，旧实现保存在 Git 标签
 > `archive/dsh-plugin-0.20.0`。真实小号 QQ + NapCat + Magpie 只完成部分验收
@@ -14,7 +14,7 @@
 
 ## 0. 一页结论
 
-- 产品唯一发行形态是**独立程序**：Kanobot Core 自己拥有网页、QQ、调度器、记忆、关系、状态和主数据库。先在本地 Windows 做好，再迁到 Linux 常驻服务。
+- 产品唯一发行形态是**独立程序**：Rinkobot Core 自己拥有网页、QQ、调度器、记忆、关系、状态和主数据库。先在本地 Windows 做好，再迁到 Linux 常驻服务。
 - 主分支不再交付 DSH 插件，也不使用 DSH 模型或登录。未来如需 DSH，只能作为**可选外部执行器/连接器**，通过窄接口提供工具、工作区或观察数据；不能拥有核心生命周期。
 - 一个核心、一个主数据库、一个调度器、一个主写入者。网页是第一入口，个人 QQ 是第二入口；未来语音/虚拟形象通过新的 `ChannelAdapter` 接入。
 - 只有显式配置且在白名单内的 `owner_qq` 私聊并入网页 `main`；其他私聊、群聊和新渠道按现有规则创建独立会话，不预建、不混入 `main`。
@@ -44,7 +44,7 @@
 | 渠道 | 网页优先；个人 QQ + NapCat 在 M5 接入，kano 接受风控风险 | 需求 v0.4；M5 |
 | 产品形态 | 独立程序是唯一发行形态；主分支不交付 DSH 插件 | kano，2026-11-11 |
 | 生命周期边界 | 一个核心、一个主数据库、一个调度器、一个主写入者；DSH/MCP/浏览器/VM 不能成为第二套业务后端 | kano，2026-11-10 |
-| DSH 产品 UI | 不实现 DSH 内部 Kanobot 产品级 UI；独立 WebUI 是唯一入口 | kano，2026-11-10 / 2026-11-11 |
+| DSH 产品 UI | 不实现 DSH 内部 Rinkobot 产品级 UI；独立 WebUI 是唯一入口 | kano，2026-11-10 / 2026-11-11 |
 | 渠道会话规则 | `owner_qq` 私聊并入 `main`；其他私聊、群聊和未来渠道按规则创建独立会话，不预建、不合并 | kano，2026-11-10 |
 | Linux 常驻 | 需要随时收 QQ/提醒/主动消息时，核心作为 Linux 常驻服务运行；Windows 开机自启暂缓 | kano，2026-11-10 |
 | M6 处置 | M6/M6.7/M6.8 归档为参考，不合并到默认主线；原能力映射到 R5/R6 | kano，2026-11-10 |
@@ -592,7 +592,7 @@ DSH `ctx.llm`、双形态和插件生命周期已由 R1.5 删除，不再是当�
 实测补充：
 
 - 安装时 npm `latest` 指向 `0.2.1-rc.5`，该版本号仍带 RC；仓库不把它记成语义化稳定版。
-- DSH 把 bundle 中的 Kanobot 当成 optional 插件：插件抛错时宿主只打印 `entry did not activate` 并继续运行。测试启动脚本因此在启动前调用 `a/scripts/validate-config.ts`，预检失败就不创建 DSH 进程，形成 fail-closed 边界。
+- DSH 把 bundle 中的 Rinkobot 当成 optional 插件：插件抛错时宿主只打印 `entry did not activate` 并继续运行。测试启动脚本因此在启动前调用 `a/scripts/validate-config.ts`，预检失败就不创建 DSH 进程，形成 fail-closed 边界。
 - 工具隔离的证明范围是“模型可见 schema 为空”，不是操作系统级沙箱。
 
 第 3 步里工具隔离做不到时：停在 M1，记录原因，和 kano 讨论替代方案。
@@ -854,7 +854,7 @@ M5.2.1 还收紧了运行时状态语义：`GET /api/settings/channels/status` �
 已完成：
 
 1. 删除 `src/plugin/`、DSH chat provider、DSH 类型、生命周期脚本和对应测试。
-2. 包名改为 `kanobot`，版本升到 `0.21.0`，许可证改为 MIT。
+2. 包名改为 `rinkobot`（原名 `kanobot`），版本升到 `0.21.0`，许可证改为 MIT。
 3. 设置页和配置只接受 `mock`、`magpie`、`openai-compatible`；旧
    `provider = "dsh"` 和 `route` fail-closed 并给出迁移提示。
 4. 删除 DSH 登录复用和 DSH 宿主模型发现；独立程序使用一次性 bootstrap
@@ -1035,9 +1035,15 @@ QQ mock、记忆、提醒和主动消息的既有测试继续通过；旧配置�
 
 ## 14. 变更记录
 
+- v0.29（2026-11-11）：对外品牌统一为 Rinkobot。包名、WebUI 标题与文案、
+  运行日志前缀、示例人格名、systemd 单元和部署文档改用 `rinkobot`；为兼容
+  现有数据与运行实例，`/kanobot/` 路由、`kanobot.sqlite`、`kanobot.lock`、
+  `KANOBOT_*` 环境变量、内部 `Kanobot*` 类名和备份文件名暂不迁移。旧 M
+  系列验收文档保留当时名称，并明确标注为历史材料。
 - v0.28（2026-11-11）：完成 R1.5 独立化。主分支删除 DSH 插件入口、
   DSH model provider、DSH route、DSH 登录复用和 DSH 专用 UI；包名改为
-  `kanobot`，版本升到 `0.21.0`，许可证改为 MIT。旧配置中的
+  `kanobot`（后在 v0.29 统一为 `rinkobot`），版本升到 `0.21.0`，许可证改为
+  MIT。旧配置中的
   `provider = "dsh"` 或 `route` 现在明确 fail-closed 并提示迁移，不会静默
   改写。完整旧实现保存在标签 `archive/dsh-plugin-0.20.0`，Git 历史未改写。
   新增 MIT、安全策略、贡献指南、Windows/Ubuntu CI 和
@@ -1057,7 +1063,7 @@ QQ mock、记忆、提醒和主动消息的既有测试继续通过；旧配置�
   新增 DSH 缺席时 mock 网页/记忆/提醒/主动消息/scheduler/QQ 验收、Linux
   systemd 示例和部署手册。自动测试 342 项通过；产品版本升到 `0.20.0`，
   schema 保持 v12。Linux systemd、真实 QQ/模型和正式数据未实测。
-- v0.26（2026-11-10）：R0 决策冻结。确认“独立核心 + 可选执行器”：Kanobot Core 拥有网页、QQ、调度、记忆、关系和主数据库；DSH/MCP/浏览器/VM 只作为可替换执行层，DSH 不存在时核心仍须工作。确认首版不需要 DSH 内部产品级 UI；`owner_qq` 私聊并入 `main` 的规则保留，其他私聊、群聊和新渠道首次出现时按规则创建独立会话，不预建、不合并；DSH 宿主模型不是启动前置条件。记录真实小号 QQ + NapCat + Magpie 的部分验收：私聊收发、图片/表情可见、owner 私聊已并入“我们的对话”；非 owner 隔离、群 `@`、连发聚合、多图、重启迁移、提醒/主动消息和长期稳定性仍未验证。旧 M6/M7/M8 冻结，分别并入 R5、R1/R5、R6；M6.7/M6.8 仅归档参考，不合并 WIP、不恢复 `paused_native`。新增 R0～R7 里程碑、`docs/r0-decision.md` 和 `docs/m5.2.1-real-acceptance.md`；R0 不修改源码、schema 或运行时数据。
+- v0.26（2026-11-10）：R0 决策冻结。确认“独立核心 + 可选执行器”：Rinkobot Core 拥有网页、QQ、调度、记忆、关系和主数据库；DSH/MCP/浏览器/VM 只作为可替换执行层，DSH 不存在时核心仍须工作。确认首版不需要 DSH 内部产品级 UI；`owner_qq` 私聊并入 `main` 的规则保留，其他私聊、群聊和新渠道首次出现时按规则创建独立会话，不预建、不合并；DSH 宿主模型不是启动前置条件。记录真实小号 QQ + NapCat + Magpie 的部分验收：私聊收发、图片/表情可见、owner 私聊已并入“我们的对话”；非 owner 隔离、群 `@`、连发聚合、多图、重启迁移、提醒/主动消息和长期稳定性仍未验证。旧 M6/M7/M8 冻结，分别并入 R5、R1/R5、R6；M6.7/M6.8 仅归档参考，不合并 WIP、不恢复 `paused_native`。新增 R0～R7 里程碑、`docs/r0-decision.md` 和 `docs/m5.2.1-real-acceptance.md`；R0 不修改源码、schema 或运行时数据。
 - v0.25（2026-11-08）：完成 M5.2.1 QQ 会话可见性与档案交互修复。未配置 `owner_qq` 时显示明确警告，不从白名单推断；启动时把既有 `qq-private-<owner>` 历史幂等并入 `main`，只移动消息和模型调用归属，不复制正文、不重排 `seq`。历史按钮改为消息区顶部覆盖层，只在滚动到顶部且有更早消息时显示。`conversations` 新增 nullable `display_name`，schema 升到 v12，非 `main` 会话可改名并恢复默认；改名不改变会话 ID、消息顺序或模型上下文。状态接口区分运行时 `owner_qq` 与已保存 overlay，避免保存后未重启时误报生效。自动测试从 319 项增加到 325 项并全部通过；隔离 Edge 三尺寸验收通过；插件版本升到 `0.19.0`。真实 NapCat/QQ 账号和真实数据库回填仍未验证。
 - v0.24（2026-11-08）：完成 M5.2 所有者会话与多会话档案。新增显式 `qq.owner_qq`：只有该账号私聊映射到网页 `main`，共享上下文和长期记忆；其他私聊/群聊保持独立会话，不读写所有者记忆、不提交所有者提醒。网页新增“我们的对话 / 全部对话”双视图，档案按 `messages.seq` 以 50 条游标分页、按日期分组并显示来源徽标；新增 `GET /api/conversations` 和 `GET /api/timeline`，扩展 `GET /api/conversation?beforeSeq=`。档案只读，网页普通回复不自动推送 QQ。修复档案视图 composer 被 CSS `display:grid` 覆盖而仍然可见的问题。自动测试从 313 项增加到 319 项并全部通过；隔离 Edge 三尺寸验收通过；插件版本升到 `0.18.0`，SQLite schema 保持 v11。真实 NapCat/QQ 账号和长期多会话观察仍未验证。
 - v0.23（2026-11-07）：完成 M5.1。主页签收敛为状态、主动性/提醒、记忆、审计/事件；设置移入原生弹窗，新增 QQ/NapCat 配置页、分层参数、一次性连接测试和常驻连接状态。新增 `channel-settings.json` 运行时覆盖与统一 schema 校验、环境变量/本地 secret 两种凭据来源、原子保存和失败恢复；token 与 secret 引用不进入页面、overlay、SQLite、审计或日志。提醒改为明确委托自动生效、模糊委托聊天确认、模型推断拒绝、同会话相近内容去重、30 分钟确认 TTL、多条候选不批量确认；STOP 仍能阻断。SQLite schema 保持 v11，自动测试从 278 项增加到 313 项并全部通过，`check:case`、`config:check`、前端语法检查和 `git diff --check` 通过。隔离独立程序使用临时配置/数据，在 Edge 三尺寸完成设置、QQ 页和滚动区验收；插件版本升到 `0.17.0`。本轮未连接真实 NapCat、未使用真实 QQ 账号、未操作正式 4096/4100，也未实现热重连、QQ 空间、公开发送、VM 或自进化。

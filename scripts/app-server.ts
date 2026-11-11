@@ -22,7 +22,7 @@ let options: CliOptions
 try {
   options = parseArgs(process.argv.slice(2))
 } catch (error) {
-  console.error(`[kanobot-app] ${formatError(error)}`)
+  console.error(`[rinkobot-app] ${formatError(error)}`)
   console.error('使用 --help 查看启动参数。')
   process.exitCode = 1
   throw error
@@ -37,10 +37,10 @@ async function closeAndExit(): Promise<void> {
   if (activeServer === undefined) return
   try {
     await activeServer.close()
-    console.log('[kanobot-app] shutdown complete; runtime lock released')
+    console.log('[rinkobot-app] shutdown complete; runtime lock released')
     process.exitCode = 0
   } catch (error) {
-    console.error(`[kanobot-app] close failed: ${formatError(error)}`)
+    console.error(`[rinkobot-app] close failed: ${formatError(error)}`)
     process.exitCode = 1
   }
 }
@@ -48,11 +48,11 @@ async function closeAndExit(): Promise<void> {
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return
   shuttingDown = true
-  console.log(`[kanobot-app] ${signal}; closing…`)
+  console.log(`[rinkobot-app] ${signal}; closing…`)
   if (server === undefined) {
     pendingSignal = signal
     console.log(
-      '[kanobot-app] startup still in progress; shutdown queued until ' +
+      '[rinkobot-app] startup still in progress; shutdown queued until ' +
         'initialization finishes.',
     )
     return
@@ -65,7 +65,7 @@ function handleSignal(signal: 'SIGINT' | 'SIGTERM'): void {
   signalCount += 1
   if (signalCount > 1) {
     console.error(
-      `[kanobot-app] second ${signal}; forcing immediate exit. ` +
+      `[rinkobot-app] second ${signal}; forcing immediate exit. ` +
         'A stale lock will be recovered by the next startup.',
     )
     process.exit(1)
@@ -89,13 +89,13 @@ try {
     },
   })
 } catch (error) {
-  console.error(`[kanobot-app] startup failed: ${formatError(error)}`)
+  console.error(`[rinkobot-app] startup failed: ${formatError(error)}`)
   process.exit(1)
 }
 
 if (pendingSignal !== null) {
   console.log(
-    `[kanobot-app] startup complete; continuing queued ${pendingSignal} ` +
+    `[rinkobot-app] startup complete; continuing queued ${pendingSignal} ` +
       'shutdown.',
   )
   await closeAndExit()

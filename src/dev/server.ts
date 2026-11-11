@@ -238,7 +238,7 @@ export async function createDevServer(
       request: IncomingMessage,
       response: ServerResponse,
     ) => void | Promise<void> = () => {
-      throw new Error('Kanobot dev route was not registered')
+      throw new Error('Rinkobot dev route was not registered')
     }
     disposeSurface = registerChatSurface({
       webServer: {
@@ -249,7 +249,7 @@ export async function createDevServer(
           routeHandler = route.handler
           return () => {
             routeHandler = () => {
-              throw new Error('Kanobot dev route has been disposed')
+              throw new Error('Rinkobot dev route has been disposed')
             }
           }
         },
@@ -286,7 +286,7 @@ export async function createDevServer(
         clock,
         routeHandler: (req, res) => routeHandler(req, res),
       }).catch(error => {
-        logger.error?.(`[kanobot-dev] request failed: ${formatError(error)}`)
+        logger.error?.(`[rinkobot-dev] request failed: ${formatError(error)}`)
         if (!response.headersSent) {
           writeDevError(response, 500, '服务器内部错误')
         } else if (!response.destroyed) {
@@ -316,11 +316,11 @@ export async function createDevServer(
     scheduler.start()
 
     logger.info(
-      `[kanobot-dev] listening on ${baseUrl}${CHAT_BASE_PATH}/; ` +
+      `[rinkobot-dev] listening on ${baseUrl}${CHAT_BASE_PATH}/; ` +
         `config=${configDir}; data=${storage.dataDir}; modelMode=${modelMode}`,
     )
     logger.info(
-      `[kanobot-dev] one-time login: ${baseUrl}${CHAT_BASE_PATH}/` +
+      `[rinkobot-dev] one-time login: ${baseUrl}${CHAT_BASE_PATH}/` +
         `?token=${rawBootstrapToken}`,
     )
 

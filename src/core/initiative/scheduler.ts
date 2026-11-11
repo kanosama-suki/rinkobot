@@ -105,15 +105,15 @@ export class InitiativeScheduler {
     try {
       const result = await this.service.tick(signal)
       if (result.status === 'stopped') {
-        this.logger.info('[kanobot] initiative tick skipped: emergency stopped')
+        this.logger.info('[rinkobot] initiative tick skipped: emergency stopped')
       }
     } catch (error) {
       if (isAbortError(error) && this.disposed) return
       const message = error instanceof Error ? error.message : String(error)
       if (this.logger.error) {
-        this.logger.error(`[kanobot] initiative tick failed: ${message}`)
+        this.logger.error(`[rinkobot] initiative tick failed: ${message}`)
       } else {
-        this.logger.info(`[kanobot] initiative tick failed: ${message}`)
+        this.logger.info(`[rinkobot] initiative tick failed: ${message}`)
       }
     }
   }

@@ -2,5 +2,5 @@
 # placeholder 模式不能同时提供 persona_file，生产环境必须改成 private。
 schema_version = 1
 mode = "placeholder"
-display_name = "Kanobot Test"
+display_name = "Rinkobot Test"
 owner_name = "kano"

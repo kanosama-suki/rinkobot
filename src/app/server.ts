@@ -1,5 +1,5 @@
 /**
- * Kanobot 正式独立程序入口。
+ * Rinkobot 正式独立程序入口。
  *
  * 与 src/dev 的开发服务器语义分开：调用方必须显式提供配置目录和数据目录；
  * 页面与 API 只监听 127.0.0.1，并用本进程生成的一次性 bootstrap token
@@ -338,7 +338,7 @@ export async function createAppServer(
       request: IncomingMessage,
       response: ServerResponse,
     ) => void | Promise<void> = () => {
-      throw new Error('Kanobot app route was not registered')
+      throw new Error('Rinkobot app route was not registered')
     }
     disposeSurface = registerChatSurface({
       webServer: {
@@ -349,7 +349,7 @@ export async function createAppServer(
           routeHandler = route.handler
           return () => {
             routeHandler = () => {
-              throw new Error('Kanobot app route has been disposed')
+              throw new Error('Rinkobot app route has been disposed')
             }
           }
         },
@@ -408,7 +408,7 @@ export async function createAppServer(
         health,
         routeHandler: (req, res) => routeHandler(req, res),
       }).catch(error => {
-        logger.error?.(`[kanobot-app] request failed: ${formatError(error)}`)
+        logger.error?.(`[rinkobot-app] request failed: ${formatError(error)}`)
         if (!response.headersSent) {
           writeAppError(response, 500, '服务器内部错误')
         } else if (!response.destroyed) {
@@ -458,7 +458,7 @@ export async function createAppServer(
     qqChannel?.start()
 
     logger.info(
-      `[kanobot-app] startup pid=${process.pid} ` +
+      `[rinkobot-app] startup pid=${process.pid} ` +
         `version=${KANOBOT_VERSION} schema=${STORAGE_SCHEMA_VERSION} ` +
         `lockOwner=${runtimeLock.metadata.ownerToken.slice(0, 12)} ` +
         `backups=${backupCount} ` +
@@ -467,19 +467,19 @@ export async function createAppServer(
         `qq=${loaded.channels.qq.enabled ? 'enabled' : 'disabled'}`,
     )
     logger.info(
-      `[kanobot-app] listening on ${baseUrl}${CHAT_BASE_PATH}/`,
+      `[rinkobot-app] listening on ${baseUrl}${CHAT_BASE_PATH}/`,
     )
 
     // 一次性链接只用于操作员终端。systemd 的 stdout 会进入 journal，
     // 因此非 TTY 时抑制链接，改由本地控制通道打印到操作员终端。
     if (process.stdout.isTTY === true) {
       process.stdout.write(
-        `[kanobot-app] one-time login: ${baseUrl}${CHAT_BASE_PATH}/` +
+        `[rinkobot-app] one-time login: ${baseUrl}${CHAT_BASE_PATH}/` +
           `?token=${rawBootstrapToken}\n`,
       )
     } else {
       logger.info(
-        '[kanobot-app] one-time login link suppressed in non-TTY; ' +
+        '[rinkobot-app] one-time login link suppressed in non-TTY; ' +
           'run `npm run login -- --data <数据目录>` in the operator terminal',
       )
     }
@@ -541,7 +541,7 @@ export async function createAppServer(
       if (runtimeLock !== undefined) {
         try {
           await runtimeLock.release()
-          logger.info('[kanobot-app] runtime lock released')
+          logger.info('[rinkobot-app] runtime lock released')
         } catch (error) {
           errors.push(`lock: ${formatError(error)}`)
         }

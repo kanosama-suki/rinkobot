@@ -1934,7 +1934,7 @@ function notifyProactiveMessage(message) {
   const text = String(message.text ?? '').replace(/\s+/g, ' ').trim()
   const body = Array.from(text).slice(0, 120).join('')
   const notification = new Notification('她发来一条消息', {
-    body: body === '' ? '打开 Kanobot 看看。' : body,
+    body: body === '' ? '打开 Rinkobot 看看。' : body,
     tag: `kanobot-${message.id}`,
   })
   notification.onclick = () => {
@@ -2949,7 +2949,7 @@ async function saveModelSettings() {
     elements.settingsChatSecret.value = ''
     elements.settingsVisionSecret.value = ''
     showSettingsStatus(
-      '模型设置已保存。请重启 Kanobot；运行中的对话不会热切换模型。',
+      '模型设置已保存。请重启 Rinkobot；运行中的对话不会热切换模型。',
     )
   } catch (error) {
     showSettingsError(errorMessage(error))
@@ -3137,7 +3137,7 @@ async function responseMessage(response, fallback) {
   try {
     const payload = await response.json()
     if (response.status === 401) {
-      return payload?.error?.message || '需要重新登录 Kanobot。'
+      return payload?.error?.message || '需要重新登录 Rinkobot。'
     }
     return payload?.error?.message || fallback
   } catch {
@@ -3480,7 +3480,7 @@ async function saveChannelSettings() {
     applyChannelSettings(view)
     elements.channelCredentialSecret.value = ''
     showChannelSettingsStatus(
-      '配置已保存；重启 Kanobot 后 QQ 渠道生效。',
+      '配置已保存；重启 Rinkobot 后 QQ 渠道生效。',
     )
     await loadChannelStatus().catch(() => {
       elements.channelConnectionState.textContent =

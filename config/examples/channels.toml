@@ -10,7 +10,7 @@ schema_version = 1
 
 [qq]
 enabled = false
-# forward WebSocket：kanobot 作为客户端连接 NapCat 的 OneBot WS 服务。
+# forward WebSocket：rinkobot 作为客户端连接 NapCat 的 OneBot WS 服务。
 ws_url = "ws://127.0.0.1:3001"
 allow_remote = false
 # 与 NapCat 的 access token 同名；留空表示对端未启用鉴权（不推荐）。

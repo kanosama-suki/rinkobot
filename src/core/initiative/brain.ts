@@ -45,7 +45,7 @@ const PLAN_KINDS: readonly DailyPlanKind[] = [
 ]
 
 const INTERNAL_SYSTEM_PROMPT =
-  '你是 Kanobot 的占位人格，只用于本地工程测试，不是正式人格。' +
+  '你是 Rinkobot 的占位人格，只用于本地工程测试，不是正式人格。' +
   '你正在生成内部候选，不会直接对所有者说话。' +
   '只输出严格 JSON，不要 Markdown、解释或思考过程。' +
   '不要读取、猜测或补造没有出现在上下文里的私人事实。'

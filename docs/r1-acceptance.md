@@ -96,7 +96,7 @@ node --test tests/integration/app-health.test.ts `
 其中真实子进程场景包括：
 
 - 第二个 `scripts/app-server.ts` 进程以 exit code 1 退出，stderr 包含
-  “已被另一个 Kanobot 实例占用”，第一个实例 health 仍为 200；
+  “已被另一个 Rinkobot 实例占用”，第一个实例 health 仍为 200；
 - SIGTERM 和 SIGINT 路径关闭后锁元数据消失，可立即重启；
 - SIGKILL 后数据库可重新打开、锁 owner 更换、health 为 200；
 - restore 在存活实例运行期间被拒绝，实例仍保持 health 200。

@@ -34,12 +34,12 @@ let shuttingDown = false
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return
   shuttingDown = true
-  console.log(`[kanobot-dev] ${signal}; closing…`)
+  console.log(`[rinkobot-dev] ${signal}; closing…`)
   try {
     await server.close()
     process.exitCode = 0
   } catch (error) {
-    console.error(`[kanobot-dev] close failed: ${formatError(error)}`)
+    console.error(`[rinkobot-dev] close failed: ${formatError(error)}`)
     process.exitCode = 1
   }
 }

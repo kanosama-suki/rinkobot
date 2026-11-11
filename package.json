@@ -1,5 +1,5 @@
 {
-  "name": "kanobot",
+  "name": "rinkobot",
   "version": "0.21.0",
   "private": true,
   "description": "A self-hosted companion robot runtime with persistent memory, reminders, and QQ channels",

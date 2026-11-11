@@ -122,7 +122,7 @@ export class QqChannel {
       onResult: result => this.enqueueResult(result),
       onError: error => {
         this.logger.error?.(
-          `[kanobot-qq] coalescer callback failed: ${errorMessage(error)}`,
+          `[rinkobot-qq] coalescer callback failed: ${errorMessage(error)}`,
         )
       },
       now: () => this.now().getTime(),
@@ -205,7 +205,7 @@ export class QqChannel {
     this.activeControllers.clear()
     await this.gateway.close().catch(error => {
       this.logger.error?.(
-        `[kanobot-qq] gateway close failed: ${errorMessage(error)}`,
+        `[rinkobot-qq] gateway close failed: ${errorMessage(error)}`,
       )
     })
     await Promise.race([
@@ -265,7 +265,7 @@ export class QqChannel {
       this.handleEvent(raw)
     } catch (error) {
       this.logger.error?.(
-        `[kanobot-qq] event handling failed: ${errorMessage(error)}`,
+        `[rinkobot-qq] event handling failed: ${errorMessage(error)}`,
       )
       try {
         this.audit(
@@ -382,7 +382,7 @@ export class QqChannel {
     this.turnTail = run
       .catch(error => {
         this.logger.error?.(
-          `[kanobot-qq] turn processing failed: ${errorMessage(error)}`,
+          `[rinkobot-qq] turn processing failed: ${errorMessage(error)}`,
         )
       })
       .finally(() => {
@@ -726,7 +726,7 @@ export class QqChannel {
       })
     } catch (error) {
       this.logger.error?.(
-        `[kanobot-qq] channel audit failed: ${errorMessage(error)}`,
+        `[rinkobot-qq] channel audit failed: ${errorMessage(error)}`,
       )
     }
   }

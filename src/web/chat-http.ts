@@ -1,5 +1,5 @@
 /**
- * Kanobot 的网页和聊天 HTTP 适配层。
+ * Rinkobot 的网页和聊天 HTTP 适配层。
  *
  * 边界：
  * - 页面与接口复用运行时提供的所有者会话；没有会话时一律 401；
@@ -156,7 +156,7 @@ async function handleRequest(
   assets: UiAssets,
   activeStreams: Set<ServerResponse>,
 ): Promise<void> {
-  const url = new URL(req.url ?? '/', 'http://kanobot.invalid')
+  const url = new URL(req.url ?? '/', 'http://rinkobot.invalid')
   const pathname = url.pathname
   const api = pathname.startsWith(`${CHAT_BASE_PATH}/api/`)
 
@@ -418,7 +418,7 @@ async function handleConversationRename(
       writeError(res, error.status, error.code, error.message, true)
       return
     }
-    options.logger.error?.('[kanobot] conversation rename failed')
+    options.logger.error?.('[rinkobot] conversation rename failed')
     writeError(res, 500, 'internal_error', '会话名称保存失败', true)
   }
 }
@@ -499,7 +499,7 @@ function handleModelSettingsError(
     return
   }
   // 设置请求不记录 body；这里只记录脱敏错误类型，避免密钥误入日志。
-  logger.error?.('[kanobot] model settings request failed')
+  logger.error?.('[rinkobot] model settings request failed')
   writeError(res, 500, 'internal_error', '模型设置操作失败', true)
 }
 
@@ -569,7 +569,7 @@ function handleChannelSettingsError(
     writeError(res, error.status, error.code, error.message, true)
     return
   }
-  logger.error?.('[kanobot] QQ settings request failed')
+  logger.error?.('[rinkobot] QQ settings request failed')
   writeError(res, 500, 'internal_error', 'QQ 设置操作失败', true)
 }
 
@@ -965,7 +965,7 @@ function handleMemoryError(
     )
     return
   }
-  logger.error?.(`[kanobot] memory request failed: ${formatError(error)}`)
+  logger.error?.(`[rinkobot] memory request failed: ${formatError(error)}`)
   writeError(res, 500, 'internal_error', '服务器内部错误', true)
 }
 
@@ -1130,7 +1130,7 @@ async function handleChatStream(
       writeSse(res, streamError(error))
     }
     if (!isAbortError(error)) {
-      options.logger.error?.(`[kanobot] chat stream failed: ${formatError(error)}`)
+      options.logger.error?.(`[rinkobot] chat stream failed: ${formatError(error)}`)
     }
   } finally {
     activeStreams.delete(res)
@@ -1240,7 +1240,7 @@ function writeAuthRejection(
     rejection === 401 ? unauthenticatedMessage : forbiddenMessage
   const html =
     '<!doctype html><html lang="zh-CN"><meta charset="utf-8">' +
-    '<title>Kanobot 需要登录</title><body>' +
+    '<title>Rinkobot 需要登录</title><body>' +
     `<h1>${rejection === 401 ? '需要先登录' : forbiddenMessage}</h1>` +
     `<p>${pageMessage}。` +
     (rejection === 401 && showLoginLink
@@ -1358,11 +1358,11 @@ function handleUnexpectedError(
       error.status,
       error.code,
       error.message,
-      new URL(req.url ?? '/', 'http://kanobot.invalid').pathname.includes('/api/'),
+      new URL(req.url ?? '/', 'http://rinkobot.invalid').pathname.includes('/api/'),
     )
     return
   }
-  logger.error?.(`[kanobot] chat HTTP request failed: ${formatError(error)}`)
+  logger.error?.(`[rinkobot] chat HTTP request failed: ${formatError(error)}`)
   writeError(res, 500, 'internal_error', '服务器内部错误', true)
 }
 

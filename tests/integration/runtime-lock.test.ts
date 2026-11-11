@@ -47,7 +47,7 @@ test('a second instance is rejected and release allows a new owner', async t => 
       (error: unknown) => {
         assert.ok(error instanceof RuntimeLockError)
         assert.equal(error.code, 'LOCK_HELD')
-        assert.match(error.message, /已被另一个 Kanobot 实例占用/)
+        assert.match(error.message, /已被另一个 Rinkobot 实例占用/)
         return true
       },
     )

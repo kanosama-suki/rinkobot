@@ -7,7 +7,7 @@ SQLite schema v12，不包含 DSH 插件入口、DSH model provider 或 DSH 产�
 ## 1. 顶层结构
 
 ```text
-kanobot/
+rinkobot/
 ├── .github/workflows/ci.yml         Windows + Ubuntu / Node 24 CI
 ├── .gitattributes                  LF 换行和文本属性
 ├── .gitignore                      运行时数据、个人配置和产物忽略规则
@@ -23,7 +23,7 @@ kanobot/
 ├── config/
 │   └── examples/                    可提交的占位配置和 QQ 示例
 ├── deploy/
-│   └── kanobot.service.example      Linux 非 root systemd 示例
+│   └── rinkobot.service.example     Linux 非 root systemd 示例
 ├── docs/                            规划、需求、研究和验收
 ├── scripts/                         运维和开发 CLI
 ├── src/                             产品源码

@@ -46,7 +46,7 @@ test('a second standalone instance is rejected while the first stays healthy', a
           port: 0,
           logger: { info(): void {}, error(): void {} },
         }),
-      /已被另一个 Kanobot 实例占用/,
+      /已被另一个 Rinkobot 实例占用/,
     )
     const health = await fetch(`${first.ready.baseUrl}/kanobot/api/health`)
     assert.equal(health.status, 200)
@@ -60,7 +60,7 @@ test('a second standalone instance is rejected while the first stays healthy', a
       '0',
     ])
     assert.equal(second.code, 1)
-    assert.match(second.stderr, /已被另一个 Kanobot 实例占用/)
+    assert.match(second.stderr, /已被另一个 Rinkobot 实例占用/)
     assert.equal(
       (await fetch(`${first.ready.baseUrl}/kanobot/api/health`)).status,
       200,

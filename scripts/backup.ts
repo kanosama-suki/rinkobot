@@ -29,7 +29,7 @@ try {
   const result = await runBackupCommand(options)
   console.log(JSON.stringify(result, null, 2))
 } catch (error) {
-  console.error(`[kanobot-backup] ${formatError(error)}`)
+  console.error(`[rinkobot-backup] ${formatError(error)}`)
   process.exitCode = 1
 }
 

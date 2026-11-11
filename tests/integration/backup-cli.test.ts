@@ -203,7 +203,7 @@ test('restore refuses a live instance and leaves it running', async t => {
           command: 'restore',
           backup: created.backup?.path,
         }),
-      /已被另一个 Kanobot 实例占用/,
+      /已被另一个 Rinkobot 实例占用/,
     )
     const health = await fetch(`${app.baseUrl}/kanobot/api/health`)
     assert.equal(health.status, 200)

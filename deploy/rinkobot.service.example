@@ -1,19 +1,19 @@
-# Kanobot 独立核心 systemd 示例。
-# 复制到 /etc/systemd/system/kanobot.service 后按实际路径修改。
+# Rinkobot 独立核心 systemd 示例。
+# 复制到 /etc/systemd/system/rinkobot.service 后按实际路径修改。
 # 不要把 token、API key、QQ 凭据或 SSH 私钥写进本文件。
 
 [Unit]
-Description=Kanobot standalone companion core
+Description=Rinkobot standalone companion core
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=kanobot
-Group=kanobot
-WorkingDirectory=/opt/kanobot/a
-ExecStart=/usr/bin/node /opt/kanobot/a/scripts/app-server.ts --config /var/lib/kanobot/config --data /var/lib/kanobot/data --port 4200
-EnvironmentFile=/etc/kanobot/kanobot.env
+User=rinkobot
+Group=rinkobot
+WorkingDirectory=/opt/rinkobot/a
+ExecStart=/usr/bin/node /opt/rinkobot/a/scripts/app-server.ts --config /var/lib/rinkobot/config --data /var/lib/rinkobot/data --port 4200
+EnvironmentFile=/etc/rinkobot/rinkobot.env
 Restart=on-failure
 RestartSec=5s
 KillSignal=SIGTERM
@@ -23,14 +23,14 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/kanobot
+ReadWritePaths=/var/lib/rinkobot
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
 PrivateDevices=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-SyslogIdentifier=kanobot
+SyslogIdentifier=rinkobot
 StandardOutput=journal
 StandardError=journal
 

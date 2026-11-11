@@ -26,7 +26,7 @@ recovery and research, but are not supported deployment targets.
 
 ## Operational boundary
 
-Kanobot is designed for a single trusted owner on a local or otherwise
+Rinkobot is designed for a single trusted owner on a local or otherwise
 access-controlled machine. Binding it to a public interface without TLS,
 external authentication, network filtering, and an independent security review
 is outside the supported configuration.
@@ -37,4 +37,4 @@ account and can read both the key and the encrypted store.
 
 QQ/NapCat integration is an external, unsupported platform dependency. Account
 restrictions and platform-rule risk are not security guarantees supplied by
-Kanobot.
+Rinkobot.

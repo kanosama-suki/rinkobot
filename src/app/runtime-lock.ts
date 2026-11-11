@@ -232,7 +232,7 @@ export async function acquireRuntimeLock(
         : `pid=${owner.pid} version=${owner.version} startedAt=${owner.startedAt}`
       throw new RuntimeLockError(
         'LOCK_HELD',
-        `数据目录已被另一个 Kanobot 实例占用（${ownerText}）；` +
+        `数据目录已被另一个 Rinkobot 实例占用（${ownerText}）；` +
           '请先停止该实例，或确认它已退出后再启动。',
         { cause: error, path: lockPath },
       )
@@ -334,7 +334,7 @@ export async function queryRuntimeControl(
   if (lock === null) {
     throw new RuntimeLockError(
       'LOCK_NOT_HELD',
-      '没有找到运行中的 Kanobot 实例锁',
+      '没有找到运行中的 Rinkobot 实例锁',
       { path: join(root, RUNTIME_LOCK_FILE) },
     )
   }
@@ -356,7 +356,7 @@ export async function queryRuntimeControl(
       'CONTROL_FAILED',
       typeof response.error === 'string'
         ? response.error
-        : 'Kanobot 实例拒绝了控制请求',
+        : 'Rinkobot 实例拒绝了控制请求',
     )
   }
   return response
@@ -594,7 +594,7 @@ async function sendControlRequest(
     socket.setTimeout(timeoutMs, () => {
       finish(new RuntimeLockError(
         'CONTROL_FAILED',
-        'Kanobot 实例未在超时内响应控制请求',
+        'Rinkobot 实例未在超时内响应控制请求',
       ))
     })
     socket.setEncoding('utf8')

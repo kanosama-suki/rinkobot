@@ -11,3 +11,6 @@ The historical plugin catalog lives here. Older M-series files still live in
 `docs/` for now because older planning records link to them directly. They
 describe the former plugin era and are not current installation or architecture
 instructions.
+
+`Kanobot` was the project's former name. Historical records keep the name used
+at the time; the current product brand is `Rinkobot`.

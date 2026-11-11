@@ -54,7 +54,7 @@ test('the local dev entry authenticates the whole surface with a one-time token'
       headers: { cookie },
     })
     assert.equal(page.status, 200)
-    assert.match(await page.text(), /Kanobot · 独立陪伴核心/)
+    assert.match(await page.text(), /Rinkobot · 独立陪伴核心/)
 
     const channelView = await fetch(
       `${server.baseUrl}/kanobot/api/settings/channels`,

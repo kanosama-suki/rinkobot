@@ -216,7 +216,7 @@ test('startup report includes operational state but no login token or paths', as
     },
   })
   try {
-    const startup = logs.find(line => line.includes('[kanobot-app] startup'))
+    const startup = logs.find(line => line.includes('[rinkobot-app] startup'))
     assert.ok(startup !== undefined)
     const lockOwner = readRuntimeLock(layout.dataDir)?.ownerToken
     assert.ok(lockOwner !== undefined)

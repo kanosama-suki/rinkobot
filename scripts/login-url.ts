@@ -19,7 +19,7 @@ try {
   }
   console.log(response.url)
 } catch (error) {
-  console.error(`[kanobot-login] ${formatError(error)}`)
+  console.error(`[rinkobot-login] ${formatError(error)}`)
   process.exitCode = 1
 }
 
@@ -52,7 +52,7 @@ function printHelp(): void {
     [
       '用法: npm run login -- --data <数据目录>',
       '',
-      '向本机运行中的 Kanobot 实例申请一次性登录链接。',
+      '向本机运行中的 Rinkobot 实例申请一次性登录链接。',
       '链接只打印到当前终端；需要与实例相同的操作系统用户权限。',
     ].join('\n'),
   )
